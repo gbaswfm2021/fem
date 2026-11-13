@@ -1,0 +1,1 @@
+{"version":3,"sources":["widget.jsx"],"sourcesContent":["// The same checked JSON field preserves literal CSV headers in ordered lists.\nexport {Widget,mountWidget} from '../csv-source-units/widget.js';\n"],"mappings":";AACA,SAAQ,QAAO,mBAAkB;","names":[],"file":"widget.js"}

@@ -1,0 +1,19 @@
+{
+  "format": "fullmeta-application-runtime-build/1",
+  "targetDirectory": "applications/fem/.runtime",
+  "crates": ["applications/fem/mesh-rust", "applications/fem/fem-rust"],
+  "buildTargets": [
+    {"manifest":"applications/fem/mesh-rust/Cargo.toml","binary":"fullmeta-mesh","label":"FEM mesher"},
+    {"manifest":"applications/fem/fem-rust/Cargo.toml","binary":"fullmeta-fem","label":"FEM dispatcher"},
+    {"manifest":"applications/fem/fem-rust/Cargo.toml","binary":"acoustic2d","label":"2D acoustic solver","args":["--features","solver-native-acoustic2d"]},
+    {"manifest":"applications/fem/fem-rust/Cargo.toml","binary":"acoustic3d","label":"3D acoustic solver","args":["--features","solver-native-acoustic3d"]},
+    {"manifest":"applications/fem/fem-rust/Cargo.toml","binary":"em2d","label":"2D electromagnetic solver","args":["--features","solver-native-em2d"]},
+    {"manifest":"applications/fem/fem-rust/Cargo.toml","binary":"em3d","label":"3D electromagnetic solver","args":["--features","solver-native-em3d"]},
+    {"manifest":"applications/fem/fem-rust/Cargo.toml","binary":"thermal2d","label":"2D thermal solver"}
+  ],
+  "artifacts": {
+    "mesh":"fullmeta-mesh","fem":"fullmeta-fem",
+    "solverAcoustic2d":"acoustic2d","solverAcoustic3d":"acoustic3d",
+    "solverEm2d":"em2d","solverEm3d":"em3d","solverThermal2d":"thermal2d"
+  }
+}

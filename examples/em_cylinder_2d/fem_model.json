@@ -1,0 +1,390 @@
+{
+  "application": "fem",
+  "x-fullmeta-schema": "../../applications/fem/fem.schema.json",
+  "metadata": {
+    "description": "",
+    "id": "em_cylinder_2d",
+    "name": "em_cylinder_2d"
+  },
+  "model": {
+    "integrationOperators": [],
+    "parameters": [
+      {
+        "description": "Incident frequency",
+        "expression": "3",
+        "id": "parameter",
+        "name": "p1",
+        "symbol": "freq0",
+        "unit": "GHz"
+      },
+      {
+        "description": "Cylinder relative permittivity",
+        "expression": "4",
+        "id": "parameter_2",
+        "name": "p2",
+        "symbol": "eps_cyl",
+        "unit": "1"
+      },
+      {
+        "description": "Cylinder radius",
+        "expression": "0.04",
+        "id": "parameter_3",
+        "name": "p1",
+        "symbol": "R_cyl",
+        "unit": "m"
+      },
+      {
+        "description": "Air region side length",
+        "expression": "0.3",
+        "id": "parameter_4",
+        "name": "p1",
+        "symbol": "L_box",
+        "unit": "m"
+      },
+      {
+        "description": "Speed of light in vacuum",
+        "expression": "299792458",
+        "id": "parameter_5",
+        "name": "p1",
+        "symbol": "c0",
+        "unit": "m/s"
+      },
+      {
+        "description": "Maximum element size",
+        "expression": "c0/freq0/10",
+        "id": "parameter_6",
+        "name": "p1",
+        "symbol": "hmax",
+        "unit": "m"
+      }
+    ],
+    "pointwiseVariables": [],
+    "units": "m",
+    "variables": [
+      {
+        "description": "Free-space wavelength at the incident frequency",
+        "expression": "c0/freq0",
+        "id": "variable",
+        "name": "v1",
+        "symbol": "lambda0",
+        "unit": "m"
+      }
+    ],
+    "study": [
+      {
+        "discretization": {
+          "elementOrder": 1,
+          "fieldFormulation": "Ez"
+        },
+        "id": "study",
+        "name": "Harmonic study",
+        "physicsId": "physics1",
+        "solver": {
+          "backend": "rivrs",
+          "constitutiveQuadrature": "standard",
+          "ordering": "metis",
+          "threads": 1
+        },
+        "type": "frequencyDomain"
+      }
+    ],
+    "results": [
+      {
+        "frequency": {
+          "expression": "freq0",
+          "unit": "GHz"
+        },
+        "id": "field_plot",
+        "name": "Electric field magnitude |Ez|",
+        "quantity": {
+          "component": "Ez",
+          "part": "magnitude",
+          "type": "fieldComponent"
+        },
+        "type": "field"
+      }
+    ],
+    "geometry": {
+      "features": [
+        {
+          "id": "rectangle",
+          "name": "Air region",
+          "position": [
+            {
+              "expression": "-L_box/2",
+              "unit": "m"
+            },
+            {
+              "expression": "-L_box/2",
+              "unit": "m"
+            }
+          ],
+          "size": [
+            {
+              "expression": "L_box",
+              "unit": "m"
+            },
+            {
+              "expression": "L_box",
+              "unit": "m"
+            }
+          ],
+          "type": "rectangle"
+        },
+        {
+          "center": [
+            {
+              "expression": "0",
+              "unit": "m"
+            },
+            {
+              "expression": "0",
+              "unit": "m"
+            }
+          ],
+          "id": "circle",
+          "name": "Dielectric cylinder",
+          "radius": {
+            "expression": "R_cyl",
+            "unit": "m"
+          },
+          "type": "circle"
+        }
+      ],
+      "tolerance": {
+        "expression": "1e-9",
+        "unit": "m"
+      }
+    },
+    "selections": [
+      {
+        "addresses": [
+          {
+            "membership": {
+              "rectangle": "inside"
+            }
+          }
+        ],
+        "entity": "domain",
+        "id": "selection",
+        "name": "Air outside cylinder"
+      },
+      {
+        "addresses": [
+          {
+            "membership": {
+              "circle": "inside",
+              "rectangle": "inside"
+            }
+          }
+        ],
+        "entity": "domain",
+        "id": "selection_2",
+        "name": "Dielectric cylinder"
+      },
+      {
+        "addresses": [
+          {
+            "membership": {
+              "rectangle": "boundary"
+            }
+          }
+        ],
+        "coordinateExpression": "x+L_box/2",
+        "entity": "boundary",
+        "id": "selection_3",
+        "name": "Left edge"
+      },
+      {
+        "addresses": [
+          {
+            "membership": {
+              "rectangle": "boundary"
+            }
+          }
+        ],
+        "coordinateExpression": "x-L_box/2",
+        "entity": "boundary",
+        "id": "selection_4",
+        "name": "Right edge"
+      },
+      {
+        "addresses": [
+          {
+            "membership": {
+              "rectangle": "boundary"
+            }
+          }
+        ],
+        "coordinateExpression": "y+L_box/2",
+        "entity": "boundary",
+        "id": "selection_5",
+        "name": "Bottom edge"
+      },
+      {
+        "addresses": [
+          {
+            "membership": {
+              "rectangle": "boundary"
+            }
+          }
+        ],
+        "coordinateExpression": "y-L_box/2",
+        "entity": "boundary",
+        "id": "selection_6",
+        "name": "Top edge"
+      }
+    ],
+    "mesh": {
+      "elementFamily": "triangle",
+      "gmsh": {
+        "algorithm3D": 1,
+        "elementOrder": 1,
+        "optimize": true,
+        "optimizeNetgen": true,
+        "optimizeThreshold": 0.25,
+        "smoothing": 10,
+        "threads": 1
+      },
+      "maxSize": {
+        "expression": "0.01",
+        "unit": "m"
+      },
+      "meshSizeControls": [
+        {
+          "id": "mesh_size",
+          "name": "Dielectric cylinder mesh size",
+          "selectionId": "selection_2",
+          "size": {
+            "expression": "R_cyl/10",
+            "unit": "m"
+          }
+        }
+      ],
+      "minSize": {
+        "expression": "0.001",
+        "unit": "m"
+      },
+      "periodicPairIds": [
+        "periodic_pair"
+      ],
+      "periodicPairs": [
+        {
+          "id": "periodic_pair",
+          "lowerSelectionId": "selection_5",
+          "name": "Periodic pair",
+          "translation": [
+            {
+              "expression": "0",
+              "unit": "m"
+            },
+            {
+              "expression": "L_box",
+              "unit": "m"
+            },
+            {
+              "expression": "0",
+              "unit": "m"
+            }
+          ],
+          "upperSelectionId": "selection_6"
+        }
+      ]
+    },
+    "materials": [
+      {
+        "conductivity": {
+          "expression": "0",
+          "unit": "S/m"
+        },
+        "id": "material",
+        "name": "Air",
+        "relativePermeability": "1",
+        "relativePermittivity": "1",
+        "selectionId": "selection"
+      },
+      {
+        "conductivity": {
+          "expression": "0",
+          "unit": "S/m"
+        },
+        "id": "material_2",
+        "name": "Cylinder dielectric",
+        "relativePermeability": "1",
+        "relativePermittivity": "eps_cyl",
+        "selectionId": "selection_2"
+      }
+    ],
+    "physics": {
+      "domainSelectionIds": [
+        "selection",
+        "selection_2"
+      ],
+      "formulation": "Ez",
+      "frequency": {
+        "expression": "freq0",
+        "unit": "GHz"
+      },
+      "id": "physics1",
+      "name": "2D electromagnetic interface",
+      "phasorConvention": "exp(+i omega t)",
+      "type": "electromagnetics",
+      "impedance_boundary": {
+        "id": "impedance_boundary",
+        "impedance": {
+          "expression": "376.730313668",
+          "unit": "ohm"
+        },
+        "incidentField": {
+          "expression": "1",
+          "unit": "1"
+        },
+        "name": "Input impedance boundary",
+        "polarization": [
+          {
+            "expression": "1",
+            "unit": "V/m"
+          }
+        ],
+        "selectionId": "selection_3",
+        "type": "impedance"
+      },
+      "impedance_boundary_2": {
+        "id": "impedance_boundary_2",
+        "impedance": {
+          "expression": "376.730313668",
+          "unit": "ohm"
+        },
+        "name": "Right radiation impedance boundary",
+        "selectionId": "selection_4",
+        "type": "impedance"
+      },
+      "periodic_condition": {
+        "id": "periodic_condition",
+        "name": "Periodic condition Y",
+        "periodicPairId": "periodic_pair",
+        "phaseVector": [
+          {
+            "expression": "0",
+            "unit": "rad/m"
+          },
+          {
+            "expression": "0",
+            "unit": "rad/m"
+          },
+          {
+            "expression": "0",
+            "unit": "rad/m"
+          }
+        ],
+        "type": "periodicCondition"
+      }
+    }
+  },
+  "scenario": {
+    "dimension": 2,
+    "physics": "electromagnetics",
+    "profileId": "em-2d"
+  },
+  "modelFormat": "fem-model/2"
+}

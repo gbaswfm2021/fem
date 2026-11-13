@@ -1,0 +1,1196 @@
+{
+  "application": "fem",
+  "metadata": {
+    "description": "",
+    "id": "srr_tr_unit1",
+    "name": "Split-ring resonator"
+  },
+  "model": {
+    "geometry": {
+      "features": [
+        {
+          "id": "box",
+          "name": "Air block left",
+          "position": [
+            {
+              "expression": "0",
+              "unit": "m"
+            },
+            {
+              "expression": "0",
+              "unit": "m"
+            },
+            {
+              "expression": "0",
+              "unit": "m"
+            }
+          ],
+          "positionMode": "corner",
+          "size": [
+            {
+              "expression": "cell_x",
+              "unit": "m"
+            },
+            {
+              "expression": "cell_y",
+              "unit": "m"
+            },
+            {
+              "expression": "cell_z",
+              "unit": "m"
+            }
+          ],
+          "type": "box"
+        },
+        {
+          "id": "box_2",
+          "name": "Air block middle",
+          "position": [
+            {
+              "expression": "cell_x",
+              "unit": "m"
+            },
+            {
+              "expression": "0",
+              "unit": "m"
+            },
+            {
+              "expression": "0",
+              "unit": "m"
+            }
+          ],
+          "positionMode": "corner",
+          "size": [
+            {
+              "expression": "cell_x",
+              "unit": "m"
+            },
+            {
+              "expression": "cell_y",
+              "unit": "m"
+            },
+            {
+              "expression": "cell_z",
+              "unit": "m"
+            }
+          ],
+          "type": "box"
+        },
+        {
+          "id": "box_3",
+          "name": "Air block right",
+          "position": [
+            {
+              "expression": "2*cell_x",
+              "unit": "m"
+            },
+            {
+              "expression": "0",
+              "unit": "m"
+            },
+            {
+              "expression": "0",
+              "unit": "m"
+            }
+          ],
+          "positionMode": "corner",
+          "size": [
+            {
+              "expression": "cell_x",
+              "unit": "m"
+            },
+            {
+              "expression": "cell_y",
+              "unit": "m"
+            },
+            {
+              "expression": "cell_z",
+              "unit": "m"
+            }
+          ],
+          "type": "box"
+        },
+        {
+          "features": [
+            {
+              "id": "box_4",
+              "name": "Copper left leg",
+              "position": [
+                {
+                  "expression": "cell_x+cell_x/2-wring/2",
+                  "unit": "m"
+                },
+                {
+                  "expression": "cell_y/2-tmetal/2",
+                  "unit": "m"
+                },
+                {
+                  "expression": "cell_z/2-wring/2",
+                  "unit": "m"
+                }
+              ],
+              "positionMode": "corner",
+              "size": [
+                {
+                  "expression": "wmetal",
+                  "unit": "m"
+                },
+                {
+                  "expression": "tmetal",
+                  "unit": "m"
+                },
+                {
+                  "expression": "wring",
+                  "unit": "m"
+                }
+              ],
+              "type": "box"
+            },
+            {
+              "id": "box_5",
+              "name": "Copper right leg",
+              "position": [
+                {
+                  "expression": "cell_x+cell_x/2+wring/2-wmetal",
+                  "unit": "m"
+                },
+                {
+                  "expression": "cell_y/2-tmetal/2",
+                  "unit": "m"
+                },
+                {
+                  "expression": "cell_z/2-wring/2",
+                  "unit": "m"
+                }
+              ],
+              "positionMode": "corner",
+              "size": [
+                {
+                  "expression": "wmetal",
+                  "unit": "m"
+                },
+                {
+                  "expression": "tmetal",
+                  "unit": "m"
+                },
+                {
+                  "expression": "wring",
+                  "unit": "m"
+                }
+              ],
+              "type": "box"
+            },
+            {
+              "id": "box_6",
+              "name": "Copper bottom arm",
+              "position": [
+                {
+                  "expression": "cell_x+cell_x/2-wring/2+wmetal",
+                  "unit": "m"
+                },
+                {
+                  "expression": "cell_y/2-tmetal/2",
+                  "unit": "m"
+                },
+                {
+                  "expression": "cell_z/2-wring/2",
+                  "unit": "m"
+                }
+              ],
+              "positionMode": "corner",
+              "size": [
+                {
+                  "expression": "wring-2*wmetal",
+                  "unit": "m"
+                },
+                {
+                  "expression": "tmetal",
+                  "unit": "m"
+                },
+                {
+                  "expression": "wmetal",
+                  "unit": "m"
+                }
+              ],
+              "type": "box"
+            },
+            {
+              "id": "box_7",
+              "name": "Copper top arm left",
+              "position": [
+                {
+                  "expression": "cell_x+cell_x/2-wring/2+wmetal",
+                  "unit": "m"
+                },
+                {
+                  "expression": "cell_y/2-tmetal/2",
+                  "unit": "m"
+                },
+                {
+                  "expression": "cell_z/2+wring/2-wmetal",
+                  "unit": "m"
+                }
+              ],
+              "positionMode": "corner",
+              "size": [
+                {
+                  "expression": "wring/2-wmetal-gapsize/2",
+                  "unit": "m"
+                },
+                {
+                  "expression": "tmetal",
+                  "unit": "m"
+                },
+                {
+                  "expression": "wmetal",
+                  "unit": "m"
+                }
+              ],
+              "type": "box"
+            },
+            {
+              "id": "box_8",
+              "name": "Copper top arm right",
+              "position": [
+                {
+                  "expression": "cell_x+cell_x/2+gapsize/2",
+                  "unit": "m"
+                },
+                {
+                  "expression": "cell_y/2-tmetal/2",
+                  "unit": "m"
+                },
+                {
+                  "expression": "cell_z/2+wring/2-wmetal",
+                  "unit": "m"
+                }
+              ],
+              "positionMode": "corner",
+              "size": [
+                {
+                  "expression": "wring/2-wmetal-gapsize/2",
+                  "unit": "m"
+                },
+                {
+                  "expression": "tmetal",
+                  "unit": "m"
+                },
+                {
+                  "expression": "wmetal",
+                  "unit": "m"
+                }
+              ],
+              "type": "box"
+            }
+          ],
+          "id": "union",
+          "name": "Outer ring copper",
+          "type": "union"
+        },
+        {
+          "features": [
+            {
+              "id": "box_9",
+              "name": "Copper inner left leg",
+              "position": [
+                {
+                  "expression": "cell_x+cell_x/2-wring2/2",
+                  "unit": "m"
+                },
+                {
+                  "expression": "cell_y/2-tmetal/2",
+                  "unit": "m"
+                },
+                {
+                  "expression": "cell_z/2-wring2/2",
+                  "unit": "m"
+                }
+              ],
+              "positionMode": "corner",
+              "size": [
+                {
+                  "expression": "wmetal",
+                  "unit": "m"
+                },
+                {
+                  "expression": "tmetal",
+                  "unit": "m"
+                },
+                {
+                  "expression": "wring2",
+                  "unit": "m"
+                }
+              ],
+              "type": "box"
+            },
+            {
+              "id": "box_10",
+              "name": "Copper inner right leg",
+              "position": [
+                {
+                  "expression": "cell_x+cell_x/2+wring2/2-wmetal",
+                  "unit": "m"
+                },
+                {
+                  "expression": "cell_y/2-tmetal/2",
+                  "unit": "m"
+                },
+                {
+                  "expression": "cell_z/2-wring2/2",
+                  "unit": "m"
+                }
+              ],
+              "positionMode": "corner",
+              "size": [
+                {
+                  "expression": "wmetal",
+                  "unit": "m"
+                },
+                {
+                  "expression": "tmetal",
+                  "unit": "m"
+                },
+                {
+                  "expression": "wring2",
+                  "unit": "m"
+                }
+              ],
+              "type": "box"
+            },
+            {
+              "id": "box_11",
+              "name": "Copper inner bottom left",
+              "position": [
+                {
+                  "expression": "cell_x+cell_x/2-wring2/2+wmetal",
+                  "unit": "m"
+                },
+                {
+                  "expression": "cell_y/2-tmetal/2",
+                  "unit": "m"
+                },
+                {
+                  "expression": "cell_z/2-wring2/2",
+                  "unit": "m"
+                }
+              ],
+              "positionMode": "corner",
+              "size": [
+                {
+                  "expression": "wring2/2-wmetal-gapsize/2",
+                  "unit": "m"
+                },
+                {
+                  "expression": "tmetal",
+                  "unit": "m"
+                },
+                {
+                  "expression": "wmetal",
+                  "unit": "m"
+                }
+              ],
+              "type": "box"
+            },
+            {
+              "id": "box_12",
+              "name": "Copper inner bottom right",
+              "position": [
+                {
+                  "expression": "cell_x+cell_x/2+gapsize/2",
+                  "unit": "m"
+                },
+                {
+                  "expression": "cell_y/2-tmetal/2",
+                  "unit": "m"
+                },
+                {
+                  "expression": "cell_z/2-wring2/2",
+                  "unit": "m"
+                }
+              ],
+              "positionMode": "corner",
+              "size": [
+                {
+                  "expression": "wring2/2-wmetal-gapsize/2",
+                  "unit": "m"
+                },
+                {
+                  "expression": "tmetal",
+                  "unit": "m"
+                },
+                {
+                  "expression": "wmetal",
+                  "unit": "m"
+                }
+              ],
+              "type": "box"
+            },
+            {
+              "id": "box_13",
+              "name": "Copper inner top arm",
+              "position": [
+                {
+                  "expression": "cell_x+cell_x/2-wring2/2+wmetal",
+                  "unit": "m"
+                },
+                {
+                  "expression": "cell_y/2-tmetal/2",
+                  "unit": "m"
+                },
+                {
+                  "expression": "cell_z/2+wring2/2-wmetal",
+                  "unit": "m"
+                }
+              ],
+              "positionMode": "corner",
+              "size": [
+                {
+                  "expression": "wring2-2*wmetal",
+                  "unit": "m"
+                },
+                {
+                  "expression": "tmetal",
+                  "unit": "m"
+                },
+                {
+                  "expression": "wmetal",
+                  "unit": "m"
+                }
+              ],
+              "type": "box"
+            }
+          ],
+          "id": "union_2",
+          "name": "Inner ring copper",
+          "type": "union"
+        }
+      ],
+      "tolerance": {
+        "expression": "1e-9",
+        "unit": "m"
+      }
+    },
+    "integrationOperators": [
+      {
+        "id": "intop1",
+        "name": "intop_in",
+        "selectionId": "selection_9"
+      },
+      {
+        "id": "intop2",
+        "name": "intop_out",
+        "selectionId": "selection_10"
+      }
+    ],
+    "materials": [
+      {
+        "conductivity": {
+          "expression": "0",
+          "unit": "S/m"
+        },
+        "id": "material",
+        "name": "Air",
+        "relativePermeability": "1",
+        "relativePermittivity": "1",
+        "selectionId": "selection"
+      },
+      {
+        "conductivity": {
+          "expression": "sigma_cu",
+          "unit": "S/m"
+        },
+        "id": "material_2",
+        "name": "Copper",
+        "relativePermeability": "1",
+        "relativePermittivity": "1",
+        "selectionId": "selection_2"
+      }
+    ],
+    "mesh": {
+      "elementFamily": "tetrahedron",
+      "gmsh": {
+        "algorithm3D": 1,
+        "elementOrder": 1,
+        "optimize": true,
+        "optimizeNetgen": true,
+        "optimizeThreshold": 0.25,
+        "smoothing": 10,
+        "threads": 1
+      },
+      "maxSize": {
+        "expression": "0.55*cell_x",
+        "unit": "m"
+      },
+      "meshSizeControls": [
+        {
+          "id": "mesh_size",
+          "name": "Air domains mesh size",
+          "selectionId": "selection",
+          "size": {
+            "expression": "cell_x/3.3",
+            "unit": "m"
+          }
+        },
+        {
+          "id": "mesh_size_2",
+          "name": "Copper domains mesh size",
+          "selectionId": "selection_2",
+          "size": {
+            "expression": "0.84*tmetal",
+            "unit": "m"
+          }
+        }
+      ],
+      "minSize": {
+        "expression": "tmetal/28",
+        "unit": "m"
+      },
+      "periodicPairIds": [
+        "periodic_pair",
+        "periodic_pair_2"
+      ],
+      "periodicPairs": [
+        {
+          "id": "periodic_pair",
+          "lowerSelectionId": "selection_3",
+          "name": "Periodic Y pair",
+          "translation": [
+            {
+              "expression": "0",
+              "unit": "m"
+            },
+            {
+              "expression": "cell_y",
+              "unit": "m"
+            },
+            {
+              "expression": "0",
+              "unit": "m"
+            }
+          ],
+          "upperSelectionId": "selection_4"
+        },
+        {
+          "id": "periodic_pair_2",
+          "lowerSelectionId": "selection_5",
+          "name": "Periodic Z pair",
+          "translation": [
+            {
+              "expression": "0",
+              "unit": "m"
+            },
+            {
+              "expression": "0",
+              "unit": "m"
+            },
+            {
+              "expression": "cell_z",
+              "unit": "m"
+            }
+          ],
+          "upperSelectionId": "selection_6"
+        }
+      ]
+    },
+    "parameters": [
+      {
+        "description": "Unit cell width",
+        "expression": "5.25",
+        "id": "parameter",
+        "name": "p1",
+        "symbol": "cell_x",
+        "unit": "mm"
+      },
+      {
+        "description": "Unit cell height",
+        "expression": "cell_x",
+        "id": "parameter_2",
+        "name": "p1",
+        "symbol": "cell_y",
+        "unit": "mm"
+      },
+      {
+        "description": "Unit cell depth",
+        "expression": "cell_x",
+        "id": "parameter_3",
+        "name": "p1",
+        "symbol": "cell_z",
+        "unit": "mm"
+      },
+      {
+        "description": "Copper thickness",
+        "expression": "0.25",
+        "id": "parameter_4",
+        "name": "p1",
+        "symbol": "tmetal",
+        "unit": "mm"
+      },
+      {
+        "description": "Copper strip width",
+        "expression": "0.25",
+        "id": "parameter_5",
+        "name": "p1",
+        "symbol": "wmetal",
+        "unit": "mm"
+      },
+      {
+        "description": "Outer ring leg length",
+        "expression": "3.75",
+        "id": "parameter_6",
+        "name": "p1",
+        "symbol": "wring",
+        "unit": "mm"
+      },
+      {
+        "description": "Ring horizontal span",
+        "expression": "3",
+        "id": "parameter_7",
+        "name": "p1",
+        "symbol": "wring2",
+        "unit": "mm"
+      },
+      {
+        "description": "Split gap width",
+        "expression": "0.125",
+        "id": "parameter_8",
+        "name": "p1",
+        "symbol": "gapsize",
+        "unit": "mm"
+      },
+      {
+        "description": "Copper electrical conductivity",
+        "expression": "5.8e7",
+        "id": "parameter_9",
+        "name": "p1",
+        "symbol": "sigma_cu",
+        "unit": "S/m"
+      },
+      {
+        "description": "SRR operating frequency",
+        "expression": "5",
+        "id": "parameter_10",
+        "name": "p1",
+        "symbol": "frequency",
+        "unit": "GHz"
+      },
+      {
+        "description": "Free space wave impedance",
+        "expression": "376.730313668",
+        "id": "parameter_11",
+        "name": "p1",
+        "symbol": "eta0",
+        "unit": "ohm"
+      }
+    ],
+    "physics": {
+      "domainSelectionIds": [
+        "selection",
+        "selection_2"
+      ],
+      "formulation": "electric",
+      "frequency": {
+        "expression": "frequency",
+        "unit": "Hz"
+      },
+      "id": "physics1",
+      "name": "3D electromagnetic interface",
+      "phasorConvention": "exp(+i omega t)",
+      "type": "electromagnetics",
+      "impedance_boundary": {
+        "id": "impedance_boundary",
+        "impedance": {
+          "expression": "eta0",
+          "unit": "ohm"
+        },
+        "incidentField": {
+          "expression": "1",
+          "unit": "1"
+        },
+        "name": "Input impedance boundary",
+        "polarization": [
+          {
+            "expression": "0",
+            "unit": "V/m"
+          },
+          {
+            "expression": "0",
+            "unit": "V/m"
+          },
+          {
+            "expression": "1",
+            "unit": "V/m"
+          }
+        ],
+        "selectionId": "selection_7",
+        "type": "impedance"
+      },
+      "impedance_boundary_2": {
+        "id": "impedance_boundary_2",
+        "impedance": {
+          "expression": "eta0",
+          "unit": "ohm"
+        },
+        "name": "Output impedance boundary",
+        "selectionId": "selection_8",
+        "type": "impedance"
+      },
+      "periodic_condition": {
+        "id": "periodic_condition",
+        "name": "Periodic condition Y",
+        "periodicPairId": "periodic_pair",
+        "phaseVector": [
+          {
+            "expression": "0",
+            "unit": "rad/m"
+          },
+          {
+            "expression": "0",
+            "unit": "rad/m"
+          },
+          {
+            "expression": "0",
+            "unit": "rad/m"
+          }
+        ],
+        "type": "periodicCondition"
+      },
+      "periodic_condition_2": {
+        "id": "periodic_condition_2",
+        "name": "Periodic condition Z",
+        "periodicPairId": "periodic_pair_2",
+        "phaseVector": [
+          {
+            "expression": "0",
+            "unit": "rad/m"
+          },
+          {
+            "expression": "0",
+            "unit": "rad/m"
+          },
+          {
+            "expression": "0",
+            "unit": "rad/m"
+          }
+        ],
+        "type": "periodicCondition"
+      }
+    },
+    "pointwiseVariables": [
+      {
+        "description": "Electric field magnitude",
+        "expression": "sqrt(abs(Ex)^2+abs(Ey)^2+abs(Ez)^2)",
+        "id": "pointwise_variable",
+        "name": "u1",
+        "symbol": "Eabs",
+        "unit": "V/m"
+      }
+    ],
+    "results": [
+      {
+        "datasets": [
+          {
+            "filters": {
+              "tmetal": 0.00025
+            },
+            "id": "dataset_study",
+            "name": "Harmonic study",
+            "source": {
+              "studyId": "study",
+              "type": "study"
+            },
+            "style": "solid",
+            "xColumn": "frequency",
+            "xUnit": "GHz"
+          }
+        ],
+        "id": "global_plot",
+        "name": "Transmission and reflection coefficients",
+        "output": {
+          "directory": "fem_results/global_plot",
+          "figureFilename": "global_plot.svg"
+        },
+        "series": [
+          {
+            "axis": "left",
+            "column": "T",
+            "id": "series_E_in_avg",
+            "name": "T",
+            "unit": "1"
+          },
+          {
+            "axis": "left",
+            "column": "R",
+            "id": "series_E_in_avg_2",
+            "name": "R",
+            "unit": "1"
+          },
+          {
+            "axis": "left",
+            "column": "TplusR",
+            "id": "series_E_in_avg_3",
+            "name": "TplusR",
+            "unit": "1"
+          }
+        ],
+        "tableColumns": [
+          "T",
+          "R",
+          "TplusR"
+        ],
+        "type": "plot.sweep"
+      },
+      {
+        "filters": {
+          "frequency": 6000000000
+        },
+        "frequency": {
+          "expression": "frequency",
+          "unit": "Hz"
+        },
+        "id": "field_plot",
+        "name": "Electric field magnitude",
+        "quantity": {
+          "component": "Eabs",
+          "part": "real",
+          "type": "fieldComponent"
+        },
+        "type": "field"
+      }
+    ],
+    "selections": [
+      {
+        "addresses": [
+          {
+            "membership": {
+              "box": "inside"
+            }
+          },
+          {
+            "membership": {
+              "box_2": "inside"
+            }
+          },
+          {
+            "membership": {
+              "box_3": "inside"
+            }
+          }
+        ],
+        "entity": "domain",
+        "id": "selection",
+        "name": "Air domains"
+      },
+      {
+        "addresses": [
+          {
+            "membership": {
+              "box_2": "inside",
+              "union": "inside"
+            }
+          },
+          {
+            "membership": {
+              "box_2": "inside",
+              "union_2": "inside"
+            }
+          }
+        ],
+        "entity": "domain",
+        "id": "selection_2",
+        "name": "Copper domains"
+      },
+      {
+        "addresses": [
+          {
+            "membership": {
+              "box": "boundary"
+            }
+          },
+          {
+            "membership": {
+              "box_2": "boundary"
+            }
+          },
+          {
+            "membership": {
+              "box_3": "boundary"
+            }
+          }
+        ],
+        "coordinateExpression": "y",
+        "entity": "boundary",
+        "id": "selection_3",
+        "name": "Periodic Y lower face"
+      },
+      {
+        "addresses": [
+          {
+            "membership": {
+              "box": "boundary"
+            }
+          },
+          {
+            "membership": {
+              "box_2": "boundary"
+            }
+          },
+          {
+            "membership": {
+              "box_3": "boundary"
+            }
+          }
+        ],
+        "coordinateExpression": "y-cell_y",
+        "entity": "boundary",
+        "id": "selection_4",
+        "name": "Periodic Y upper face"
+      },
+      {
+        "addresses": [
+          {
+            "membership": {
+              "box": "boundary"
+            }
+          },
+          {
+            "membership": {
+              "box_2": "boundary"
+            }
+          },
+          {
+            "membership": {
+              "box_3": "boundary"
+            }
+          }
+        ],
+        "coordinateExpression": "z",
+        "entity": "boundary",
+        "id": "selection_5",
+        "name": "Periodic Z lower face"
+      },
+      {
+        "addresses": [
+          {
+            "membership": {
+              "box": "boundary"
+            }
+          },
+          {
+            "membership": {
+              "box_2": "boundary"
+            }
+          },
+          {
+            "membership": {
+              "box_3": "boundary"
+            }
+          }
+        ],
+        "coordinateExpression": "z-cell_z",
+        "entity": "boundary",
+        "id": "selection_6",
+        "name": "Periodic Z upper face"
+      },
+      {
+        "addresses": [
+          {
+            "membership": {
+              "box": "boundary"
+            }
+          }
+        ],
+        "coordinateExpression": "x",
+        "entity": "boundary",
+        "id": "selection_7",
+        "name": "Input plane"
+      },
+      {
+        "addresses": [
+          {
+            "membership": {
+              "box_3": "boundary"
+            }
+          }
+        ],
+        "coordinateExpression": "x-3*cell_x",
+        "entity": "boundary",
+        "id": "selection_8",
+        "name": "Output plane"
+      },
+      {
+        "addresses": [
+          {
+            "membership": {
+              "box": "boundary",
+              "box_2": "boundary"
+            }
+          }
+        ],
+        "coordinateExpression": "x-cell_x",
+        "entity": "boundary",
+        "id": "selection_9",
+        "name": "Input monitor at cell_x"
+      },
+      {
+        "addresses": [
+          {
+            "membership": {
+              "box_2": "boundary",
+              "box_3": "boundary"
+            }
+          }
+        ],
+        "coordinateExpression": "x-2*cell_x",
+        "entity": "boundary",
+        "id": "selection_10",
+        "name": "Output monitor at 2*cell_x"
+      }
+    ],
+    "study": [
+      {
+        "discretization": {
+          "elementOrder": 2,
+          "fieldFormulation": "electric"
+        },
+        "id": "study",
+        "name": "Harmonic study",
+        "parameterSweep": {
+          "id": "parameter_sweep",
+          "name": "Parameter sweep",
+          "parameters": [
+            {
+              "parameter": "frequency",
+              "values": {
+                "count": 21,
+                "end": {
+                  "expression": "7",
+                  "unit": "GHz"
+                },
+                "start": {
+                  "expression": "5",
+                  "unit": "GHz"
+                },
+                "type": "linear"
+              }
+            }
+          ],
+          "type": "parameterSweep"
+        },
+        "physicsId": "physics1",
+        "solver": {
+          "backend": "rivrs",
+          "constitutiveQuadrature": "standard",
+          "ordering": "metis",
+          "threads": 3
+        },
+        "type": "frequencyDomain"
+      }
+    ],
+    "units": "m",
+    "variables": [
+      {
+        "description": "Average incident electric field",
+        "expression": "intop_in(Ez)/intop_in(1)",
+        "id": "variable",
+        "name": "v1",
+        "symbol": "E_in_avg",
+        "unit": "V/m"
+      },
+      {
+        "description": "Average incident magnetic field",
+        "expression": "intop_in(-Hy)/intop_in(1)",
+        "id": "variable_2",
+        "name": "v1",
+        "symbol": "H_in_avg",
+        "unit": "A/m"
+      },
+      {
+        "description": "Incident wave amplitude",
+        "expression": "0.5*(E_in_avg+eta0*H_in_avg)",
+        "id": "variable_4",
+        "name": "v1",
+        "symbol": "a_in",
+        "unit": "V/m"
+      },
+      {
+        "description": "Reflected wave amplitude",
+        "expression": "0.5*(E_in_avg-eta0*H_in_avg)",
+        "id": "variable_5",
+        "name": "v1",
+        "symbol": "b_in",
+        "unit": "V/m"
+      },
+      {
+        "description": "Average transmitted electric field",
+        "expression": "intop_out(Ez)/intop_out(1)",
+        "id": "variable_6",
+        "name": "v1",
+        "symbol": "E_out_avg",
+        "unit": "V/m"
+      },
+      {
+        "description": "Average transmitted magnetic field",
+        "expression": "intop_out(-Hy)/intop_out(1)",
+        "id": "variable_7",
+        "name": "v1",
+        "symbol": "H_out_avg",
+        "unit": "A/m"
+      },
+      {
+        "description": "Transmitted wave amplitude",
+        "expression": "0.5*(E_out_avg+eta0*H_out_avg)",
+        "id": "variable_8",
+        "name": "v1",
+        "symbol": "a_out",
+        "unit": "V/m"
+      },
+      {
+        "description": "Transmission amplitude coefficient",
+        "expression": "a_out/a_in",
+        "id": "variable_9",
+        "name": "v1",
+        "symbol": "t",
+        "unit": "1"
+      },
+      {
+        "description": "Reflection amplitude coefficient",
+        "expression": "b_in/a_in",
+        "id": "variable_10",
+        "name": "v1",
+        "symbol": "r",
+        "unit": "1"
+      },
+      {
+        "description": "Power transmission coefficient",
+        "expression": "abs(t)^2",
+        "id": "variable_11",
+        "name": "v1",
+        "symbol": "T",
+        "unit": "1"
+      },
+      {
+        "description": "Power reflection coefficient",
+        "expression": "abs(r)^2",
+        "id": "variable_12",
+        "name": "v1",
+        "symbol": "R",
+        "unit": "1"
+      },
+      {
+        "description": "Transmission plus reflection",
+        "expression": "T+R",
+        "id": "variable_13",
+        "name": "v1",
+        "symbol": "TplusR",
+        "unit": "1"
+      }
+    ]
+  },
+  "x-fullmeta-schema": "../../applications/fem/fem.schema.json",
+  "scenario": {
+    "dimension": 3,
+    "physics": "electromagnetics",
+    "profileId": "em-3d"
+  },
+  "modelFormat": "fem-model/2"
+}

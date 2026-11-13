@@ -1,0 +1,15 @@
+[package]
+name = "fullmeta-mesh-rust"
+version = "0.1.0"
+edition = "2024"
+description = "Compile FullMeta model JSON, generate Gmsh meshes, and export the FullMeta mesh format"
+
+[[bin]]
+name = "fullmeta-mesh"
+path = "src/main.rs"
+
+[dependencies]
+fullmeta-model = { path = "../../../platform/model-rust" }
+fullmeta-core = { path = "../../../platform/core-rust" }
+serde_json = "1.0"
+fullmeta-operation-contracts = { path = "../../../platform/operation-contracts-rust" }

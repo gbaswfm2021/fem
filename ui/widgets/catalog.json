@@ -1,0 +1,12 @@
+{
+  "$schema": "../../../../platform/ui/schemas/fullmeta-ui-widget-catalog-1.schema.json",
+  "format": "fullmeta-widget-catalog/1",
+  "id": "fem",
+  "label": "FEM result controls",
+  "widgets": [
+    {"id":"femFieldQuantity","label":"FEM field quantity","module":"field-quantity/widget.js","category":"field","presentation":true},
+    {"id":"femFieldCuts","label":"FEM field cut positions","module":"field-cuts/widget.js","category":"field","uses":["quantity"],"presentation":true},
+    {"id":"femCsvSourceUnits","label":"FEM CSV source units","module":"csv-source-units/widget.js","category":"field","presentation":true},
+    {"id":"femCsvColumns","label":"FEM CSV columns","module":"csv-columns/widget.js","category":"field","presentation":true}
+  ]
+}

@@ -1,0 +1,448 @@
+{
+  "application": "fem",
+  "metadata": {
+    "description": "",
+    "id": "acoustic_room_2d",
+    "name": "acoustic_room_2d"
+  },
+  "model": {
+    "geometry": {
+      "features": [
+        {
+          "id": "rectangle",
+          "name": "Air region",
+          "position": [
+            {
+              "expression": "-Lx/2",
+              "unit": "m"
+            },
+            {
+              "expression": "-Ly/2",
+              "unit": "m"
+            }
+          ],
+          "size": [
+            {
+              "expression": "Lx",
+              "unit": "m"
+            },
+            {
+              "expression": "Ly",
+              "unit": "m"
+            }
+          ],
+          "type": "rectangle"
+        },
+        {
+          "center": [
+            {
+              "expression": "0",
+              "unit": "m"
+            },
+            {
+              "expression": "0",
+              "unit": "m"
+            }
+          ],
+          "id": "circle",
+          "name": "Copper cylinder cross-section",
+          "radius": {
+            "expression": "R_cyl",
+            "unit": "m"
+          },
+          "type": "circle"
+        }
+      ],
+      "tolerance": {
+        "expression": "1e-9",
+        "unit": "m"
+      }
+    },
+    "integrationOperators": [],
+    "materials": [
+      {
+        "density": {
+          "expression": "rho_air",
+          "unit": "kg/m^3"
+        },
+        "id": "material",
+        "name": "Air",
+        "selectionId": "selection",
+        "soundSpeed": {
+          "expression": "c_air",
+          "unit": "m/s"
+        }
+      },
+      {
+        "density": {
+          "expression": "rho_cu",
+          "unit": "kg/m^3"
+        },
+        "id": "material_2",
+        "name": "Copper cylinder",
+        "selectionId": "selection_2",
+        "soundSpeed": {
+          "expression": "c_cu",
+          "unit": "m/s"
+        }
+      }
+    ],
+    "mesh": {
+      "elementFamily": "triangle",
+      "gmsh": {
+        "algorithm3D": 1,
+        "elementOrder": 1,
+        "optimize": true,
+        "optimizeNetgen": true,
+        "optimizeThreshold": 0.25,
+        "smoothing": 10,
+        "threads": 1
+      },
+      "maxSize": {
+        "expression": "h_max",
+        "unit": "m"
+      },
+      "meshSizeControls": [
+        {
+          "id": "mesh_size",
+          "name": "Copper cylinder mesh size",
+          "selectionId": "selection_2",
+          "size": {
+            "expression": "h_cu",
+            "unit": "m"
+          }
+        }
+      ],
+      "minSize": {
+        "expression": "h_min",
+        "unit": "m"
+      },
+      "periodicPairIds": [
+        "periodic_pair"
+      ],
+      "periodicPairs": [
+        {
+          "id": "periodic_pair",
+          "lowerSelectionId": "selection_5",
+          "name": "Periodic pair",
+          "translation": [
+            {
+              "expression": "0",
+              "unit": "m"
+            },
+            {
+              "expression": "Ly",
+              "unit": "m"
+            },
+            {
+              "expression": "0",
+              "unit": "m"
+            }
+          ],
+          "upperSelectionId": "selection_6"
+        }
+      ]
+    },
+    "parameters": [
+      {
+        "description": "Frequency used by the acoustic solve",
+        "expression": "3",
+        "id": "parameter",
+        "name": "p1",
+        "symbol": "freq0",
+        "unit": "kHz"
+      },
+      {
+        "description": "Gaussian source beam width",
+        "expression": "0.2",
+        "id": "parameter_2",
+        "name": "p1",
+        "symbol": "beamWidth",
+        "unit": "m"
+      },
+      {
+        "description": "Air mass density",
+        "expression": "1.225",
+        "id": "parameter_3",
+        "name": "p1",
+        "symbol": "rho_air",
+        "unit": "kg/m^3"
+      },
+      {
+        "description": "Air sound speed",
+        "expression": "343",
+        "id": "parameter_4",
+        "name": "p1",
+        "symbol": "c_air",
+        "unit": "m/s"
+      },
+      {
+        "description": "Computational domain width",
+        "expression": "1",
+        "id": "parameter_5",
+        "name": "p1",
+        "symbol": "Lx",
+        "unit": "m"
+      },
+      {
+        "description": "Computational domain height",
+        "expression": "1.5",
+        "id": "parameter_6",
+        "name": "p1",
+        "symbol": "Ly",
+        "unit": "m"
+      },
+      {
+        "description": "Copper cylinder radius",
+        "expression": "0.1",
+        "id": "parameter_7",
+        "name": "p1",
+        "symbol": "R_cyl",
+        "unit": "m"
+      },
+      {
+        "description": "Peak incident pressure amplitude",
+        "expression": "1",
+        "id": "parameter_8",
+        "name": "p1",
+        "symbol": "p_inc_amp",
+        "unit": "Pa"
+      },
+      {
+        "description": "Air characteristic acoustic impedance",
+        "expression": "411.6",
+        "id": "parameter_9",
+        "name": "p2",
+        "symbol": "Z_air",
+        "unit": "Pa*s/m"
+      },
+      {
+        "description": "Copper mass density",
+        "expression": "8960",
+        "id": "parameter_10",
+        "name": "p3",
+        "symbol": "rho_cu",
+        "unit": "kg/m^3"
+      },
+      {
+        "description": "Copper sound speed",
+        "expression": "4760",
+        "id": "parameter_11",
+        "name": "p4",
+        "symbol": "c_cu",
+        "unit": "m/s"
+      },
+      {
+        "description": "Global maximum element size",
+        "expression": "0.015",
+        "id": "parameter_12",
+        "name": "p5",
+        "symbol": "h_max",
+        "unit": "m"
+      },
+      {
+        "description": "Global minimum element size",
+        "expression": "0.0015",
+        "id": "parameter_13",
+        "name": "p6",
+        "symbol": "h_min",
+        "unit": "m"
+      },
+      {
+        "description": "Copper target element size",
+        "expression": "0.01",
+        "id": "parameter_14",
+        "name": "p7",
+        "symbol": "h_cu",
+        "unit": "m"
+      }
+    ],
+    "physics": {
+      "domainSelectionIds": [
+        "selection",
+        "selection_2"
+      ],
+      "formulation": "pressure",
+      "frequency": {
+        "expression": "freq0",
+        "unit": "kHz"
+      },
+      "id": "physics1",
+      "impedance_boundary": {
+        "id": "impedance_boundary",
+        "impedance": {
+          "expression": "Z_air",
+          "unit": "Pa*s/m"
+        },
+        "incidentField": {
+          "expression": "1",
+          "unit": "1"
+        },
+        "name": "Incident wave impedance",
+        "polarization": [
+          {
+            "expression": "p_inc_amp*exp(-0.5*pow(y/beamWidth,2))",
+            "unit": "Pa"
+          }
+        ],
+        "selectionId": "selection_3",
+        "type": "impedance"
+      },
+      "impedance_boundary_2": {
+        "id": "impedance_boundary_2",
+        "impedance": {
+          "expression": "Z_air",
+          "unit": "Pa*s/m"
+        },
+        "name": "Right radiation impedance",
+        "selectionId": "selection_4",
+        "type": "impedance"
+      },
+      "impedance_boundary_3": {
+        "id": "impedance_boundary_3",
+        "impedance": {
+          "expression": "Z_air",
+          "unit": "Pa*s/m"
+        },
+        "name": "Bottom radiation impedance",
+        "selectionId": "selection_5",
+        "type": "impedance"
+      },
+      "impedance_boundary_4": {
+        "id": "impedance_boundary_4",
+        "impedance": {
+          "expression": "Z_air",
+          "unit": "Pa*s/m"
+        },
+        "name": "Top radiation impedance",
+        "selectionId": "selection_6",
+        "type": "impedance"
+      },
+      "name": "2D acoustics interface",
+      "type": "acoustics"
+    },
+    "pointwiseVariables": [],
+    "results": [
+      {
+        "frequency": {
+          "expression": "freq0",
+          "unit": "kHz"
+        },
+        "id": "field_plot",
+        "name": "Domain field plot",
+        "quantity": {
+          "component": "p",
+          "part": "magnitude",
+          "type": "fieldComponent"
+        },
+        "type": "field"
+      }
+    ],
+    "selections": [
+      {
+        "addresses": [
+          {
+            "membership": {
+              "rectangle": "inside"
+            }
+          }
+        ],
+        "entity": "domain",
+        "id": "selection",
+        "name": "Air outside cylinder"
+      },
+      {
+        "addresses": [
+          {
+            "membership": {
+              "circle": "inside",
+              "rectangle": "inside"
+            }
+          }
+        ],
+        "entity": "domain",
+        "id": "selection_2",
+        "name": "Copper cylinder"
+      },
+      {
+        "addresses": [
+          {
+            "membership": {
+              "rectangle": "boundary"
+            }
+          }
+        ],
+        "coordinateExpression": "x - (-Lx/2)",
+        "entity": "boundary",
+        "id": "selection_3",
+        "name": "Incident wave edge"
+      },
+      {
+        "addresses": [
+          {
+            "membership": {
+              "rectangle": "boundary"
+            }
+          }
+        ],
+        "coordinateExpression": "x - (Lx/2)",
+        "entity": "boundary",
+        "id": "selection_4",
+        "name": "Right radiation edge"
+      },
+      {
+        "addresses": [
+          {
+            "membership": {
+              "rectangle": "boundary"
+            }
+          }
+        ],
+        "coordinateExpression": "y - (-Ly/2)",
+        "entity": "boundary",
+        "id": "selection_5",
+        "name": "Bottom radiation edge"
+      },
+      {
+        "addresses": [
+          {
+            "membership": {
+              "rectangle": "boundary"
+            }
+          }
+        ],
+        "coordinateExpression": "y - (Ly/2)",
+        "entity": "boundary",
+        "id": "selection_6",
+        "name": "Top radiation edge"
+      }
+    ],
+    "study": [
+      {
+        "discretization": {
+          "elementOrder": 1,
+          "fieldFormulation": "pressure"
+        },
+        "id": "study",
+        "name": "Harmonic study",
+        "physicsId": "physics1",
+        "solver": {
+          "backend": "rivrs",
+          "constitutiveQuadrature": "standard",
+          "ordering": "metis",
+          "threads": 1
+        },
+        "type": "frequencyDomain"
+      }
+    ],
+    "units": "m",
+    "variables": []
+  },
+  "modelFormat": "fem-model/2",
+  "scenario": {
+    "dimension": 2,
+    "physics": "acoustics",
+    "profileId": "acoustic-2d"
+  },
+  "x-fullmeta-schema": "../../applications/fem/fem.schema.json"
+}

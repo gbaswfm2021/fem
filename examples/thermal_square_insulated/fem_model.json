@@ -1,0 +1,244 @@
+{
+  "x-fullmeta-schema": "../../applications/fem/fem.schema.json",
+  "application": "fem",
+  "metadata": {
+    "description": "Stationary conduction",
+    "id": "thermal_square_insulated",
+    "name": "Thermal square insulated"
+  },
+  "model": {
+    "integrationOperators": [],
+    "parameters": [],
+    "pointwiseVariables": [],
+    "units": "m",
+    "variables": [],
+    "study": [
+      {
+        "discretization": {
+          "elementOrder": 1,
+          "fieldFormulation": "T"
+        },
+        "id": "stationary",
+        "name": "Stationary study",
+        "physicsId": "physics1",
+        "solver": {
+          "backend": "rivrs",
+          "constitutiveQuadrature": "standard",
+          "ordering": "metis",
+          "threads": 12
+        },
+        "type": "stationary"
+      }
+    ],
+    "results": [
+      {
+        "cutPlanePositions": {
+          "x": {
+            "mode": "midPlane"
+          },
+          "y": {
+            "mode": "midPlane"
+          },
+          "z": {
+            "mode": "midPlane"
+          }
+        },
+        "id": "field_plot",
+        "name": "Temperature T",
+        "quantity": {
+          "component": "T",
+          "part": "real",
+          "type": "fieldComponent"
+        },
+        "type": "field"
+      }
+    ],
+    "geometry": {
+      "features": [
+        {
+          "id": "rectangle",
+          "name": "Square",
+          "position": [
+            {
+              "expression": "0",
+              "unit": "m"
+            },
+            {
+              "expression": "0",
+              "unit": "m"
+            }
+          ],
+          "size": [
+            {
+              "expression": "1",
+              "unit": "m"
+            },
+            {
+              "expression": "1",
+              "unit": "m"
+            }
+          ],
+          "type": "rectangle"
+        }
+      ],
+      "tolerance": {
+        "expression": "1e-9",
+        "unit": "m"
+      }
+    },
+    "selections": [
+      {
+        "addresses": [
+          {
+            "membership": {
+              "rectangle": "inside"
+            }
+          }
+        ],
+        "entity": "domain",
+        "id": "selection",
+        "name": "Square domain"
+      },
+      {
+        "addresses": [
+          {
+            "membership": {
+              "rectangle": "boundary"
+            }
+          }
+        ],
+        "coordinateExpression": "x",
+        "entity": "boundary",
+        "id": "selection_2",
+        "name": "Left edge"
+      },
+      {
+        "addresses": [
+          {
+            "membership": {
+              "rectangle": "boundary"
+            }
+          }
+        ],
+        "coordinateExpression": "x-1",
+        "entity": "boundary",
+        "id": "selection_3",
+        "name": "Right edge"
+      },
+      {
+        "addresses": [
+          {
+            "membership": {
+              "rectangle": "boundary"
+            }
+          }
+        ],
+        "coordinateExpression": "y",
+        "entity": "boundary",
+        "id": "selection_4",
+        "name": "Bottom edge"
+      },
+      {
+        "addresses": [
+          {
+            "membership": {
+              "rectangle": "boundary"
+            }
+          }
+        ],
+        "coordinateExpression": "y-1",
+        "entity": "boundary",
+        "id": "selection_5",
+        "name": "Top edge"
+      }
+    ],
+    "mesh": {
+      "elementFamily": "triangle",
+      "gmsh": {
+        "algorithm3D": 1,
+        "elementOrder": 1,
+        "optimize": true,
+        "optimizeNetgen": true,
+        "optimizeThreshold": 0.25,
+        "smoothing": 10,
+        "threads": 1
+      },
+      "maxSize": {
+        "expression": "0.1",
+        "unit": "m"
+      },
+      "meshSizeControls": [],
+      "minSize": {
+        "expression": "0.05",
+        "unit": "m"
+      },
+      "periodicPairs": []
+    },
+    "materials": [
+      {
+        "id": "material",
+        "name": "Square",
+        "selectionId": "selection",
+        "thermalConductivity": {
+          "expression": "1",
+          "unit": "W/(m*K)"
+        }
+      }
+    ],
+    "physics": {
+      "domainSelectionIds": [
+        "selection"
+      ],
+      "formulation": "T",
+      "id": "physics1",
+      "name": "Physics",
+      "type": "thermal",
+      "dirichlet_boundary": {
+        "id": "dirichlet_boundary",
+        "name": "Left temperature 300 K",
+        "selectionId": "selection_2",
+        "type": "dirichlet",
+        "value": {
+          "expression": "300",
+          "unit": "K"
+        }
+      },
+      "dirichlet_boundary_2": {
+        "id": "dirichlet_boundary_2",
+        "name": "Right temperature 400 K",
+        "selectionId": "selection_3",
+        "type": "dirichlet",
+        "value": {
+          "expression": "400",
+          "unit": "K"
+        }
+      },
+      "neumann_boundary": {
+        "id": "neumann_boundary",
+        "name": "Bottom insulation",
+        "selectionId": "selection_4",
+        "type": "neumann",
+        "value": {
+          "expression": "0",
+          "unit": "W/m^2"
+        }
+      },
+      "neumann_boundary_2": {
+        "id": "neumann_boundary_2",
+        "name": "Top insulation",
+        "selectionId": "selection_5",
+        "type": "neumann",
+        "value": {
+          "expression": "0",
+          "unit": "W/m^2"
+        }
+      }
+    }
+  },
+  "scenario": {
+    "dimension": 2,
+    "physics": "thermal",
+    "profileId": "thermal-2d"
+  },
+  "modelFormat": "fem-model/2"
+}

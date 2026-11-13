@@ -1,0 +1,307 @@
+{
+  "application": "fem",
+  "x-fullmeta-schema": "../../applications/fem/fem.schema.json",
+  "metadata": {
+    "description": "",
+    "id": "acoustic_room_3d",
+    "name": "acoustic_room_3d"
+  },
+  "model": {
+    "integrationOperators": [],
+    "parameters": [
+      {
+        "description": "Acoustic solve frequency",
+        "expression": "500",
+        "id": "parameter",
+        "name": "p1",
+        "symbol": "freq0",
+        "unit": "Hz"
+      },
+      {
+        "description": "Speed of sound in air",
+        "expression": "343",
+        "id": "parameter_3",
+        "name": "p3",
+        "symbol": "c0",
+        "unit": "m/s"
+      },
+      {
+        "description": "Air density",
+        "expression": "1.225",
+        "id": "parameter_4",
+        "name": "p4",
+        "symbol": "rho0",
+        "unit": "kg/m^3"
+      },
+      {
+        "description": "Source normal velocity",
+        "expression": "0.001",
+        "id": "parameter_5",
+        "name": "p5",
+        "symbol": "vsrc",
+        "unit": "m/s"
+      },
+      {
+        "description": "Maximum tetrahedron size",
+        "expression": "0.02",
+        "id": "parameter_6",
+        "name": "p6",
+        "symbol": "hmax",
+        "unit": "m"
+      },
+      {
+        "description": "Room side length",
+        "expression": "0.5",
+        "id": "parameter_7",
+        "name": "p1",
+        "symbol": "Lroom",
+        "unit": "m"
+      }
+    ],
+    "pointwiseVariables": [],
+    "units": "m",
+    "variables": [
+      {
+        "description": "Wavelength in air at the solve frequency",
+        "expression": "c0/freq0",
+        "id": "variable",
+        "name": "v1",
+        "symbol": "lambda0",
+        "unit": "m"
+      }
+    ],
+    "study": [
+      {
+        "discretization": {
+          "elementOrder": 1,
+          "fieldFormulation": "pressure"
+        },
+        "id": "study",
+        "name": "Harmonic study",
+        "physicsId": "physics1",
+        "solver": {
+          "backend": "rivrs",
+          "constitutiveQuadrature": "standard",
+          "ordering": "metis",
+          "threads": 1
+        },
+        "type": "frequencyDomain"
+      }
+    ],
+    "results": [
+      {
+        "frequency": {
+          "expression": "freq0",
+          "unit": "Hz"
+        },
+        "id": "field_plot",
+        "name": "Domain field plot",
+        "quantity": {
+          "component": "p",
+          "part": "magnitude",
+          "type": "fieldComponent"
+        },
+        "type": "field"
+      }
+    ],
+    "geometry": {
+      "features": [
+        {
+          "id": "box",
+          "name": "Air room volume",
+          "position": [
+            {
+              "expression": "0",
+              "unit": "m"
+            },
+            {
+              "expression": "0",
+              "unit": "m"
+            },
+            {
+              "expression": "0",
+              "unit": "m"
+            }
+          ],
+          "positionMode": "corner",
+          "size": [
+            {
+              "expression": "Lroom",
+              "unit": "m"
+            },
+            {
+              "expression": "Lroom",
+              "unit": "m"
+            },
+            {
+              "expression": "Lroom",
+              "unit": "m"
+            }
+          ],
+          "type": "box"
+        }
+      ],
+      "tolerance": {
+        "expression": "1e-9",
+        "unit": "m"
+      }
+    },
+    "selections": [
+      {
+        "addresses": [
+          {
+            "membership": {
+              "box": "inside"
+            }
+          }
+        ],
+        "entity": "domain",
+        "id": "selection",
+        "name": "Air volume"
+      },
+      {
+        "addresses": [
+          {
+            "membership": {
+              "box": "boundary"
+            }
+          }
+        ],
+        "coordinateExpression": "z",
+        "entity": "boundary",
+        "id": "selection_2",
+        "name": "Bottom source face"
+      },
+      {
+        "addresses": [
+          {
+            "membership": {
+              "box": "boundary"
+            }
+          }
+        ],
+        "coordinateExpression": "x",
+        "entity": "boundary",
+        "id": "selection_3",
+        "name": "Wall x = 0"
+      },
+      {
+        "addresses": [
+          {
+            "membership": {
+              "box": "boundary"
+            }
+          }
+        ],
+        "coordinateExpression": "x-Lroom",
+        "entity": "boundary",
+        "id": "selection_4",
+        "name": "Wall x = room side"
+      },
+      {
+        "addresses": [
+          {
+            "membership": {
+              "box": "boundary"
+            }
+          }
+        ],
+        "coordinateExpression": "y",
+        "entity": "boundary",
+        "id": "selection_5",
+        "name": "Wall y = 0"
+      },
+      {
+        "addresses": [
+          {
+            "membership": {
+              "box": "boundary"
+            }
+          }
+        ],
+        "coordinateExpression": "y-Lroom",
+        "entity": "boundary",
+        "id": "selection_6",
+        "name": "Wall y = room side"
+      },
+      {
+        "addresses": [
+          {
+            "membership": {
+              "box": "boundary"
+            }
+          }
+        ],
+        "coordinateExpression": "z-Lroom",
+        "entity": "boundary",
+        "id": "selection_7",
+        "name": "Wall z = room side"
+      }
+    ],
+    "mesh": {
+      "elementFamily": "tetrahedron",
+      "gmsh": {
+        "algorithm3D": 1,
+        "elementOrder": 1,
+        "optimize": true,
+        "optimizeNetgen": true,
+        "optimizeThreshold": 0.25,
+        "smoothing": 10,
+        "threads": 1
+      },
+      "maxSize": {
+        "expression": "hmax",
+        "unit": "m"
+      },
+      "meshSizeControls": [],
+      "minSize": {
+        "expression": "hmax/10",
+        "unit": "m"
+      },
+      "periodicPairs": []
+    },
+    "materials": [
+      {
+        "density": {
+          "expression": "rho0",
+          "unit": "kg/m^3"
+        },
+        "id": "material",
+        "name": "Air",
+        "selectionId": "selection",
+        "soundSpeed": {
+          "expression": "c0",
+          "unit": "m/s"
+        }
+      }
+    ],
+    "physics": {
+      "domainSelectionIds": [
+        "selection"
+      ],
+      "formulation": "pressure",
+      "frequency": {
+        "expression": "freq0",
+        "unit": "Hz"
+      },
+      "id": "physics1",
+      "name": "3D acoustics interface",
+      "type": "acoustics",
+      "neumann_boundary": {
+        "id": "neumann_boundary",
+        "name": "Bottom source velocity",
+        "selectionId": "selection_2",
+        "type": "neumann",
+        "value": {
+          "expression": "vsrc",
+          "unit": "m/s"
+        }
+      }
+    }
+  },
+  "scenario": {
+    "dimension": 3,
+    "physics": "acoustics",
+    "profileId": "acoustic-3d"
+  },
+  "modelFormat": "fem-model/2"}

@@ -1,0 +1,50 @@
+[package]
+name = "fullmeta-fem"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+faer = { version = "0.24.4", default-features = false, features = ["std", "sparse-linalg"] }
+rivrs-sparse = { version = "0.1.1", optional = true }
+serde_json = "1.0"
+fullmeta-operation-contracts = { path = "../../../platform/operation-contracts-rust" }
+fullmeta-core = { path = "../../../platform/core-rust" }
+fullmeta-model = { path = "../../../platform/model-rust" }
+
+[[bin]]
+name = "fullmeta-fem"
+path = "src/dispatcher.rs"
+
+[[bin]]
+name = "acoustic2d"
+path = "src/bin/acoustic2d.rs"
+required-features = ["solver-native-acoustic2d"]
+
+[[bin]]
+name = "acoustic3d"
+path = "src/bin/acoustic3d.rs"
+required-features = ["solver-native-acoustic3d"]
+
+[[bin]]
+name = "em2d"
+path = "src/bin/em2d.rs"
+required-features = ["solver-native-em2d"]
+
+[[bin]]
+name = "em3d"
+path = "src/bin/em3d.rs"
+required-features = ["solver-native-em3d"]
+
+[features]
+default = ["rivrs-backend", "parallel"]
+rivrs-backend = ["dep:rivrs-sparse"]
+parallel = ["faer/rayon"]
+solver-native-acoustic2d = ["rivrs-backend"]
+solver-native-em2d = ["rivrs-backend"]
+solver-native-em3d = ["rivrs-backend"]
+solver-native-acoustic3d = ["rivrs-backend"]
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
