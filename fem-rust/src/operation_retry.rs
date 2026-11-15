@@ -1,5 +1,5 @@
 //! Opt-in durable retry identity. Never start another worker for an existing operation ID.
-use super::{checked_descendant, checked_run_id, model_schema, read_json};
+use super::{checked_descendant, checked_run_id, model_schema, read_json, study_run_id};
 use fullmeta_operation_contracts::{ContractIdentity, Diagnostic, digest};
 use serde_json::{Value, json};
 use std::{
@@ -134,7 +134,12 @@ pub(super) fn reuse(
     document_name: &str,
     identity: &ContractIdentity,
 ) -> Result<Option<(Value, i32)>, Diagnostic> {
-    let directory = run_directory(document, id)?;
+    let model_id = model
+        .pointer("/metadata/id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| issue("OPERATION_CONTEXT_INVALID", "The model has no metadata.id.".into()))?;
+    let stable_run_id = study_run_id(model_id, study);
+    let directory = run_directory(document, &stable_run_id)?;
     if !directory
         .try_exists()
         .map_err(|error| issue("OPERATION_RECORD_INVALID", error.to_string()))?
@@ -152,10 +157,12 @@ pub(super) fn reuse(
             .map_err(|message| issue("OPERATION_RECORD_INVALID", message))?,
     )
     .map_err(|message| issue("OPERATION_RECORD_INVALID", message))?;
+    if record["operationId"].as_str() != Some(id) {
+        return Ok(None);
+    }
     let expected = fingerprint(model, study, document_name)
         .map_err(|message| issue("OPERATION_RECORD_INVALID", message))?;
-    if record["operationId"].as_str() != Some(id)
-        || record["runId"].as_str() != Some(id)
+    if record["runId"].as_str() != Some(stable_run_id.as_str())
         || record["model"]["file"].as_str() != Some(document_name)
         || record["study"]["id"].as_str() != Some(study)
         || record.get("operationContract") != Some(&identity.as_json())
@@ -178,7 +185,7 @@ pub(super) fn reuse(
                     )
                 })?;
             validate_outputs(&root, &directory, &event)?;
-            if event["runId"].as_str() != Some(id) {
+            if event["runId"].as_str() != Some(stable_run_id.as_str()) {
                 return Err(issue(
                     "OPERATION_RECORD_INVALID",
                     "The saved completion belongs to a different run.".into(),
@@ -205,7 +212,7 @@ pub(super) fn reuse(
             return Err(diagnostic);
         }
     };
-    event["runId"] = json!(id);
+    event["runId"] = json!(stable_run_id);
     event["operationId"] = json!(id);
     event["reused"] = json!(true);
     let code = if event["type"] == "complete" { 0 } else { 1 };

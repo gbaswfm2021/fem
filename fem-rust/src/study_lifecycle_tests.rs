@@ -10,6 +10,52 @@ const RUN: &str = "test-run";
 const OPERATION: &str = "test-operation";
 const RUNS: &str = "fem_runs";
 
+#[test]
+fn study_event_capture_holds_one_terminal_and_suppresses_following_events() {
+    let terminal_types = OperationTerminalTypes::from_contract("fem.studyRun").unwrap();
+    let mut capture = ChildEventCapture::default();
+
+    assert!(capture.record(
+        json!({"type":"progress","state":"running"}),
+        &terminal_types
+    ));
+    assert!(!capture.record(
+        json!({"type":"complete","state":"success"}),
+        &terminal_types
+    ));
+    assert_eq!(
+        capture
+            .terminal
+            .as_ref()
+            .and_then(|event| event["type"].as_str()),
+        Some("complete")
+    );
+    assert!(!capture.record(
+        json!({"type":"progress","state":"running"}),
+        &terminal_types
+    ));
+    assert!(capture.event_after_terminal);
+    assert_eq!(
+        capture
+            .terminal
+            .as_ref()
+            .and_then(|event| event["type"].as_str()),
+        Some("complete")
+    );
+
+    let mut failed_capture = ChildEventCapture::default();
+    let failure = json!({"type":"error","state":"error","message":"solver failed"});
+    assert!(!failed_capture.record(failure.clone(), &terminal_types));
+    assert!(!terminal_types.is_success(&failure));
+    assert_eq!(
+        failed_capture
+            .terminal
+            .as_ref()
+            .and_then(|event| event["type"].as_str()),
+        Some("error")
+    );
+}
+
 struct Fixture(PathBuf);
 
 impl Fixture {

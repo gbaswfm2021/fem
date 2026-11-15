@@ -177,13 +177,13 @@ fn resolve_quantity_sweep(input: &Value, action: &Value, scope: &ResultScope<'_>
         Some([axis]) => axis["parameter"]
             .as_str()
             .ok_or("The Study sweep axis has no parameter symbol.")?,
-        _ => {
-            if profile == "em-3d" {
-                "frequency_GHz"
-            } else {
-                "frequency_Hz"
-            }
+        _ if study.get("type").and_then(Value::as_str) == Some("frequencyDomain") => {
+            crate::model_schema::scenario_metadata_for_profile(profile)?
+                .pointer("/resultDefaults/frequencyColumn")
+                .and_then(Value::as_str)
+                .unwrap_or("frequency_Hz")
         }
+        _ => return Err(format!("Study {study_id:?} has no declared result sweep axis.")),
     };
     let name = action["name"].as_str().unwrap_or(quantity);
     let mut recipe = action.clone();
@@ -542,7 +542,7 @@ fn resolve_field_run(
     }
     let request = checked_run_json(run, "request.json")?;
     let run_relative = format!("{}/{}", storage_name(runs_directory)?, run.id);
-    let files = list_field_files(run, &run_relative, model, &request)?;
+    let files = list_field_files(run, &run_relative, &request)?;
     let (parameter_cases, saved_metadata) = run_result_data(run, &request, &Value::Null)?;
     let expected_count = run
         .record
@@ -736,7 +736,15 @@ fn resolve_field_run(
             }
         }
     }
-    let stationary = profile == "thermal-2d";
+    let stationary = model
+        .pointer("/model/study")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find(|study| study.get("id").and_then(Value::as_str) == Some(study_id))
+        .and_then(|study| study.get("type"))
+        .and_then(Value::as_str)
+        == Some("stationary");
     let mut response = json!({
         "action":action,"runId":run.id,"studyId":study_id,"studyName":study_name,
         "modelFreshness":"current",
@@ -904,7 +912,7 @@ fn checked_field_mesh(
     let geometry_hash = case.get("geometryHash")?.as_str()?;
     let cache = || {
         let relative = format!("{}-mesh-cache.json", mesh.strip_suffix("-mesh.mesh")?);
-        let path = checked_file_maybe(&run.directory, &relative).ok()??;
+        let path = checked_run_or_shared_mesh_file(scope, run, &relative).ok()??;
         let cache = read_json(&path).ok()?;
         (cache["schema"] == "fullmeta-mesh-cache/3"
             && cache["geometryHash"].as_str() == Some(geometry_hash))
@@ -924,7 +932,7 @@ fn checked_field_mesh(
     });
     let cache = needs_cache.then(cache).flatten();
     let artifact = |kind: &str, relative: &str| {
-        let path = checked_file_maybe(&run.directory, relative).ok()??;
+        let path = checked_run_or_shared_mesh_file(scope, run, relative).ok()??;
         let filename = path.file_name()?.to_str()?;
         let expected = geometry
             .get("files")
@@ -1603,13 +1611,13 @@ mod freshness_tests {
             }),
         };
         let message =
-            list_field_files(&run, "fem_runs/checked", &Value::Null, &Value::Null).unwrap_err();
+            list_field_files(&run, "fem_runs/checked", &Value::Null).unwrap_err();
         assert!(message.starts_with(
             "fem_runs/checked/output/field.json: could not read indexed field artifact:"
         ));
         fixture.file("output/field.json", "");
         let message =
-            list_field_files(&run, "fem_runs/checked", &Value::Null, &Value::Null).unwrap_err();
+            list_field_files(&run, "fem_runs/checked", &Value::Null).unwrap_err();
         assert_eq!(
             message,
             "fem_runs/checked/output/field.json: expected a nonempty regular field artifact."
@@ -1760,7 +1768,6 @@ fn run_timestamp<'a>(record: &'a Value, id: &'a str) -> &'a str {
 fn list_field_files(
     run: &Run,
     run_relative: &str,
-    model: &Value,
     request: &Value,
 ) -> Result<Vec<Value>> {
     let output = run.directory.join("output");
@@ -1832,33 +1839,47 @@ fn list_field_files(
             detail
         )
     };
-    let profile = model.pointer("/scenario/profileId").and_then(Value::as_str);
-    // Stationary thermal artifacts are indexed without a frequencyHz value;
-    // handle them before the generic frequency-indexed harmonic branch.
-    if profile == Some("thermal-2d") {
+    let stationary = run
+        .record
+        .pointer("/study/snapshot/type")
+        .and_then(Value::as_str)
+        == Some("stationary");
+    if stationary {
+        let profile = run
+            .record
+            .pointer("/model/snapshot/scenario/profileId")
+            .and_then(Value::as_str);
+        let fallback_label = profile
+            .and_then(|profile| crate::model_schema::scenario_metadata_for_profile(profile).ok())
+            .and_then(|scenario| scenario.pointer("/resultDefaults/stationaryFieldLabel"))
+            .and_then(Value::as_str)
+            .unwrap_or("Stationary field");
         let indexed = run
             .record
             .pointer("/artifacts/fieldFiles")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|item| item.get("name").and_then(Value::as_str))
-            .collect::<Vec<_>>();
+            .and_then(Value::as_array);
         let fallback = run
             .record
             .pointer("/artifacts/fields")
             .and_then(Value::as_str)
             .and_then(|path| Path::new(path).file_name())
             .and_then(|name| name.to_str());
-        let names = if indexed.is_empty() {
-            fallback.into_iter().collect()
-        } else {
-            indexed
-        };
         let mut files = Vec::new();
-        for name in names {
+        if let Some(indexed) = indexed.filter(|indexed| !indexed.is_empty()) {
+            for item in indexed {
+                let Some(name) = item.get("name").and_then(Value::as_str) else {
+                    continue;
+                };
+                check_indexed_file(name)?;
+                files.push(json!({
+                    "name":name,
+                    "caseIndex":item.get("caseIndex").cloned().unwrap_or(json!(0)),
+                    "label":item.get("label").and_then(Value::as_str).unwrap_or(fallback_label)
+                }));
+            }
+        } else if let Some(name) = fallback {
             check_indexed_file(name)?;
-            files.push(json!({"name":name,"caseIndex":0,"label":"Stationary temperature"}));
+            files.push(json!({"name":name,"caseIndex":0,"label":fallback_label}));
         }
         return Ok(files);
     }
@@ -2026,6 +2047,40 @@ pub(super) fn checked_file_maybe(base: &Path, relative: &str) -> Result<Option<P
         return Err("A result artifact must be a regular file inside its project folder.".into());
     }
     Ok(Some(actual))
+}
+
+fn checked_run_or_shared_mesh_file(
+    scope: &ResultScope<'_>,
+    run: &Run,
+    relative: &str,
+) -> Result<Option<PathBuf>> {
+    let Some(shared_relative) = relative.strip_prefix("../mesh/") else {
+        return checked_file_maybe(&run.directory, relative);
+    };
+    if shared_relative.is_empty() {
+        return Err("A shared mesh artifact path must name a file.".into());
+    }
+    let shared_mesh = run
+        .directory
+        .parent()
+        .ok_or("Study run folder has no shared mesh parent")?
+        .join("mesh");
+    let metadata = fs::symlink_metadata(&shared_mesh)
+        .map_err(|error| format!("Could not inspect shared mesh storage: {error}"))?;
+    if is_link(&metadata) || !metadata.is_dir() {
+        return Err("Shared mesh storage must be a real directory.".into());
+    }
+    let Some(path) = checked_file_maybe(&shared_mesh, shared_relative)? else {
+        return Ok(None);
+    };
+    let project = scope
+        .project
+        .canonicalize()
+        .map_err(|error| format!("Could not resolve the project folder: {error}"))?;
+    if !path.starts_with(project) {
+        return Err("A shared mesh artifact resolved outside its project folder.".into());
+    }
+    Ok(Some(path))
 }
 
 pub(super) fn checked_existing_path(

@@ -1,7 +1,6 @@
 //! Versioned projection of the model data consumed by a Study.
 
-#[path = "../../mesh-rust/src/sha256.rs"]
-mod sha256;
+use crate::mesh::sha256;
 #[path = "solver_options.rs"]
 mod solver_options;
 
@@ -60,17 +59,7 @@ fn inputs(
         }
         let key = property.get("key")?.as_str()?;
         expressions.insert(key);
-        let default = property.get("default").or_else(|| {
-            // Acoustic loss has a model-schema default even when the native
-            // capability allows the optional property to stay absent.
-            if key != "lossFactor" || !profile.starts_with("acoustic-") {
-                return None;
-            }
-            crate::model_schema::root()
-                .ok()?
-                .pointer("/$defs/AcousticMaterial/properties/lossFactor/default")
-        });
-        if let Some(default) = default {
+        if let Some(default) = property.get("default") {
             for material in &mut materials {
                 material
                     .as_object_mut()?
@@ -324,11 +313,13 @@ fn study_inputs(
     )
     .ok()?;
     let id = study.get("id")?.as_str()?;
-    let csv_default = if profile == "thermal-2d" {
-        "thermal-summary.csv".to_string()
-    } else {
-        format!("{id}.csv")
-    };
+    let scenario = crate::model_schema::scenario_metadata_for_profile(profile).ok()?;
+    let fingerprint_declaration = scenario.get("studyFingerprint");
+    let csv_default = fingerprint_declaration
+        .and_then(|declaration| declaration.get("defaultCsvFilename"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("{id}.csv"));
     let csv = study
         .pointer("/output/csvFilename")
         .and_then(Value::as_str)
@@ -345,11 +336,15 @@ fn study_inputs(
     result["discretization"] = json!({"elementOrder":order,"fieldFormulation":formulation});
     result["solver"] = Value::Object(solver);
     result["output"] = json!({"csvFilename":csv,"fieldFiles":field_files});
-    if profile == "thermal-2d" {
-        result["meanTemperature"] = study
-            .get("meanTemperature")
-            .cloned()
-            .unwrap_or_else(|| json!({"expression":"0","unit":"K"}));
+    if let Some(properties) = fingerprint_declaration
+        .and_then(|declaration| declaration.get("studyProperties"))
+        .and_then(Value::as_object)
+    {
+        for (key, declaration) in properties {
+            if let Some(value) = study.get(key).or_else(|| declaration.get("default")) {
+                result[key] = value.clone();
+            }
+        }
     }
     if let Some(sweep) = study.get("parameterSweep").or_else(|| {
         study

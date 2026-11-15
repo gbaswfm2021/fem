@@ -1,6 +1,11 @@
 const owners = new WeakMap();
 let nextOwner = 0;
-const conditionTypes = new Set(['dirichlet', 'neumann', 'impedance', 'periodicCondition']);
+function supportedConditionTypes(profile) {
+  return new Set([
+    ...(Array.isArray(profile?.supportedBoundaryTypes) ? profile.supportedBoundaryTypes : []),
+    ...(Array.isArray(profile?.supportedFeatureTypes) ? profile.supportedFeatureTypes : []),
+  ]);
+}
 
 function ownerId(model) {
   if (!model || typeof model !== 'object') return null;
@@ -8,25 +13,31 @@ function ownerId(model) {
   return owners.get(model);
 }
 
-export function guardPhysicsCondition(model, target) {
+export function guardPhysicsCondition(model, target, profile) {
   const path = target?.itemPath;
   if (!Array.isArray(path) || path.length !== 3 || path[0] !== 'model' || path[1] !== 'physics' || typeof path[2] !== 'string') return null;
   const physics = model?.model?.physics;
   const item = physics && Object.hasOwn(physics, path[2]) ? physics[path[2]] : null;
-  if (!item || typeof item !== 'object' || !conditionTypes.has(item.type) || typeof item.id !== 'string') return null;
-  return { owner: ownerId(model), id: item.id };
+  if (!item || typeof item !== 'object' || !supportedConditionTypes(profile).has(item.type) || typeof item.id !== 'string') return null;
+  return {
+    owner: ownerId(model), id: item.id, profileId: model?.scenario?.profileId, type: item.type,
+    handling: profile?.featureHandlingByType?.[item.type],
+  };
 }
 
-export function conditionToggleAvailability(model, target) {
-  const actual = guardPhysicsCondition(model, target);
-  if (!actual || !target?.femConditionGuard || actual.owner !== target.femConditionGuard.owner || actual.id !== target.femConditionGuard.id) {
+export function conditionToggleAvailability(model, target, profile) {
+  const actual = guardPhysicsCondition(model, target, profile);
+  if (!actual || !target?.femConditionGuard || actual.owner !== target.femConditionGuard.owner
+    || actual.id !== target.femConditionGuard.id || actual.type !== target.femConditionGuard.type
+    || actual.profileId !== target.femConditionGuard.profileId
+    || actual.handling !== target.femConditionGuard.handling) {
     return { disabled: true, reason: 'The Physics condition or its document changed; reopen its menu.' };
   }
   return { disabled: false, reason: '' };
 }
 
-export function togglePhysicsCondition(model, target) {
-  const availability = conditionToggleAvailability(model, target);
+export function togglePhysicsCondition(model, target, profile) {
+  const availability = conditionToggleAvailability(model, target, profile);
   if (availability.disabled) throw new Error(availability.reason);
   const path = target.itemPath, item = model.model.physics[path[2]], document = structuredClone(model);
   document.model.physics[path[2]].enabled = item.enabled === false;
@@ -47,18 +58,20 @@ export function preparePhysicsCondition({ model, target, spec, profile, makeId }
   if (!guard || guard.owner !== target?.femPhysicsGuard?.owner || guard.id !== target?.femPhysicsGuard?.id)
     return { reason: 'The Physics interface or its document changed; reopen its menu.' };
   const type = spec?.conditionType, name = spec?.itemName;
-  if (!conditionTypes.has(type) || typeof name !== 'string' || !name || typeof makeId !== 'function')
+  if (typeof type !== 'string' || !type || typeof name !== 'string' || !name || typeof makeId !== 'function')
     return { reason: 'The condition action is not fully declared.' };
-  const allowed = type === 'periodicCondition' ? profile?.supportedFeatureTypes : profile?.supportedBoundaryTypes;
+  if (!supportedConditionTypes(profile).has(type)) return { reason: `${name} is not supported by the active profile.` };
+  const allowed = profile?.supportedFeatureTypes?.includes(type) ? profile?.supportedFeatureTypes : profile?.supportedBoundaryTypes;
   if (!Array.isArray(allowed) || !allowed.includes(type)) return { reason: `${name} is not supported by the active profile.` };
   const physics = model.model.physics;
   const selections = Array.isArray(model.model.selections) ? model.model.selections : [];
   const pairs = Array.isArray(model.model.mesh?.periodicPairs) ? model.model.mesh.periodicPairs : [];
-  const conditions = Object.values(physics).filter(item => item && typeof item === 'object' && conditionTypes.has(item.type) && item.enabled !== false);
+  const conditions = Object.values(physics).filter(item => item && typeof item === 'object'
+    && supportedConditionTypes(profile).has(item.type) && item.enabled !== false);
   let condition;
-  if (type === 'periodicCondition') {
-    const used = new Set(conditions.filter(item => item.type === 'periodicCondition').map(item => item.periodicPairId));
-    const assigned = new Set(conditions.filter(item => item.type !== 'periodicCondition').map(item => item.selectionId));
+  if (profile?.featureHandlingByType?.[type] === 'periodicPair') {
+    const used = new Set(conditions.filter(item => profile?.featureHandlingByType?.[item.type] === 'periodicPair').map(item => item.periodicPairId));
+    const assigned = new Set(conditions.filter(item => profile?.featureHandlingByType?.[item.type] !== 'periodicPair').map(item => item.selectionId));
     const enabled = new Set(Array.isArray(model.model.mesh?.periodicPairIds) ? model.model.mesh.periodicPairIds : []);
     const boundaries = new Set(selections.filter(item => item?.entity === 'boundary').map(item => item.id));
     const pair = pairs.find(item => enabled.has(item?.id) && !used.has(item.id)
@@ -68,8 +81,8 @@ export function preparePhysicsCondition({ model, target, spec, profile, makeId }
     if (!pair) return { reason: 'Enable an unused periodic pair with available boundary selections in Mesh before adding this condition.' };
     condition = { type, periodicPairId: pair.id };
   } else {
-    const used = new Set(conditions.filter(item => item.type !== 'periodicCondition').map(item => item.selectionId));
-    const activePairs = new Set(conditions.filter(item => item.type === 'periodicCondition').map(item => item.periodicPairId));
+    const used = new Set(conditions.filter(item => profile?.featureHandlingByType?.[item.type] !== 'periodicPair').map(item => item.selectionId));
+    const activePairs = new Set(conditions.filter(item => profile?.featureHandlingByType?.[item.type] === 'periodicPair').map(item => item.periodicPairId));
     for (const pair of pairs) if (pair && activePairs.has(pair.id)) { used.add(pair.lowerSelectionId); used.add(pair.upperSelectionId); }
     const selection = selections.find(item => item?.entity === 'boundary' && typeof item.id === 'string'
       && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(item.id) && !used.has(item.id));
@@ -97,11 +110,11 @@ export function addPhysicsCondition(options) {
     message: `Added ${condition.name}. Save to keep the change.` };
 }
 
-export function duplicatePhysicsCondition(model, target, makeId) {
-  const availability = conditionToggleAvailability(model, target);
+export function duplicatePhysicsCondition(model, target, makeId, profile) {
+  const availability = conditionToggleAvailability(model, target, profile);
   if (availability.disabled) throw new Error(availability.reason);
   const original = model.model.physics[target.itemPath[2]];
-  if (original.type === 'periodicCondition') throw new Error('Periodic conditions cannot be duplicated.');
+  if (target?.femConditionGuard?.handling === 'periodicPair') throw new Error('Periodic conditions cannot be duplicated.');
   if (typeof makeId !== 'function') throw new Error('A unique ID generator is required.');
   const physics = model.model.physics, names = new Set(Object.values(physics)
     .filter(item => item && typeof item === 'object').map(item => item.name));
@@ -118,8 +131,8 @@ export function duplicatePhysicsCondition(model, target, makeId) {
     message: `Duplicated ${baseName}. Save to keep the change.` };
 }
 
-export function prepareConditionDeletion({ model, target, validate, maximumErrors }) {
-  const guard = conditionToggleAvailability(model, target);
+export function prepareConditionDeletion({ model, target, profile, validate, maximumErrors }) {
+  const guard = conditionToggleAvailability(model, target, profile);
   if (guard.disabled) return { reason: guard.reason };
   if (typeof validate !== 'function' || !Number.isInteger(maximumErrors) || maximumErrors < 1)
     return { reason: 'The model reference checks are unavailable; the condition cannot be deleted.' };

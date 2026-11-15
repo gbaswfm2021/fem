@@ -1,7 +1,7 @@
 // Development runtime package. Full visible, native and numerical acceptance
 // remains tracked separately from catalog registration and declaration checks.
 import { createSchemaProjectPackage } from '../../platform/ui/widgets/model-editor/widget.js';
-import { bindRuntimePolicy, schemaAtPath, validateModelRules } from '../../platform/model-rust/js/api.js';
+import { bindRuntimePolicy, schemaAtPath, validateModelRules, validateModelWithRules } from '../../platform/model-rust/js/api.js';
 import { loadWorkspaceJson, modelWithArrayItemDraft } from '../../platform/js/services.js';
 import { createSchemaTreeActionPlans, resolveTreeDescriptor } from '../../platform/ui/widgets/tree/widget.js';
 import { activeModelSchema,activateModelSchema,loadModelSchema } from './schema-documents.js';
@@ -13,7 +13,7 @@ import { resultFields } from './js/result-fields.js';
 import { createApplicationResultAdapters } from './js/result-adapters.js';
 import { createResultPresentation } from './ui/result-presentation.js';
 import { createApplicationActions } from './js/operation-actions.js';
-import { restorePreview } from './js/preview-restoration.js';
+import { restorePreview, restorePreviewAfterStudy } from './js/preview-restoration.js';
 import { fieldChoiceRecords } from './js/field-choices.js';
 import { checkedFieldEditErrors,updateCheckedFieldView } from './js/field-view-state.js';
 import { createStudyHistory } from './js/study-history.js';
@@ -85,20 +85,26 @@ function starterProfilesFromSchema(schema, entries) {
     const runtime = document?.['x-fem-capabilities']?.study?.preparationByProfile?.[id];
     const solverSettings = document?.['x-fem-capabilities']?.study?.solverSettingsByProfile?.[id];
     const formulation = solverSettings?.defaults?.fieldFormulation || profile.formulations?.[0];
+    const starterDefaults = document?.['x-fem-scenario']?.starterDefaults;
+    const studyType = document?.['x-fem-scenario']?.studyType;
+    const supportsStationary = document?.['x-fem-scenario']?.supportsStationary;
     const elementFamily = familyByDimension?.[String(profile.dimension)];
-    if (!Number.isInteger(profile.dimension) || !declaredPhysics || !formulation || !elementFamily) {
-      throw new Error(`FEM profile ${id} is missing its dimension, Physics, formulation, or mesh-family declaration.`);
+    if (!Number.isInteger(profile.dimension) || !declaredPhysics || !formulation || !elementFamily
+      || !starterDefaults || typeof starterDefaults.physics !== 'object' || Array.isArray(starterDefaults.physics)
+      || !['stationary', 'frequencyDomain'].includes(studyType)
+      || typeof supportsStationary !== 'boolean'
+      || (studyType === 'stationary' && !supportsStationary)) {
+      throw new Error(`FEM profile ${id} is missing its dimension, Physics, formulation, mesh-family, or starter-default declaration.`);
     }
-    const wave = runtime?.kind === 'frequencyPlan' || runtime?.kind === 'configuredFrequencyRequest';
-    const stationary = runtime?.kind === 'scenario';
-    if (!wave && !stationary) throw new Error(`FEM profile ${id} has no supported Study preparation declaration.`);
+    if (!runtime?.kind) throw new Error(`FEM profile ${id} has no Study preparation declaration.`);
     return [id, {
       dimension: profile.dimension,
       physics: declaredPhysics,
       formulation,
       elementFamily,
-      wave,
-      studyType: stationary ? 'stationary' : null,
+      starterDefaults,
+      studyType,
+      supportsStationary,
     }];
   }));
 }
@@ -211,7 +217,7 @@ export async function createApplicationPackage(options = {}) {
       return orderSettingsProperties(base.modelEditorSchema.resolveModelEditorSchema(...args));
     },
     validateFullMetaModelWithRules(value){
-      const errors=base.modelEditorSchema.validateFullMetaModelWithRules(value);
+      const errors=validateModelWithRules(value,{},schema);
       return errors.length?errors:checkedFieldEditErrors(value,checkedFieldState);
     },
     editorOptionsForModel(value) { return editorOptionsFor(profileEntries, value); },
@@ -221,7 +227,7 @@ export async function createApplicationPackage(options = {}) {
       if (Array.isArray(path) && path.length === 2 && path[0] === 'model' && path[1] === 'physics') {
         return schemaAtPath(value, path, schemaOptions, base.modelSchema);
       }
-      return projectSettingsSchema({model:value,path,schema:base.modelSchema,
+      return projectSettingsSchema({model:value,path,schema,
         scenario:profileEntryForModel(profileEntries,value)?.document?.['x-fem-scenario'],
         getSchema:target=>base.modelEditorSchema.modelEditorSchemaForPath(value,target,schemaOptions)});
     },
@@ -262,7 +268,10 @@ export async function createApplicationPackage(options = {}) {
     },
     settingsFieldChange(context){return changeStudySettings({...context,schema});},
     engineChoiceRecords(context){return studySettingsChoiceRecords({...context,schema})??fieldChoiceRecords({...context,modelSchema:schema,state:checkedFieldState});},
-    referenceOptions(context){return femReferenceOptions(context,base.referenceOptions);},
+    referenceOptions(context){
+      const physicsMetadata = profileEntryForModel(profileEntries, context?.model)?.document?.['x-fem-physics'];
+      return femReferenceOptions({...context, physicsMetadata},base.referenceOptions);
+    },
     modelEditorSchema,
     editorDomain: createEditorDomain({ schema, validate: value => modelEditorSchema.validateFullMetaModelWithRules(value) }),
     uiProfileSchema,
@@ -287,7 +296,7 @@ export async function createApplicationPackage(options = {}) {
     editorFactories: { ...base.editorFactories, uniqueDefinitionSymbol: definitionSymbol },
     // Complete acceptance matrices remain separate from these runtime bindings.
     actionBindings,
-    actions(services,bindings){actionServices=services;const actions=createApplicationActions({services,bindings});for(const binding of bindings)if(['fem.studyRun','fem.clearStudyResults'].includes(binding.execution.operation)){const run=actions[binding.id];actions[binding.id]=async(...args)=>{try{return await run(...args);}finally{await history.refresh();}};}return actions;},
+    actions(services,bindings){actionServices=services;const actions=createApplicationActions({services,bindings});for(const binding of bindings)if(['fem.studyRun','fem.clearStudyResults'].includes(binding.execution.operation)){const run=actions[binding.id],refreshMesh=binding.execution.operation==='fem.studyRun';actions[binding.id]=async(...args)=>{let completed=false;try{const result=await run(...args);completed=true;return result;}finally{if(refreshMesh)try{await restorePreviewAfterStudy(actionServices,schema);}catch(error){if(completed)actionServices.ui.setStatus(`Study completed, but the checked mesh preview could not be refreshed: ${error.message}`,'error');}await history.refresh();}};}return actions;},
     actionAvailability({loaded,busy,saving,switching,serverReady,repairMode,jsonDraftInvalid,modelValid,pendingSettingsValid,hasModelFile}){
       const reason=!serverReady?'Confirm server compatibility before running FEM actions.':busy||saving||switching?'Finish the active operation first.':!loaded||!hasModelFile?'Open a saved FEM model.':repairMode||jsonDraftInvalid||!pendingSettingsValid?'Repair the active document draft.':!modelValid?'Validate and repair the FEM model.':'';
       return {actions:Object.fromEntries(actionBindings.filter(binding=>binding.id!=='document.validate').map(binding=>[binding.id,{disabled:Boolean(reason),title:reason||binding.label}]))};
@@ -310,12 +319,11 @@ export async function createApplicationPackage(options = {}) {
       const conditionSpecs = new Map(physicsEntries.filter(entry => entry.conditionType && entry.itemName).map(entry => [entry.action, entry]));
       const physicsProfile = profileEntryForModel(profileEntries, context.model)?.document?.['x-fem-physics'];
       const conditionDeletion = target => ({ model: context.model, target,
-        validate: value => validateModelRules(value, {}, schema), maximumErrors: schema['x-fullmeta-rules']?.maximumErrors });
-      const profileId = context.model?.scenario?.profileId;
-      const preparation = profileEntryForModel(profileEntries, context.model)?.document?.['x-fem-capabilities']?.study?.preparationByProfile?.[profileId]
-        || schema['x-fem-capabilities']?.study?.preparationByProfile?.[profileId];
-      const femStudyKind = preparation?.kind === 'scenario' ? 'stationary'
-        : ['frequencyPlan', 'configuredFrequencyRequest'].includes(preparation?.kind) ? 'wave' : null;
+        profile: physicsProfile, validate: value => validateModelRules(value, {}, schema), maximumErrors: schema['x-fullmeta-rules']?.maximumErrors });
+      const scenario = profileEntryForModel(profileEntries, context.model)?.document?.['x-fem-scenario'];
+      const studyType = scenario?.studyType;
+      const femStudyKind = scenario?.supportsStationary ? 'stationary'
+        : studyType === 'frequencyDomain' ? 'wave' : null;
       const plan = createSchemaTreeActionPlans({ ...context,
         capabilities: { ...context.capabilities, femStudyKind }, descriptor: schema['x-fullmeta-ui-tree'],
         itemFactories: { ...base.editorFactories,
@@ -350,7 +358,7 @@ export async function createApplicationPackage(options = {}) {
         },
         menuTarget(...args) {
           const target = plan.menuTarget(...args);
-          const guard = target && guardPhysicsCondition(context.model, target);
+          const guard = target && guardPhysicsCondition(context.model, target, physicsProfile);
           const rootGuard = target && guardPhysicsRoot(context.model, target);
           const arrayGuard = target && guardArrayItem(context.model, target);
           return guard ? { ...target, femConditionGuard: guard }
@@ -362,16 +370,16 @@ export async function createApplicationPackage(options = {}) {
             const prepared = prepareArrayDeletion(context.model, target);
             return { disabled: !prepared.document, reason: prepared.reason || '' };
           }
-          if (action === 'fem.toggle-condition') return conditionToggleAvailability(context.model, target);
+          if (action === 'fem.toggle-condition') return conditionToggleAvailability(context.model, target, physicsProfile);
           if (action === 'fem.duplicate-array-item') return duplicateArrayAvailability(context.model, target, context.cloneItem);
           if (action === 'fem.delete-condition') {
             const prepared = prepareConditionDeletion(conditionDeletion(target));
             return { disabled: !prepared.document, reason: prepared.reason || '' };
           }
           if (action === 'fem.duplicate-condition') {
-            const available = conditionToggleAvailability(context.model, target);
+            const available = conditionToggleAvailability(context.model, target, physicsProfile);
             if (available.disabled) return available;
-            if (context.model.model.physics[target.itemPath[2]].type === 'periodicCondition')
+            if (physicsProfile?.featureHandlingByType?.[context.model.model.physics[target.itemPath[2]].type] === 'periodicPair')
               return { disabled: true, reason: 'Periodic conditions cannot be duplicated.' };
             if (typeof context.makeId !== 'function') return { disabled: true, reason: 'A unique ID generator is required.' };
             return available;
@@ -413,11 +421,11 @@ export async function createApplicationPackage(options = {}) {
         },
         executeAction(action, target, input) {
           if (action === 'fem.delete-array-item') return deleteArrayItem(context.model, target);
-          if (action === 'fem.toggle-condition') return togglePhysicsCondition(context.model, target);
+          if (action === 'fem.toggle-condition') return togglePhysicsCondition(context.model, target, physicsProfile);
           if (action === 'fem.duplicate-array-item') return duplicateArrayItem({ model: context.model, target,
             cloneItem: context.cloneItem, insertItem: modelWithArrayItemDraft });
           if (action === 'fem.delete-condition') return deletePhysicsCondition(conditionDeletion(target));
-          if (action === 'fem.duplicate-condition') return duplicatePhysicsCondition(context.model, target, context.makeId);
+          if (action === 'fem.duplicate-condition') return duplicatePhysicsCondition(context.model, target, context.makeId, physicsProfile);
           if (conditionSpecs.has(action)) return addPhysicsCondition({ model: context.model, target,
             spec: conditionSpecs.get(action), profile: physicsProfile, makeId: context.makeId });
           return plan.executeAction?.(action, target, input);

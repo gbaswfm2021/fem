@@ -114,11 +114,11 @@ export function projectModel(model) {
       if (!condition || typeof condition !== 'object' || Array.isArray(condition) || typeof condition.type !== 'string') continue;
       const sourcePath = ['model', 'physics', key];
       const source = { value: condition, path: sourcePath, pointer: pointer(sourcePath) };
-      if (condition.type === 'periodicCondition') {
+      if (typeof condition.periodicPairId === 'string') {
         relate({ kind: 'periodic-condition-pair', source, field: 'periodicPairId',
           targetCollection: 'periodicPairs', reference: condition.periodicPairId,
           isEligible: () => enabledPeriodicPairIds.has(condition.periodicPairId) });
-      } else if (['dirichlet', 'neumann', 'impedance'].includes(condition.type)) {
+      } else if (typeof condition.selectionId === 'string') {
         relate({ kind: 'physics-condition-selection', source, field: 'selectionId',
           targetCollection: 'selections', reference: condition.selectionId,
           isEligible: selection => selection.entity === 'boundary' });

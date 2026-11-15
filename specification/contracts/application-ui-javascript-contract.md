@@ -90,7 +90,7 @@ Use the single supplied React runtime and `mountReactComponent(container, Compon
 
 For application panels, return that mount handle (or a disposer that releases all panel-owned roots, subscriptions and resources) from `mountEditorPanels`. The supported optional return is synchronous; a Promise or an object without `dispose()` is rejected. Cleanup runs once before old `[data-application-panel]` nodes are removed and before replacement mounting. A cleanup failure is reported and prevents replacement mounting; stale panel nodes are still removed. The shared host owns this package-level lifecycle. A renderer that replaces its own field/panel children must also dispose the resources it owns before replacing them.
 
-Frontend build and source maps are required; same-origin revision watching and fixture replay provide the optional development surface exercised by source-change acceptance. [Frontend provider contract](../../../../platform/docs/frontend-provider-contract.md) defines their versioned interfaces, command discovery and reload behavior. A compiled view or structured checkpoint is not a substitute for browser input, layout or rendered graphics evidence.
+Frontend build and source maps are required; same-origin revision watching and fixture replay are optional shared development capabilities. [Frontend provider contract](../../../../platform/docs/frontend-provider-contract.md) defines their versioned interfaces, command discovery and reload behavior. Reuse applicable shared acceptance evidence for their generic behavior and verify any FEM-owned reload hooks separately. A compiled view or structured checkpoint is not a substitute for FEM-specific browser input, layout or rendered graphics evidence.
 
 ## Minimum `ui/` module interfaces
 

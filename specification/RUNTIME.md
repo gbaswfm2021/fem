@@ -1,8 +1,77 @@
 # FEM runtime and results
 
-This document specifies the operations that connect the target application Model Editor to the copied native FEM and mesh programs. It describes behavior and evidence; it does not assume that the schema designer itself implements these operations.
+This document specifies the operations that connect the target application Model Editor to the single native FEM executable, which contains the geometry and mesh module. It describes behavior and evidence; it does not assume that the schema designer itself implements these operations.
 
 For the FEM application package and a route-by-route split between generic platform support and application-owned integration, see the [runtime integration contract](contracts/runtime-integration-boundary.md).
+
+## Runtime scenario discovery
+
+The solver-owned `fem-rust/src/scenarios/registry.json` uses format
+`fullmeta-fem-scenario-registry/1`. Each entry has a safe profile `id`, its
+matching sibling filename (the profile ID without hyphens followed by `.json`), and an optional single `default`
+flag. Each package uses contract version `fullmeta-fem-scenario/1` and declares
+`id`, nonblank `version`, `schemaDocument`, `capabilities`, and
+`schemaContributions`.
+
+`schemaDocument` is the profile's schema resource. Its
+`x-fem-scenario.profile` declaration supplies the profile ID, dimension,
+physics family, formulations and display name. `x-fem-scenario.materials`
+declares PDE coefficient keys, JSON Schema property definitions and required
+flags. `x-fem-physics` declares which fixed Physics boundary and feature types
+the scenario supports, condition actions, defaults and feature handling. The
+shared condition schemas themselves stay in the generic FEM base schema.
+`starterDefaults` supplies the initial Physics and Study values. The package's
+`capabilities` contains profile-indexed mesh, Physics and Study capabilities,
+shared field formulations and solver option rules. `schemaContributions`
+supplies scenario-owned schema branches, validation declarations, UI profile
+data and registered native programs. A solver package may set
+`schemaDocument.x-fem-scenario.solverModule` to the lowercase module name for
+its native runner.
+
+The editor loads the registry and all listed packages through
+`schema-documents.js`, composes their declarations into an in-memory effective
+schema, then configures the editor against that graph. The native dispatcher
+and mesher load the same sibling files relative to the selected FEM schema and
+compose them with the shared loader in `fem-rust/src/scenario_runtime.rs`. Solver program declarations
+must use a relative executable below `.runtime/` and a nonempty
+`allowedEntries` list; a package cannot select an arbitrary command. Scenario
+installation is load-time only: reload the editor and restart native
+processes after changing the registry or a contract.
+
+Shared FEM behavior such as keyed Physics-condition handling and periodic-pair
+reference checks remains in the neutral base schema. Installed packages provide
+the supported-condition flags and concrete per-profile schema branches, and
+can contribute scenario-specific validation rules.
+
+For a package that declares `solverModule`, the matching Rust module is
+`fem-rust/src/scenarios/<module>.rs` and exports
+`pub(crate) fn run(arguments: &[String]) -> Result<i32, String>`. The JSON and
+Rust filenames share the declared module name, for example `thermal2d.json`
+and `thermal2d.rs` for `thermal-2d`. The generated
+scenario module table in `fem-rust/build.rs` links registered modules into the
+existing `fullmeta-fem` dispatcher. The package's solver program registration
+points to that dispatcher; it does not add a per-scenario Cargo target or a
+dispatcher branch. The module receives the original scenario arguments and
+standard streams, while the common dispatcher retains model preflight,
+dispatch validation, run lifecycle, child-event validation, and cancellation
+integration. The scenario module supplies its numerical implementation and
+scenario-specific solver checks. The contributor interface and smoke-tested
+extension steps are in
+[`fem-rust/src/scenarios/README.md`](../fem-rust/src/scenarios/README.md).
+
+Scenario additions must not edit the authored `fem.schema.json`. A package
+registry and its scenario JSON remain the source of profile identity,
+dimension, fields, material coefficients, boundary support and scenario
+capabilities. The generic schema composer exposes them through the effective
+in-memory schema graph.
+
+Invalid registry entries or packages currently fail graph loading for that
+consumer. Optional-package isolation and cross-process effective-schema hashes
+are not implemented. JavaScript and Rust independently compose the same
+source files, so byte-identical graphs and persisted contract identity have
+not yet been established. Existing acceptance evidence does not prove this
+new discovery boundary until the editor, mesher and solver are exercised on
+one identified candidate.
 
 ## Selected native operation interfaces
 
@@ -10,10 +79,10 @@ Use the identified `fullmeta-native-operations/1` authority through the [shared 
 
 | Operation | Native entry and transport | FEM request/result obligations |
 | --- | --- | --- |
-| `mesh.check`, version 1 | `fullmeta-mesh --operation-check`, JSON stdin/stdout | Supply `{model, componentId?}`. Preserve model/component identity. Check the existing geometry compiler's artifact version 14, geometry hash and generated geometry byte count; this operation writes no artifacts. |
-| `mesh.compile`, version 1 | `fullmeta-mesh --operation-compile`, JSON stdin/stdout | Supply `{model, componentId?, outputDirectory?}`. Keep the destination inside the checked working/output boundary. Verify geometry/map paths and names, artifact version 14 and geometry hash. Equivalent repeated compilation reuses checked equivalent files; escaping destinations fail before compilation. |
+| `mesh.check`, version 1 | `fullmeta-fem --operation-check`, JSON stdin/stdout | Supply `{model, componentId?}`. Preserve model/component identity. Check the existing geometry compiler's artifact version 14, geometry hash and generated geometry byte count; this operation writes no artifacts. |
+| `mesh.compile`, version 1 | `fullmeta-fem --operation-compile`, JSON stdin/stdout | Supply `{model, componentId?, outputDirectory?}`. Keep the destination inside the checked working/output boundary. Verify geometry/map paths and names, artifact version 14 and geometry hash. Equivalent repeated compilation reuses checked equivalent files; escaping destinations fail before compilation. |
 | `fem.prepareStudy`, version 1 | `fullmeta-fem --prepare-study`, JSON stdin/stdout | Supply the original model and selected `studyId`, with supported optional inputs such as `csvFilename`. Accept the native `fullmeta-study-plan/1` frequency plan or the supported envelope containing a `fem-solver-request/1` request. Preserve a valid plan's existing shape and selected Study semantics. |
-| `fem.studyRun`, version 1 | `fullmeta-fem --server`, NDJSON stdin/stdout | Supply the original opaque model. Carry selected Study, canonical document, schema, operation/run identity and storage through the checked execution context. Resolve the profile's actual scenario executable and require checked progress followed by one valid terminal outcome. |
+| `fem.studyRun`, version 1 | `fullmeta-fem --server`, NDJSON stdin/stdout | Supply the original opaque model. Carry selected Study, canonical document, schema, operation/run identity and storage through the checked execution context. Resolve the profile's in-process scenario module and require checked progress followed by one valid terminal outcome. |
 
 Runtime declarations use compact `operationContract` selection and the normal `nativeOperation` workflow where applicable. Resolve the executable from the application's declared registry and preserve the required legacy API18 routes. Native-operation identity and success in one profile do not replace the complete profile, validation-stage, numerical and route cases in [acceptance](ACCEPTANCE.md).
 
@@ -24,7 +93,7 @@ For `fem.studyRun`, the selected descriptor alone permits an empty `logs/solver.
 | Operation | Browser/UI responsibility | Kernel responsibility | FEM/mesh program responsibility |
 | --- | --- | --- | --- |
 | Validate | Submit current model snapshot and display diagnostics. | Resolve the schema-registered program and transport input. | Common native preflight, scenario registration checks, semantic diagnostics. |
-| Build mesh | Request geometry compile/mesh and display progress and artifact. | Allowlisted command launch, checked run directory and declared output verification. | Geometry validation/compilation, Gmsh invocation, mesh export, mesh report/cache. |
+| Build mesh | Request geometry compile/mesh and display progress and artifact. | Allowlisted command launch, checked shared mesh directory and declared output verification. | `fullmeta-fem` runs its mesh module to compile geometry, invoke Gmsh, export the mesh, and write the mesh report/cache. |
 | Restore preview | Ask for a matching mesh-only/completed run. | Launch registered preview entry and serve checked artifact. | Geometry-hash lookup and artifact integrity checks. |
 | Delete mesh | Request deletion of only matching mesh-only artifacts for the project. | Schema-selected checked storage operation. | Maintain run records/debug data according to the declared deletion selector. |
 | Run Study | Submit current model/Study; render progress, completion/failure, and output references. | Dispatch registered NDJSON API, stream events, handle cancellation, verify declared output files. | Validate, prepare Study, prepare/reuse mesh, dispatch solver, write run artifacts and diagnostics. |
@@ -59,7 +128,7 @@ The active Kernel is application-neutral. A route declaration must use a support
 
 ## Mesh function
 
-The copied `fullmeta-mesh` command interface documents:
+The mesh module is exposed by the single `fullmeta-fem` executable:
 
 | Entry | Input | Output/behavior |
 | --- | --- | --- |
@@ -67,17 +136,17 @@ The copied `fullmeta-mesh` command interface documents:
 | `compile` | Model JSON, optional component/output directory | Gmsh `.geo` and model-map inputs for the selected component. |
 | `preview` | Model input on stdin, component and runs directory | Locate/verify a recent matching mesh-only or completed run; does not invoke Gmsh. |
 | `mesh` | Compiled `.geo` and Gmsh executable | Invoke Gmsh and export a FullMeta mesh. |
-| `build` | Model JSON, optional component/output directory | Combined check/compile/mesh pipeline for CLI use. |
+| `--mesh-only` | Model JSON, optional component | Combined check/compile/mesh pipeline. The editor runs this entry in the stable `fem_runs/mesh` directory. |
 
 ### UI build expectations
 
-1. Run the current model through the registered `mesh` executable and `build`/supported command sequence.
-2. Keep each generated run inside the current project’s declared run directory.
+1. Run the current model through the registered `mesh` alias, which resolves to `fullmeta-fem --mesh-only`.
+2. Store the current mesh under the project's shared `fem_runs/mesh` directory. Repeating **Build mesh** overwrites that stable mesh entry and keeps geometry-hash caches under `fem_runs/mesh/cases/`.
 3. Display which geometry/component was meshed and the resulting element family/count.
-4. Verify `.geo`, model-map, Gmsh input/output, FullMeta mesh, log, and report artifacts exist where promised.
+4. Verify `.geo`, model-map, Gmsh input/output, FullMeta mesh, log, report, cache, and mesh ownership record exist under `fem_runs/mesh`.
 5. Show exact errors for missing geometry, unsupported feature, Gmsh failure, export failure, or output verification failure.
 6. A successful explicit **Build mesh** enables Mesh for the open model. Keep the Geometry and Edges checkbox values and the selected item.
-7. Deleting a mesh preview must not silently erase Study runs; clearing generated results must name the exact project directory and scope.
+7. Clearing Study results removes per-Study run folders and retains the shared mesh and its geometry-hash caches.
 
 ### Mesh checks
 
@@ -94,9 +163,9 @@ The FEM executable contract includes saved-project CLI operation, `--validate`, 
 
 ### Request and lifecycle
 
-1. Commit applicable editor drafts and validate the model. Save valid unsaved changes through the shared document service before starting the Study. Use the saved snapshot for the request and run fingerprint. Stop before dispatch if the draft cannot be applied, validation or saving fails, or the document changes during the save. Resolve the selected Study and its linked Physics again in the saved snapshot. Bind the project folder, document, active schema, operation ID, run ID, and schema-declared run storage to one operation context. Establish the run record and associate the active worker with this context before starting preparation.
-2. Resolve the profile, backend, preparation handler, and numerical executable. Validate their registrations before launching numerical work. Report the profile, stage, and missing or unsupported declaration promptly if resolution fails.
-3. Prepare the selected Study once through its declared preparation handler. Reuse a verified matching mesh or build the required mesh in the operation's project run storage. Dispatch the prepared work to the registered numerical handler. [Profile dispatch contract](contracts/solver-capability-contract.md#preparation-and-solver-dispatch)
+1. Commit applicable editor drafts and validate the model. Save valid unsaved changes through the shared document service before starting the Study. Use the saved snapshot for the request and run fingerprint. Stop before dispatch if the draft cannot be applied, validation or saving fails, or the document changes during the save. Resolve the selected Study and its linked Physics again in the saved snapshot. Bind the project folder, document, active schema, operation ID, deterministic Study run ID, and schema-declared run storage to one operation context. The Study run ID is stable for the model ID and Study ID; rerunning that Study replaces its previous run folder. Establish the run record and associate the active worker with this context before starting preparation.
+2. Resolve the profile, backend, preparation handler, and in-process scenario module. Validate their registrations before launching numerical work. Report the profile, stage, and missing or unsupported declaration promptly if resolution fails.
+3. Prepare the selected Study once through its declared preparation handler. Reuse a verified matching mesh in `fem_runs/mesh` or build the required mesh there. Geometry-changing sweep cases use hash-addressed subdirectories of the same shared mesh folder; non-geometry parameters reuse the existing mesh. Dispatch the prepared work to the registered numerical handler. [Profile dispatch contract](contracts/solver-capability-contract.md#preparation-and-solver-dispatch)
 4. Stream stages, case starts, case completions, and the run's terminal event as NDJSON. Identify all events with the same operation/run context. A case counts as completed after it succeeds. Count each case once.
 5. Verify the expected outputs for every requested case and check each output path in the registered run directory. The successful terminal event lists `run.json`, `request.json`, every required solver stdout/stderr and stage-timing log, each case's mesh log, and all required field and tabular outputs in `outputFiles`. Paths are project-relative, unique and within the same run. Required outputs are nonempty regular files, except the existing `logs/solver.stderr.log` may be empty only where the selected `fem.studyRun` descriptor explicitly permits it. The exception does not relax other output checks or require fabricated stderr text. Publish success and the checked output list only after the worker finishes and the run record reaches `completed`. Missing, forbidden-empty, duplicate, cross-run or out-of-scope required outputs fail verification.
 

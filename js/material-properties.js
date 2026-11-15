@@ -4,7 +4,11 @@ export function materialPropertyDescriptors(profile, materialSchema) {
   const properties = materialSchema?.properties;
   if (!Array.isArray(declarations) || !properties || typeof properties !== 'object') return [];
   return declarations.map(declaration => {
-    const fieldSchema = properties[declaration?.key];
+    // The shared editor modelSchema intentionally stays scenario-neutral. A
+    // scenario's JSON contract therefore supplies the fallback schema for its
+    // dynamic material fields when the editor projection has only generic
+    // material properties.
+    const fieldSchema = properties[declaration?.key] || declaration?.schema;
     if (typeof declaration?.key !== 'string' || !declaration.key || !fieldSchema
       || typeof fieldSchema !== 'object' || Array.isArray(fieldSchema)) {
       throw new Error(`Material property ${String(declaration?.key)} has no matching field schema.`);

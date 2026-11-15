@@ -6,6 +6,8 @@ use faer::complex::Complex as FaerComplex;
 use faer::dyn_stack::{MemBuffer, MemStack};
 use faer::prelude::Solve;
 use faer::sparse::linalg::solvers::{Lu, SymbolicLu};
+#[cfg(feature = "rivrs-backend")]
+use faer::sparse::{Argsort, Pair, SymbolicSparseColMat};
 use faer::sparse::{SparseColMat, Triplet};
 #[cfg(feature = "rivrs-backend")]
 use rivrs_sparse::symmetric::{AnalyzeOptions, FactorOptions, OrderingStrategy, SparseLDLT};
@@ -376,6 +378,8 @@ struct SymbolicCache {
 struct RivrsCache {
     pattern: Vec<Vec<usize>>,
     augmented: bool,
+    symbolic: SymbolicSparseColMat<usize>,
+    argsort: Argsort<usize>,
     solver: SparseLDLT,
 }
 
@@ -404,6 +408,51 @@ pub(crate) fn complex_symmetry_defect(matrix: &[BTreeMap<usize, C>]) -> f64 {
         }
     }
     defect
+}
+
+#[cfg(feature = "rivrs-backend")]
+fn real_block_entries(
+    matrix: &[BTreeMap<usize, C>],
+    augmented: bool,
+    include_indices: bool,
+) -> (Vec<Pair<usize, usize>>, Vec<f64>) {
+    let n = matrix.len();
+    let n2 = 2 * n;
+    let entry_count = matrix.iter().map(BTreeMap::len).sum::<usize>();
+    let capacity = entry_count.saturating_mul(if augmented { 8 } else { 4 });
+    let mut indices = if include_indices {
+        Vec::with_capacity(capacity)
+    } else {
+        Vec::new()
+    };
+    let mut values = Vec::with_capacity(capacity);
+    let mut push = |row, column, value| {
+        if include_indices {
+            indices.push(Pair::new(row, column));
+        }
+        values.push(value);
+    };
+    for (i, row) in matrix.iter().enumerate() {
+        for (&j, &a) in row {
+            if augmented {
+                for (row, column, value) in [
+                    (i, j, a.re),
+                    (i, n + j, -a.im),
+                    (n + i, j, a.im),
+                    (n + i, n + j, a.re),
+                ] {
+                    push(row, n2 + column, value);
+                    push(n2 + column, row, value);
+                }
+            } else {
+                push(i, j, a.re);
+                push(i, n + j, -a.im);
+                push(n + i, j, -a.im);
+                push(n + i, n + j, -a.re);
+            }
+        }
+    }
+    (indices, values)
 }
 
 pub(crate) fn stage_started(stage: &str) {
@@ -454,32 +503,6 @@ pub(crate) fn solve_linear_system(
             } else {
                 n2
             };
-            let mut triplets: Vec<Triplet<usize, usize, f64>> = Vec::with_capacity(
-                matrix.iter().map(BTreeMap::len).sum::<usize>() * if augmented { 8 } else { 4 },
-            );
-            for (i, row) in matrix.iter().enumerate() {
-                for (&j, &a) in row {
-                    if augmented {
-                        for (row, column, value) in [
-                            (i, j, a.re),
-                            (i, n + j, -a.im),
-                            (n + i, j, a.im),
-                            (n + i, n + j, a.re),
-                        ] {
-                            triplets.push(Triplet::new(row, n2 + column, value));
-                            triplets.push(Triplet::new(n2 + column, row, value));
-                        }
-                    } else {
-                        triplets.push(Triplet::new(i, j, a.re));
-                        triplets.push(Triplet::new(i, n + j, -a.im));
-                        triplets.push(Triplet::new(n + i, j, -a.im));
-                        triplets.push(Triplet::new(n + i, n + j, -a.re));
-                    }
-                }
-            }
-            let real_block =
-                SparseColMat::<usize, f64>::try_new_from_triplets(block_n, block_n, &triplets)
-                    .map_err(|e| format!("rivrs real-block CSC construction failed: {e:?}"))?;
             let pattern: Vec<Vec<usize>> = matrix
                 .iter()
                 .map(|row| row.keys().copied().collect())
@@ -489,7 +512,32 @@ pub(crate) fn solve_linear_system(
             let reused = cache.rivrs.as_ref().is_some_and(|existing| {
                 existing.pattern == pattern && existing.augmented == augmented
             });
-            if !reused {
+            let (indices, values) = real_block_entries(matrix, augmented, !reused);
+            let real_block = if reused {
+                let existing = cache
+                    .rivrs
+                    .as_ref()
+                    .expect("matched sparse structure cache");
+                SparseColMat::<usize, f64>::new_from_argsort(
+                    existing.symbolic.clone(),
+                    &existing.argsort,
+                    &values,
+                )
+                .map_err(|error| {
+                    format!("rivrs cached real-block CSC construction failed: {error:?}")
+                })?
+            } else {
+                let (symbolic, argsort) =
+                    SymbolicSparseColMat::<usize>::try_new_from_indices(block_n, block_n, &indices)
+                        .map_err(|error| {
+                            format!("rivrs real-block sparse structure creation failed: {error:?}")
+                        })?;
+                let real_block = SparseColMat::<usize, f64>::new_from_argsort(
+                    symbolic.clone(),
+                    &argsort,
+                    &values,
+                )
+                .map_err(|error| format!("rivrs real-block CSC construction failed: {error:?}"))?;
                 let strategy = match ordering {
                     "amd" => OrderingStrategy::Amd,
                     "metis" => OrderingStrategy::Metis,
@@ -503,13 +551,16 @@ pub(crate) fn solve_linear_system(
                     &real_block,
                     &AnalyzeOptions { ordering: strategy },
                 )
-                .map_err(|e| format!("rivrs symbolic analysis failed: {e}"))?;
+                .map_err(|error| format!("rivrs symbolic analysis failed: {error}"))?;
                 cache.rivrs = Some(RivrsCache {
                     pattern,
                     augmented,
+                    symbolic,
+                    argsort,
                     solver,
                 });
-            }
+                real_block
+            };
             let symbolic_status = if reused {
                 "reused"
             } else if had_cached_symbolic {
@@ -518,7 +569,7 @@ pub(crate) fn solve_linear_system(
                 "built"
             };
             println!(
-                "  profile: rivrs real-block CSC build and symbolic analysis {symbolic_status} {:.3}s ({}× dimension; relative complex-symmetry defect {:.2e})",
+                "  profile: rivrs real-block CSC values and symbolic analysis {symbolic_status} {:.3}s ({}× dimension; relative complex-symmetry defect {:.2e})",
                 analyze_started.elapsed().as_secs_f64(),
                 if augmented { 4 } else { 2 },
                 relative_asymmetry

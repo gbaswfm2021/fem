@@ -1,27 +1,9 @@
 import { loadSchemaDocuments, loadWorkspaceJson } from '../../platform/js/schema-document-loader.js';
 import { configureModelSchema } from '../../platform/model-rust/js/api.js';
+import { composeScenarioContracts, loadScenarioContracts } from './js/scenario-discovery.js';
 
 const workspaceUrl = new URL('../../', import.meta.url);
 let active;
-
-// Mirror the native caller's embedded scenario documents, including their
-// logical identifiers. The schema graph remains the source of profile data.
-function embeddedScenarioDocuments(root) {
-  const profiles = root?.$defs?.femProfiles;
-  if (!profiles || typeof profiles !== 'object' || Array.isArray(profiles)) return [];
-  if (typeof root.$id !== 'string' || !root.$id.includes('/')) {
-    throw new Error('The FEM model schema must declare a $id with a document path before embedding profiles.');
-  }
-  const base = root.$id.slice(0, root.$id.lastIndexOf('/') + 1);
-  return Object.entries(profiles).map(([key, profile]) => {
-    const id = profile?.['x-fem-scenario']?.profile?.id;
-    if (typeof id !== 'string') throw new Error(`Embedded FEM profile ${JSON.stringify(key)} must declare x-fem-scenario.profile.id.`);
-    if (key !== id) throw new Error(`Embedded FEM profile key ${JSON.stringify(key)} must match its profile ID ${JSON.stringify(id)}.`);
-    const document = { ...structuredClone(profile), $id: `${base}${id}.schema.json` };
-    if (Object.hasOwn(root, '$schema')) document.$schema = root.$schema;
-    return document;
-  });
-}
 
 // Check each import's destination before asking the shared graph loader to
 // follow it. In particular, a FEM schema cannot read another application.
@@ -90,11 +72,14 @@ export async function loadModelSchema(schemaUrl, applicationId) {
       && !source.url.href.startsWith(platformBase.href))) {
     throw new Error('FEM schemas and imports must stay inside the FEM application or shared platform.');
   }
-  const schema = sources[0]?.document;
-  if (schema?.properties?.application?.const !== applicationId) {
+  const baseSchema = sources[0]?.document;
+  if (baseSchema?.properties?.application?.const !== applicationId) {
     throw new Error(`The selected schema does not declare application "${applicationId}".`);
   }
-  const documents = [...sources.slice(1).map(source => source.document), ...embeddedScenarioDocuments(schema)];
+  const registryUrl = new URL('fem-rust/src/scenarios/registry.json', applicationBase);
+  const packages = await loadScenarioContracts({ registryUrl, loadJson: url => loadWorkspaceJson(url, workspaceUrl) });
+  const { schema, scenarioDocuments } = composeScenarioContracts(baseSchema, packages);
+  const documents = [...sources.slice(1).map(source => source.document), ...scenarioDocuments];
   configureModelSchema(schema, documents);
   active = { schema, sources, documents };
   return active;

@@ -25,7 +25,7 @@ The Model Editor renders the project hierarchy with the shared [Tree widget](../
 
 | Branch | Model data/function | Tree requirements |
 | --- | --- | --- |
-| Definitions | Parameters, global variables, and pointwise variables. | Expandable presentation group with three counted `collectionLink` rows. Each link opens the collection's shared Settings table. |
+| Definitions | Parameters, global variables, and pointwise variables. | Expandable presentation group with the dedicated `ICON-037` icon and three counted `collectionLink` rows. Each link opens the collection's shared Settings table. |
 | Geometry features | Primitives and composed feature groups under `model.geometry.features`. | Collection with per-kind icons/titles and add actions; selecting a feature highlights its geometry. |
 | Selections | Domain, boundary, edge, point, or coordinate-filtered selections under `model.selections`. | Each named selection appears once. Selecting its row highlights the resolved entity set and opens its Settings, including its shared Keyed Choice Matrix. |
 | Integration operators | Named operators used by model-defined observables. | Selecting an operator shows its referenced selection and operation settings. |
@@ -58,7 +58,7 @@ Use this table as the implementation map for tree identity and behavior. `*` den
 | Tree item / parent | Project JSON path | Label before section styling | Selecting the item shows | Graphics / action behavior |
 | --- | --- | --- | --- | --- |
 | Project root | `/metadata/name`, fallback `/metadata/id` | Project name | Project overview and identity | No geometry highlight. |
-| Definitions group | Presentation group with no serialized path of its own | Definitions | No separate Settings form | Expands the eligible definition collections. |
+| Definitions group | Presentation group with no serialized path of its own | Definitions | No separate Settings form | Uses `ICON-037`; expands the eligible definition collections. |
 | Parameters collection link | `/model/parameters` | `Parameters (count)` | Shared Parameters Settings table in array order | Open the default structure scene. |
 | Global variables collection link | `/model/variables` | `Global variables (count)` | Shared Global variables Settings table in array order | Open the default structure scene. |
 | Pointwise variables collection link | `/model/pointwiseVariables` | `Pointwise variables (count)` | Shared Pointwise variables Settings table in array order | Open the default structure scene. |

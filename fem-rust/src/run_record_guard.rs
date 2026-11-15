@@ -1,4 +1,4 @@
-//! Serialize Study manifest updates across the dispatcher and scenario workers.
+//! Serialize run manifest updates across the dispatcher and scenario workers.
 
 use serde_json::Value;
 use std::fs::{self, File, OpenOptions};
@@ -141,6 +141,34 @@ pub(crate) fn write_scenario_record(path: &Path, next: &Value) -> Result<()> {
     }
     if current["runId"] != next["runId"] {
         return Err("The Study record update identifies a different run.".into());
+    }
+    replace_record(path, next)
+}
+
+/// Refresh the shared mesh ownership record without applying Study lifecycle
+/// transitions. Mesh records intentionally remain in the `mesh-only` state.
+pub(crate) fn write_mesh_record(path: &Path, next: &Value) -> Result<()> {
+    let _lock = lock_record(path)?;
+    if next.get("schema").and_then(Value::as_str) != Some("fullmeta-run/1")
+        || next.get("kind").and_then(Value::as_str) != Some("mesh")
+        || next.get("runId").and_then(Value::as_str) != Some("mesh")
+        || next.get("state").and_then(Value::as_str) != Some("mesh-only")
+    {
+        return Err("The shared mesh update must retain its mesh-only identity.".into());
+    }
+
+    let current = match fs::symlink_metadata(path) {
+        Ok(_) => Some(read_record(path)?),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(format!("Could not inspect the shared mesh record: {error}")),
+    };
+    if let Some(current) = current {
+        if current.get("runId").and_then(Value::as_str) != Some("mesh")
+            || (current.get("kind").and_then(Value::as_str) != Some("mesh")
+                && current.get("state").and_then(Value::as_str) != Some("mesh-only"))
+        {
+            return Err("The shared mesh record is owned by an incompatible run record.".into());
+        }
     }
     replace_record(path, next)
 }

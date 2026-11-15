@@ -1,0 +1,30 @@
+{
+  "format": "fullmeta-fem-scenario-registry/1",
+  "packages": [
+    {
+      "id": "acoustic-2d",
+      "file": "acoustic2d.json",
+      "default": false
+    },
+    {
+      "id": "acoustic-3d",
+      "file": "acoustic3d.json",
+      "default": false
+    },
+    {
+      "id": "em-2d",
+      "file": "em2d.json",
+      "default": false
+    },
+    {
+      "id": "em-3d",
+      "file": "em3d.json",
+      "default": true
+    },
+    {
+      "id": "thermal-2d",
+      "file": "thermal2d.json",
+      "default": false
+    }
+  ]
+}

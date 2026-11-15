@@ -1,0 +1,4 @@
+# Local build products and development evidence
+/.build/
+/implementation/
+/tests/

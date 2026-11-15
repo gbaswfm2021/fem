@@ -4,7 +4,7 @@ This file specifies the supported target application solver and mesher functions
 
 ## Shared execution lifecycle
 
-The native FEM entry point performs common whole-model preflight and dispatches to one scenario executable. Scenario executables retain numerical and mesh-dependent checks. The runtime sequence is:
+The native FEM entry point performs common whole-model preflight and dispatches to the selected scenario module inside the same executable. Scenario modules retain numerical and mesh-dependent checks. The runtime sequence is:
 
 1. Receive the selected model/schema context and Study request.
 2. Run native model preflight and verify runtime registration.
@@ -21,25 +21,25 @@ Model validation, geometry/mesh validation, and numerical validation are separat
 
 ## Preparation and solver dispatch
 
-The Study endpoint starts the registered dispatcher in `--server` mode. Read `scenario.profileId`, the selected Study ID, its Physics reference, and its effective backend from the model snapshot and schema. Resolve preparation through `x-fem-capabilities.study.preparationByProfile` and the numerical program through `x-fem-capabilities.study.solverRuntimesByProfile`. Resolve each program ID against `x-fullmeta-runtime.externalPrograms`. The backend comes from the selected Study, then its profile defaults, then the common solver defaults.
+The Study endpoint starts the registered dispatcher in `--server` mode. Read the scenario package, selected Study ID, Physics reference, and effective backend from the model snapshot and schema. Resolve preparation through `x-fem-capabilities.study.preparationByProfile` and the numerical program through `x-fem-capabilities.study.solverRuntimesByProfile`. Resolve each program ID against `x-fullmeta-runtime.externalPrograms`. The backend comes from the selected Study, then its scenario defaults, then the common solver defaults. Scenario program IDs remain distinct metadata keys, but each resolves to the single `fullmeta-fem.exe`; the dispatcher selects the compiled runner from `x-fem-scenario.solverModule`.
 
 | Profile | Preparation kind and owner | Numerical program ID and Windows executable | Prepared numerical entries |
 | --- | --- | --- | --- |
-| `acoustic-2d` | `frequencyPlan` in the common preparation handler | `solverAcoustic2d` → `acoustic2d.exe` | `--solve`, `--sequence` |
-| `acoustic-3d` | `frequencyPlan` in the common preparation handler | `solverAcoustic3d` → `acoustic3d.exe` | `--solve`, `--sequence` |
-| `em-2d` | `frequencyPlan` in the common preparation handler | `solverEm2d` → `em2d.exe` | `--solve`, `--sequence` |
-| `em-3d` | `configuredFrequencyRequest` in the common preparation handler | `solverEm3d` → `em3d.exe` | `--solve`, `--sequence` |
-| `thermal-2d` | `scenario` through `thermal2d --prepare-study` | `solverThermal2d` → `thermal2d.exe` | `--solve` |
+| `acoustic-2d` | `frequencyPlan` in common preparation | `solverAcoustic2d` → `fullmeta-fem.exe` (`acoustic2d` module) | `--solve`, `--sequence` |
+| `acoustic-3d` | `frequencyPlan` in common preparation | `solverAcoustic3d` → `fullmeta-fem.exe` (`acoustic3d` module) | `--solve`, `--sequence` |
+| `em-2d` | `frequencyPlan` in common preparation | `solverEm2d` → `fullmeta-fem.exe` (`em2d` module) | `--solve`, `--sequence` |
+| `em-3d` | `configuredFrequencyRequest` in common preparation | `solverEm3d` → `fullmeta-fem.exe` (`em3d` module) | `--solve`, `--sequence` |
+| `thermal-2d` | `stationaryPlan` in common preparation | `solverThermal2d` → `fullmeta-fem.exe` (`thermal2d` module) | `--solve` |
 
-Both `rivrs` and `faer` resolve to the registered profile executable when the build supports the selected backend. A wave preparation produces its normalized plan or request once for the chosen model and Study. Thermal preparation returns a stationary plan from its scenario entry. Preparation receives the same model and Study context throughout. A preparation handler returns a plan or an error and terminates. Keep the preparation path acyclic, including any shared preflight call. Preflight returns validation and registration results. The numerical handler receives the prepared inputs. Reject a registration that resolves back to the launcher as a numerical executable or routes preparation back through the active dispatcher entry.
+Both `rivrs` and `faer` resolve to the common executable when the compiled scenario module supports that backend. A wave preparation produces its normalized plan or request once for the chosen model and Study. The common `stationaryPlan` path produces the stationary solver request from schema declarations and Study metadata. Preparation receives the same model and Study context throughout. A preparation handler returns a plan or an error and terminates. Keep the preparation path acyclic, including any shared preflight call. Preflight returns validation and registration results. The numerical handler receives the prepared inputs. Reject a registration that routes preparation recursively through the active dispatcher entry.
 
-`frequencyPlan` returns a harmonic Study plan with the profile and Study IDs, effective solver settings, ordered frequencies in Hz, and case parameter values and dimensions. `configuredFrequencyRequest` prepares the EM3D solver request with the checked mesh file, at least one material assignment, and the prepared cases. Its enabled ordinary boundary input is impedance. Under `allAssignedMaterials`, the active domain set matches the material assignment set. Report unsupported enabled boundary declarations during preparation. Thermal preparation uses the stationary Study and returns its temperature, material, and boundary configuration through the scenario entry.
+`frequencyPlan` returns a harmonic Study plan with the scenario and Study IDs, effective solver settings, ordered frequencies in Hz, and case parameter values and dimensions. `configuredFrequencyRequest` prepares the EM3D solver request with the checked mesh file, at least one material assignment, and the prepared cases. Its enabled ordinary boundary input is impedance. Under `allAssignedMaterials`, the active domain set matches the material assignment set. Report unsupported enabled boundary declarations during preparation. `stationaryPlan` prepares the stationary solver request from generic mesh, material, boundary, result-default and solver-setting metadata; the scenario module receives that request and performs the numerical solve.
 
 Resolve the handler, executable, entry, profile, and backend before starting that stage. A missing registration, unsupported preparation kind, missing executable, or unsupported backend ends the operation promptly with a terminal error. Identify the profile, Study, failed stage, and the specific registration or executable to correct. Preserve the run diagnostic. Acceptance exercises every profile's actual preparation and solve path, with a separate missing-route failure case. [Runtime registration and storage](runtime-integration-boundary.md)
 
 ## Schema metadata consumed by native programs
 
-Use the selected target application schema graph for the dispatcher, scenario programs, and mesh compiler. Embed the built-in profile schemas in `$defs.femProfiles`, keyed by profile ID, and reference their model constraints from the root. Keep imported references resolvable within the application or the documented shared platform interfaces. The declarations below are runtime inputs. Their values must resolve to the exact model fields, profile choices, and executable registrations in the contracts.
+Use the selected target application schema graph for the dispatcher, scenario programs, and mesh compiler. The FEM runtime composes the installed profile schemas under `$defs.femProfiles`, keyed by profile ID, and references their model constraints from the root. Do not author those profile modules back into `fem.schema.json`; register a versioned package under `fem-rust/src/scenarios/` as specified in [runtime scenario discovery](../RUNTIME.md#runtime-scenario-discovery). Keep imported references resolvable within the application or the documented shared platform interfaces. The declarations below are runtime inputs. Their values must resolve to the exact model fields, profile choices, and executable registrations in the contracts.
 
 | Declaration | Required contents and consumer |
 | --- | --- |

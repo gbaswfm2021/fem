@@ -4,7 +4,7 @@ Evaluate the saved schema and the complete registered FEM application using case
 
 ## Acceptance scope and failure attribution
 
-Repair defects in application-owned schema, package, JavaScript, JSX, actions, adapters and application tests within the application build. The supplied Schema Editor, Model Editor, Kernel, shared libraries, `fem-rust` and `mesh-rust` are fixed dependencies. Record an exact reproduction when one prevents a required outcome; continue independent work and leave the blocked requirement unverified. A defect in application-owned code is an application failure to fix, rather than an external dependency blocker.
+Repair defects in application-owned schema, package, JavaScript, JSX, actions, adapters and application tests within the application build. The supplied Schema Editor, Model Editor, Kernel, shared libraries, `fem-rust` (including its mesher) are fixed dependencies. Record an exact reproduction when one prevents a required outcome; continue independent work and leave the blocked requirement unverified. A defect in application-owned code is an application failure to fix, rather than an external dependency blocker.
 
 Use these outcomes:
 
@@ -36,6 +36,31 @@ behavior are covered by the neutral fixtures and two-level checks in the
 FEM acceptance still exercises FEM's saved declarations, bindings, package and
 application behavior. When a FEM case exposes a shared defect, retain the FEM
 integration case and add a minimal neutral regression case to the platform suite.
+
+### Shared evidence and stable checklist IDs
+
+Reuse applicable shared-editor and platform evidence for general authoring,
+widget, workspace and development-tool behavior. Record the shared case, its
+candidate and relevant dependency identities, and assess whether that evidence
+still applies; do not run the neutral test again as a FEM replay. The
+[Schema Editor evidence ledger](../../../platform/schema-editor/evidence/acceptance-run-2026-11-11.md)
+records the completed WA-01–WA-28 widget matrix and Level 2 replay; the
+[coverage trace](../../../platform/schema-editor/evidence/normative-coverage-trace-2026-11-11.md)
+also records remaining gaps and the excluded WebMCP scope. Check current
+evidence and applicable revisions rather than assuming that the whole shared
+suite passed or that a partial or excluded case passed. A missing applicable
+shared prerequisite remains unverified and is reported with its owner; it is
+not silently passed or replaced by a repeated generic FEM test. A later shared
+candidate or changed interface requires an impact review, not an automatic rerun
+of unrelated FEM cases.
+
+The existing checklist rows retain their IDs and positions. Their current text
+defines the narrowed FEM obligation, not a requirement to repeat the historical
+generic test. Preserve earlier evidence and status history; reassess a row when
+its text or relevant candidate changes. Do not promote historical evidence to
+PASS without verifying that it covers the revised obligation and candidate.
+When one observation proves multiple FEM rows or both schema binding and visible
+behavior, link it to each applicable row without repeating the action.
 
 **Level 1 — Schema acceptance** is Gates 0–2. It establishes that the authored schema meets the written declaration, tree/Settings, validation, action, and supported UI-binding contracts. The builder may iterate on schema-caused failures here.
 
@@ -84,7 +109,7 @@ The acceptance claim is conformance to the complete written format and behavior 
 | Replay group | Required evidence |
 | --- | --- |
 | Schema and Settings | Open the saved schema and record validation, readiness, branch and rule evidence. Record rendered icons and collection labels in each editor separately, including both geometry group variants. Record definition control names, both sweep modes, and activation and clear of the incident pair. |
-| Tree commands | Record PRJ-01, PRJ-02, and PRJ-03 individually. Capture the actual menu or inline editor and compare the saved JSON before the action, before Save, and after reopening when the case changes data. |
+| Tree commands | Record the FEM-specific outcomes of PRJ-01, PRJ-02, and PRJ-03 individually. Capture the actual FEM target and compare saved JSON before the action, before Save, and after reopening when the case changes data. Reuse shared evidence for generic inline-editor and menu mechanics. |
 | Graphics and results | Record each of GX-01 through GX-22 with its declared binding, observed sequence, and artifacts. Track separate evidence for deterministic checks and live browser outcomes when both are required. |
 | Package and Study | Exercise the launcher and registered Schema Editor creation paths, compatibility baseline and negative controls, and the complete mesh/Study/results path in each supported profile. Match the UI selection and operation to the recorded runtime artifacts. |
 | Stop and recovery | Record each required live Study and recovery outcome separately, including the two Stop stages, successful and unsuccessful newer attempts, and the recovered duration. Attach the controlled race and worker identity evidence to their corresponding cases. |
@@ -98,25 +123,25 @@ Use one row per check and required subcase. Include the spec section, case ID, s
 Apply the shared [frontend provider contract](../../../platform/docs/frontend-provider-contract.md) to the identified FEM candidate. Verify FEM bindings, owned providers, commands and visible outcomes here; shared platform verification does not establish application or numerical acceptance.
 
 - [ ] Record the frozen specification identity, pinned frontend lockfile/configuration, successful manifest revision and debug contract separately from backend/native and validation-language identities.
-- [ ] Install/build through the supplied workflow. Every application/shared JSX source compiles to the expected public `.js` and source map. The browser resolves the shared React runtime locally with one instance; source maps identify original JSX.
+- [ ] Build the FEM candidate through the supplied workflow. Verify FEM-owned JSX outputs and source maps and that the package loads with the shared React runtime; reuse applicable shared build/runtime evidence for generic platform behavior.
 - [ ] Public package/widget/provider imports load through their documented entries and pass the relevant JS/JSX boundary audit. For each application-owned visual provider, mount/update/dispose its JSX component through the declared package hook; preserve its source/model paths and normal callbacks.
 - [ ] Reuse schema-selected shared Tree, Settings, dialog and graphics-control presentation. No handwritten application form duplicates a supported shared widget, and no schema field requires generated application JSX.
-- [ ] With the actual application visible in a browser at the identified FullMeta origin, record the session/tab, fixture/live mode and candidate identity. Enable development inspection only when exercising its explicit capabilities. Export/restore a checkpoint with selection/expansion, Settings and JSON drafts, an open authoring dialog, validation state, camera/controls and focus/caret. Snapshots contain JSON data, no functions, DOM, roots or graphics resources.
-- [ ] Restore establishes fixture mode before ordinary control handlers run. Unregistered fixture requests are blocked with no live fallback; operation-status restoration does not relaunch a worker, confirmation or file action. Live operations require explicit live services.
-- [ ] Dispatch normal semantic commands, inspect their resolved tree/Settings/source paths and diagnostic/action bindings, and capture settled panels. Preview, Apply, Save and Validate remain distinct, with ordinary draft/availability/stale-candidate checks.
-- [ ] For application-owned frontend sources, exercise the optional development watcher and selected fixture replay in that same visible tab: change an identified source and observe a new successful revision, full browser reload, checkpoint restoration and automatic selected scenario rerun. Verify compile failure retains last-good assets, no failed/stale replay occurs, and a corrected source recovers. Record that this is build/reload/replay, not React HMR.
-- [ ] Check real keyboard/focus/caret, drag/reorder, dialogs, responsive layout and canvas/graphics; retain screenshots/pixels where required. Structured snapshots alone do not pass these checks. Identify separate browser/headless sessions.
+- [ ] Record the visible FEM session, service mode and candidate identity. Identify any FEM-owned state that participates in checkpoint restoration; verify its FEM-specific preservation and lack of unintended actions if present, or record why none applies. Refer to shared evidence for generic draft, focus, caret and checkpoint serialization behavior.
+- [ ] Record the applicable shared fixture-isolation and operation-restoration evidence and its candidate identity. Verify any FEM-owned restoration hook does not launch a native operation or mutate the model; if no such hook exists, record that fact. Do not repeat generic fixture fallback tests.
+- [ ] Exercise FEM commands and inspect their resolved tree/Settings paths, action inputs and diagnostics. Check FEM-specific draft and Save effects; reuse shared evidence for generic Preview, Apply, Validate and stale-candidate transactions.
+- [ ] Record the applicable shared watcher and fixture-replay evidence and candidate identity. A watched reload and compile-failure recovery replay is not a FEM acceptance requirement unless FEM implements an additional source-reload hook; verify any such hook separately.
+- [ ] Observe the FEM-specific controls, geometry interactions and graphics required by the application cases in a visible browser. Retain pixels where required; reuse shared keyboard, focus, dialog and responsive-layout mechanics evidence rather than repeating its generic matrix.
 - [ ] Preserve all required live validation, native execution, cancellation/recovery and checked artifact evidence from the gates below. Fixture success cannot replace it. Record command time, render/service wait, active navigation/input time, retries and errors separately for any speed claim.
 
-Ordinary human editing requires no watcher. Development replay verifies source-change recovery; the application gate separately exercises its registered providers, paths, actions and live behavior on the same candidate.
+Ordinary human editing requires no watcher. Shared evidence covers the general development workflow; the application gate exercises registered FEM providers, paths, actions and live behavior.
 
 ### Compact bindings and native operation gate
 
 Follow [Frontend provider contract](../../../platform/docs/frontend-provider-contract.md) and [Native operation contract](../../../platform/docs/native-operation-contract.md). Shared boundary acceptance does not pass this application's profile/route/numerical cases.
 
 - [ ] Record `fullmeta-widget-catalog/1`, `fullmeta-react-widget/1`, `fullmeta-native-operations/1`, each selected operation's version/current generated digest, and retained API18/runtime/validation identities separately. Record the current specification, application and fixed-dependency identities.
-- [ ] Each field selects only a widget ID/settings in its existing behavior envelope. The selected catalog owns the explicit public module. Verify compact and explicit presentation declarations resolve to the same callable ABI; missing inferred/additive exports block publication without replacing last-good assets.
-- [ ] Author native bindings with the ordinary Runtime API routes operation/version/registry controls, then Preview, Apply, Save and reopen. No-op/targeted edits preserve compact source, unknown supported metadata, explicit legacy facts, model optionality and array order. Unsupported versions and conflicting inferred metadata fail before effects.
+- [ ] Verify FEM fields select the intended catalog widget IDs and settings and that their public entries resolve. Reuse shared evidence for compact/explicit ABI equivalence and generic publication failure handling.
+- [ ] Inspect the saved FEM native bindings for the intended operation, version, registry and route; check that they reopen and resolve correctly. Reuse shared authoring evidence for generic Preview/Apply/Save, no-op preservation and invalid metadata transactions.
 - [ ] Bind declared native-operation actions to one API role. Human controls and JSX callbacks use the current document, field handlers, draft/availability/revision guards and action service. Artifact-producing work uses normal Save and blocks failed/conflicting saves or changed models.
 - [ ] On spec-derived disposable inputs, prove actual mesh check/compile/repeated compile, preparation and a required Study. Check self-described executable/authority identity, structured JSON Pointer diagnostics, NDJSON terminal/exit semantics and every required artifact. Empty solver stderr is permitted only by its explicit native descriptor exception; required other outputs remain nonempty.
 - [ ] Run the native mesher profile-contract check independently for each of the five built-in profiles using a disposable valid model of the corresponding dimension. Verify that each profile's nested scenario constants and formulation declaration agree with its metadata, including a numeric integer dimension; retain a separate failing result for each profile that does not pass. This check alone does not establish successful mesh compilation or numerical acceptance.
@@ -128,9 +153,9 @@ Follow [Frontend provider contract](../../../platform/docs/frontend-provider-con
 The shared [workspace application contract](../../../platform/docs/workspace-application-contract.md) owns universal Explorer, picker, menu, layout and checkpoint mechanisms. Verify the FEM integration points on this candidate:
 
 - [ ] Open a FEM model from nested project folders through the universal loader, preserving its complete canonical path, interpreting-schema reference and application registration. Distinguish equal basenames and multiple applications' model files in one folder.
-- [ ] Exercise FEM Open, New schema/destination selection and applicable imports through ordinary controls and the same semantic commands. Use the in-application picker; preserve invalid raw inputs, modal ownership, cancellation and revision guards. Restore app-owned pending New/Save As/import presentation without reading, accepting, submitting or writing, including a selection from a paged listing. Invalid source/owner/path checkpoints must fail before mutation.
-- [ ] Verify the declared initial layout and a session override, Stacked and Columns, the initial 50:50 Stacked split, and pointer/keyboard resizing. Existing FEM controls, drafts, graphics, selection and model data survive each layout change. The canonical path remains on the status row.
-- [ ] Preserve the same-folder Save As and expected-content-hash contract, including correct relative interpreting-schema/resource references. Verify File/Edit/View/Help integration and documentation resolution for both a FEM model and the FEM schema being edited. These checks do not replace Model 2, VAL, native or numerical acceptance.
+- [ ] Exercise FEM Open and applicable FEM-specific import or destination bindings through the shared picker. Verify selected FEM document and resource paths and any FEM-owned pending-state hooks; reuse shared evidence for generic picker pagination, raw drafts, modal guards and checkpoint validation.
+- [ ] Verify the FEM-declared initial layout and that its controls, graphics, selection and model data remain usable after a layout change. Reuse shared evidence for generic layout overrides and pointer/keyboard resizing.
+- [ ] Verify FEM-specific same-folder Save As identity and relative schema/resource references, and FEM Help resolution. Reuse shared evidence for generic menu and expected-content-hash mechanics; retain the FEM save and Study checks in Gate 4.
 
 ### Gate 0 — Boundaries
 
@@ -163,9 +188,9 @@ The shared [workspace application contract](../../../platform/docs/workspace-app
 - [ ] Schema readiness reports project creation and project editing as ready; collection actions target the correct arrays and create the declared item template.
 - [ ] Every tree branch opens and exposes the expected Settings controls.
 - [ ] Widgets, units, references, add actions, defaults, validation rules, graphics scenes/adapters, layer controls, and registered actions are inspected.
-- [ ] Exercise all GX checks on the saved, reopened schema with spec-derived inputs. Evidence identifies the declaration, resolved binding, and visible outcome. Mark a mismatch in the authored declaration FAIL-SCHEMA; mark an unavailable shared renderer/host behavior BLOCKED-DEPENDENCY with its exact reproduction. [Graphics and results schema acceptance](contracts/graphics-and-results-schema-acceptance.md)
-- [ ] Schema Editor and Model Editor context menu checks pass using spec-derived inputs. Record each menu's declaration, ordered actions, availability and reasons, and resolved target or protected declaration. [Tree context menus](contracts/tree-context-menu-contract.md)
-- [ ] Before freeze, exercise PRJ-01 through PRJ-03 in the actual Model Editor in the identified visible browser on saved canonical models written from the spec. Evidence includes inline Rename, Escape cancellation, guarded draft Delete, stale-target handling, and Save/reopen with exact JSON differences. If the declaration is correct but the shared host lacks a capability, mark BLOCKED-DEPENDENCY with a reproduction; do not request a schema-builder fix. Leave an unobserved check PENDING. [Project-level command gate](contracts/tree-context-menu-contract.md#project-level-command-gate)
+- [ ] Inspect saved FEM graphics declarations and resolved bindings for GX-01 through GX-22; link the corresponding FEM-specific visible and artifact evidence from Gate 4 without repeating an already covering observation. Attribute declaration and shared-host failures separately. [Graphics and results schema acceptance](contracts/graphics-and-results-schema-acceptance.md)
+- [ ] Inspect FEM schema projection and Model Editor context-menu declarations, actions, targets and profile-specific availability using spec-derived inputs. Reference shared Schema Editor evidence for generic authoring menus and transactions. [Tree context menus](contracts/tree-context-menu-contract.md)
+- [ ] Before freeze, exercise the FEM-specific PRJ-01 through PRJ-03 outcomes in the actual Model Editor on saved spec-derived models, including reference protection, FEM insertion rules and persisted changes. Reuse shared evidence for generic inline-editor and stale-document mechanics; keep any FEM-owned target guards covered. [Project-level command gate](contracts/tree-context-menu-contract.md#project-level-command-gate)
 - [ ] TDUV counters are recorded with displayed definitions, plus branch-level and function-level inspection evidence.
 - [ ] The root `x-fullmeta-rules.rules` program is executable and nonempty. Each required predicate has its rule pointer, a passing input, an isolated failing input with its diagnostic path, and a successful repair. Verify the named runtime programs separately, including built-in profile identity and `editorOptions` checks in `x-fullmeta-metadataValidation`.
 - [ ] The linear range and explicit values modes each pass the [sweep unit checks](contracts/settings-control-contract.md#sweep-unit-checks). Record visible and accessible units separately from saved data. Both modes need their own observed result.

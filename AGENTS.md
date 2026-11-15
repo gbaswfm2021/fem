@@ -5,7 +5,7 @@ These instructions cover application-owned work below `applications/fem/`. Begin
 ## Ownership
 
 - Implement and repair the application's own schema, package, JavaScript, JSX widgets, actions, adapters and application tests when the task includes an application build. Keep these files under the application folder.
-- Treat the supplied shared platform, Schema Editor, Model Editor, Kernel, Core/Model WASM, `fem-rust/` and `mesh-rust/` as identified dependencies. Use their documented interfaces. A task that explicitly includes changing a dependency can change that scope; ordinary application work does not implicitly include it.
+- Treat the supplied shared platform, Schema Editor, Model Editor, Kernel, Core/Model WASM, `fem-rust/` (including `src/mesh/`) as identified dependencies. Use their documented interfaces. A task that explicitly includes changing a dependency can change that scope; ordinary application work does not implicitly include it.
 - For a fixed dependency that prevents a required result, record its version or executable identity, the smallest reproduction, expected and actual outcome, exact diagnostic and affected requirement. Continue independent application work and keep the blocked outcome unverified.
 - Distinguish a schema defect, application-code defect, invalid case, specification gap and fixed-dependency blocker. Application-owned JS/JSX failures are repairable application defects, not external blockers to report instead of fixing.
 

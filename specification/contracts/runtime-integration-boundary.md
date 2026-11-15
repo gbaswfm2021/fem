@@ -173,36 +173,33 @@ fem executable:
                    --capabilities, --resolve-result, --save-figure, --cancel-run,
                    --run-status, --clear-results
 
-scenario solver executables in the same release directory:
-  solverAcoustic2d: acoustic2d.exe
-  solverAcoustic3d: acoustic3d.exe
-  solverEm2d: em2d.exe
-  solverEm3d: em3d.exe
-  solverThermal2d: thermal2d.exe
+scenario solver program IDs in the scenario packages (all resolve to the
+same executable and dispatch by the package's solverModule declaration):
+  solverAcoustic2d: .runtime/x86_64-pc-windows-gnu/release/fullmeta-fem.exe
+  solverAcoustic3d: .runtime/x86_64-pc-windows-gnu/release/fullmeta-fem.exe
+  solverEm2d:      .runtime/x86_64-pc-windows-gnu/release/fullmeta-fem.exe
+  solverEm3d:      .runtime/x86_64-pc-windows-gnu/release/fullmeta-fem.exe
+  solverThermal2d: .runtime/x86_64-pc-windows-gnu/release/fullmeta-fem.exe
 
-mesh executable:
-  .runtime/x86_64-pc-windows-gnu/release/fullmeta-mesh.exe
-  allowed entries: check, compile, preview, mesh, build
+mesh registry alias (linked into the FEM executable):
+  .runtime/x86_64-pc-windows-gnu/release/fullmeta-fem.exe
+  allowed entries: check, compile, preview, mesh, build, --mesh-only,
+                   --operation-check, --operation-compile
 
 gmsh tool:
   pathType: relative
-  mesh-rust/vendor/gmsh-4.15.2/gmsh-4.15.2-Windows64/gmsh.exe
+  fem-rust/vendor/gmsh-4.15.2/gmsh-4.15.2-Windows64/gmsh.exe
 ```
 
 If a different target platform is built, preserve the same target application-local directory boundary and declare the correct platform executable path. Do not use paths that traverse another application folder.
 
-Normal UI Studies run the optimized Cargo release build of the dispatcher and every selected scenario solver. Register the actual deployment paths and the supported entries in the profile dispatch table. Keep dispatcher and solver binaries from the same compatible build beside one another for direct preflight. Verify the resolved path, build mode, and backend features for each profile. If the optimized program is missing, report its required registration or build step as a launch failure. [Profile dispatch contract](solver-capability-contract.md#preparation-and-solver-dispatch)
+Normal UI Studies run the optimized Cargo release build of `fullmeta-fem`, which contains the common dispatcher and all registered scenario modules. Keep the scenario program IDs in their JSON packages because they bind each scenario's runtime capability, while resolving each ID to the same dispatcher executable. Verify that the selected package's `solverModule` is present in the generated module registry and that its backend is supported. If the executable or module registration is missing, report its required build or contract correction as a launch failure. [Profile dispatch contract](solver-capability-contract.md#preparation-and-solver-dispatch)
 
-Provision the required executable artifacts before Study acceptance. Reuse the supplied compatible optimized builds. If an executable is absent but the supplied source is unchanged, build only the missing target for deployment and record its source hash, command, target, features, and output hash. Do not alter Rust source or build features to add behavior; a missing capability is a native-dependency blocker. For the Windows deployment below, use Cargo's locked release profile, target `x86_64-pc-windows-gnu`, and target directory `applications/{APP_ID}/.runtime`. Every build writes the same release filenames into that directory and replaces the prior executable. Keep the default `rivrs-backend` and `parallel` features. Select the binary and its required feature as follows.
+Provision the required executable artifacts before Study acceptance. Reuse the supplied compatible optimized builds. If the executable is absent, build the registered `fullmeta-fem` target and record its source hash, command, target, features, and output hash. For the Windows deployment below, use Cargo's locked release profile, target `x86_64-pc-windows-gnu`, and a disposable target directory such as `applications/{APP_ID}/.build`; stage only the declared runtime executable under `applications/{APP_ID}/.runtime`. The FEM package builds one solver executable. Keep the default `rivrs-backend` and `parallel` features.
 
-| Cargo `--bin` | Additional Cargo feature |
-| --- | --- |
-| `fullmeta-fem` | Default features |
-| `acoustic2d` | `solver-native-acoustic2d` |
-| `acoustic3d` | `solver-native-acoustic3d` |
-| `em2d` | `solver-native-em2d` |
-| `em3d` | `solver-native-em3d` |
-| `thermal2d` | Default features |
+| Cargo `--bin` | Features | Contents |
+| --- | --- | --- |
+| `fullmeta-fem` | Default features | Dispatcher, common FEM orchestration, generated registry, and registered scenario modules |
 
 ## Expected output files
 
@@ -245,7 +242,7 @@ The selected `fem.studyRun` native descriptor explicitly permits an empty `logs/
 - [Shared application catalog loader](../../../../platform/js/application-catalog.js)
 - [Shared runtime registration schema](../../../../platform/contracts/fullmeta-model-runtime-1.schema.json)
 - [Application package loader](../../../../platform/js/application-packages.js)
-- [Launcher](../../../../launcher.js)
+- [Launcher](../../../../platform/workspace/js/launcher.js)
 - [Rust Kernel route dispatch](../../../../platform/kernel-server-rust/src/main.rs)
 - [Generic project package](../../../../platform/ui/widgets/model-editor/schema-project-package.js)
 - [target application solver and mesher contract](solver-capability-contract.md)

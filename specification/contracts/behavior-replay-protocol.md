@@ -16,11 +16,11 @@ Tiny cases isolate causes; composite cases check that individually correct behav
 
 ## Replay sequence
 
-First complete the [frontend/provider and visible-replay gate](../ACCEPTANCE.md#frontend-provider-and-visible-replay-gate) on this candidate. Follow the delivered [development controller contract](../../../../platform/docs/frontend-provider-contract.md), with the actual application visible at the identified FullMeta localhost origin. Identify the tab/session, frontend revision, schema/package and service mode in the evidence. Supplemental headless or separate-browser runs must be named separately.
+Complete the [frontend/provider and visible-replay gate](../ACCEPTANCE.md#frontend-provider-and-visible-replay-gate) for this candidate. Identify the visible FEM session, frontend revision, schema/package and service mode. Link applicable shared-editor evidence with its dependency identities and record unresolved prerequisites; the shared suite owns generic editor, widget, workspace and development-tool behavior. Supplemental headless or separate-browser runs must be named separately.
 
-Restore the relevant JSON-only document/editor state, including selection, expansion, pending drafts, authoring dialogs, diagnostics, focus and view state. Use explicit fixture services for deterministic authoring replay and normal semantic commands for the same transactions as visible controls. Check resolved source paths, diagnostics and action bindings, then capture settled affected panels. Exercise a successful watched source revision, full reload of the same tab and automatic selected fixture replay; exercise compile-error recovery without replaying failed assets. The shared development workflow is build/reload/replay. It is optional for ordinary editing; exercise it here for source-change recovery. Automatic live scenario replay is blocked.
+Inspect resolved FEM source paths, diagnostics and action bindings and capture the affected panels. Verify checkpoint or reload behavior only for FEM-owned state or hooks, if any; generic checkpoint serialization, fixture isolation, watched reload and compile-error recovery belong to shared evidence. Identify fixture and live services when used, and do not use fixture replay as a live native result. Normal semantic commands and visible controls exercise the same FEM application actions.
 
-Fixture replay does not establish live validation-rule execution, native operations or real artifacts. The actual live cases below retain their existing execution/evidence requirements. Keep keyboard/focus, drag/reorder, modal/dialog, layout and canvas/graphics checks in the visible browser. When comparing workflows, record active input/navigation effort, normal-command time, render/service waits, retries and errors separately for equivalent starting states and outcomes.
+Fixture replay does not establish live validation-rule execution, native operations or real artifacts. Retain the live FEM cases below. Observe FEM-specific drag/reorder, dialog, layout and canvas outcomes in the browser where applicable; reuse shared evidence for generic input and widget mechanics. When comparing workflows, record active input/navigation effort, normal-command time, render/service waits, retries and errors separately for equivalent starting states and outcomes.
 
 For every applicable case, exercise the registered application and retain observable evidence:
 
@@ -33,6 +33,11 @@ For every applicable case, exercise the registered application and retain observ
 7. Exercise the required cancellation, recovery, compatibility, freshness, and cleanup cases using separate disposable runs and storage. Preserve earlier completed results when the contract requires it.
 
 Use [Graphics and results schema acceptance](graphics-and-results-schema-acceptance.md), [Runtime operations](../RUNTIME.md), and [Operation states and recovery](../ACCEPTANCE.md#gate-5--operation-states-and-recovery) for the detailed expected sequences and outputs.
+
+A single candidate-specific FEM observation may cover multiple checklist rows,
+including schema bindings and the corresponding visible result. Link it to
+each row and rerun only for a distinct case, changed relevant identity or gap in
+the recorded evidence. Historical replay entries retain their original scope.
 
 ## Attribute failures and iterate
 

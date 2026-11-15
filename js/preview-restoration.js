@@ -27,3 +27,33 @@ export async function restorePreview(context){
   context.showMesh(mesh,context.componentId,context.model,result.geometryFile);
   context.updateRunbar('success','Restored checked mesh',`${mesh.nodes.length} nodes · ${mesh.cells.length} elements`);
 }
+
+/** Refresh the in-memory preview after a Study creates or reuses the shared mesh. */
+export async function restorePreviewAfterStudy(services, schema){
+  const inputs=services.resolveInputs({
+    model:'document.model',folder:'document.folder',file:'document.file',
+    componentId:'graphics.componentId',runsDirectory:'application.runsDirectory',
+  });
+  if(!inputs.model||typeof inputs.folder!=='string'||typeof inputs.file!=='string'
+    ||typeof inputs.runsDirectory!=='string')return;
+  const snapshot=JSON.stringify(inputs.model),identity=[inputs.folder,inputs.file,inputs.runsDirectory];
+  const current=()=>{
+    const latest=services.resolveInputs({
+      model:'document.model',folder:'document.folder',file:'document.file',
+      componentId:'graphics.componentId',runsDirectory:'application.runsDirectory',
+    });
+    return latest.model===inputs.model&&JSON.stringify(latest.model)===snapshot
+      &&latest.folder===identity[0]&&latest.file===identity[1]&&latest.runsDirectory===identity[2];
+  };
+  const editorApi=schema?.['x-fullmeta-runtime']?.editorApi||{};
+  await restorePreview({
+    model:inputs.model,componentId:inputs.componentId,folder:inputs.folder,file:inputs.file,
+    runsDirectory:inputs.runsDirectory,compatibilityReady:Promise.resolve(),isCurrent:current,
+    isCurrentComponent:()=>current()&&services.resolveInputs({componentId:'graphics.componentId'}).componentId===inputs.componentId,
+    serverCompatible:services.network.compatible,operationBusy:services.operation.busy,
+    hasEndpoint:name=>typeof editorApi[name]?.route==='string',apiContract:name=>editorApi[name]||null,
+    endpoint:services.network.endpoint,requestJson:services.network.requestJson,
+    showMesh:(mesh,componentId,model)=>services.preview.show(mesh,componentId,model),
+    updateRunbar:services.preview.updateStatus,
+  });
+}

@@ -89,7 +89,10 @@ export function projectSettingsSchema({model,path,schema,getSchema,scenario}){
   if(path?.[0]!=='model')return getSchema(path);
   if(path[1]==='materials'&&Number.isInteger(path[2])){
     const root=structuredClone(getSchema(path.slice(0,3)));
-    for(const field of materialPropertyDescriptors(scenario,root))root.properties[field.key].default=structuredClone(field.default);
+    for(const field of materialPropertyDescriptors(scenario,root)){
+      root.properties[field.key]||=structuredClone(field.schema);
+      root.properties[field.key].default=structuredClone(field.default);
+    }
     return path.length===3?root:at(root,path.slice(3).flatMap(key=>['properties',key]))||getSchema(path);
   }
   if(path[1]==='results'&&Number.isInteger(path[2])){
@@ -149,8 +152,8 @@ export function projectSettingsSchema({model,path,schema,getSchema,scenario}){
     fields.elementOrder.enum=(catalog.mesh.fieldFormulations?.[formulation]?.elementOrders||[]).filter(order=>catalog.mesh.elementOrdersByProfile[profileId]?.includes(order));
     for(const [key,field]of Object.entries(fields))bindChoices(field,'studyDiscretizationChoices',key);
     discretization.default={fieldFormulation:physics?.formulation??profile.defaults.fieldFormulation,elementOrder:profile.defaults.elementOrder};
-    const stationary=catalog.study.preparationByProfile?.[profileId]?.kind==='scenario';
-    properties.type.enum=[stationary?'stationary':'frequencyDomain'];
+    const studyType=scenario?.studyType;
+    if(['stationary','frequencyDomain'].includes(studyType))properties.type.enum=[studyType];
     const solver=properties.solver?.properties;
     if(solver){
       const resolved=solverDisplayValues(model,study,catalog,{fieldFormulation:formulation,elementOrder:order});

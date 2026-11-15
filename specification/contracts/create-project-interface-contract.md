@@ -360,7 +360,7 @@ saved FEM schema and each supported FEM profile.
 
 - [Application catalog loader](../../../../platform/js/application-catalog.js)
 - [Application package loader](../../../../platform/js/application-packages.js)
-- [Launcher project-creation flow](../../../../launcher.js)
+- [Launcher project-creation flow](../../../../platform/workspace/js/launcher.js)
 - [Runtime contract schema](../../../../platform/contracts/fullmeta-model-runtime-1.schema.json)
 - [Generic schema-project package](../../../../platform/ui/widgets/model-editor/schema-project-package.js)
 - [Generic project initializer](../../../../platform/ui/widgets/model-editor/schema-project-initializer.js)

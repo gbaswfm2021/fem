@@ -1,8 +1,8 @@
 // FEM eligibility policy layered over the shared declared-reference service.
 // The service still owns labels, uniqueness and unavailable saved values.
 export function femReferenceOptions(options, resolve) {
-  const {reference, model, settingsDraft} = options;
-  if (settingsDraft?.type !== 'periodicCondition'
+  const {reference, model, settingsDraft, physicsMetadata} = options;
+  if (physicsMetadata?.featureHandlingByType?.[settingsDraft?.type] !== 'periodicPair'
       || reference?.scope !== 'root'
       || JSON.stringify(reference.targetPath) !== JSON.stringify(['model','mesh','periodicPairs'])) {
     return resolve(options);

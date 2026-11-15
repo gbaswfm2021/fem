@@ -1,8 +1,7 @@
 //! Exact-model receipts passed between the common dispatcher and a launched
 //! scenario runtime to avoid repeating already-completed model validation.
 
-#[path = "../../mesh-rust/src/sha256.rs"]
-mod sha256;
+use crate::mesh::sha256;
 
 use serde_json::Value;
 use std::env;

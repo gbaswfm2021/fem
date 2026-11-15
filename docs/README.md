@@ -21,7 +21,36 @@ field Quantity, 3D cut controls and saved Study history are bound in the
 schema/package; their complete live workflows are still being checked.
 Named CAD/entity highlighting has focused projection checks; complete visible
 coverage of selection kinds and geometric combinations remains open.
-Do not treat this development registration as numerical acceptance.
+These observations were recorded before the scenario-discovery and mesher
+reorganisation; they are not acceptance evidence for the current build. Full
+editing, execution and numerical acceptance remain open.
+
+## Physics profiles and runtime
+
+The application currently registers these profiles:
+
+| Profile ID | Physics | Formulations | Study type |
+| --- | --- | --- | --- |
+| `acoustic-2d` | 2D pressure acoustics | `pressure` | Frequency domain |
+| `acoustic-3d` | 3D pressure acoustics | `pressure` | Frequency domain |
+| `em-2d` | 2D electromagnetics | `Ez`, `Hz` | Frequency domain |
+| `em-3d` | 3D electromagnetics | `electric` | Frequency domain |
+| `thermal-2d` | 2D heat conduction | `T` | Stationary |
+
+The scenario registry selects `em-3d` as the default for new projects; an
+existing model keeps its stored profile ID. Solver settings may offer additional
+discretization choices, including the experimental [first-order E–H
+formulation](first-order-eh-formulation.md) for EM3D. A declared option is not
+by itself proof of acceptance for every backend or case.
+
+The editor, mesher and dispatcher compose the scenario contracts with
+`fem.schema.json` when they load. Geometry checking, meshing and numerical
+solvers use the same `fullmeta-fem` executable; Gmsh remains a separate bundled
+third-party tool. Reload the editor and restart native processes after changing
+the registry or a scenario contract. See the [FEM Rust guide](../fem-rust/README.md)
+and [mesher guide](../fem-rust/src/mesh/GUIDE.md) for the native interfaces.
+
+## Editing and validation
 
 The current validation declarations compare selection membership addresses with
 omitted entries treated as Outside, preserving the stored rows. They also
@@ -105,9 +134,10 @@ Agents authoring project JSON should use this public format and the deployed int
 
 - [FEM Model 2](fullmeta-model-2.md): author and interpret project model JSON.
 - [Native mesh artifact](fullmeta-mesh-1.md): interpret the mesh data produced by the native mesher.
+- [FEM Rust and scenario interfaces](fem-rust-and-scenario-interfaces.md): understand native commands, scenario contracts and runner integration.
 - [First-order E-H formulation](first-order-eh-formulation.md): understand the experimental formulation's mathematical scope and constraints.
-- [Workspace files and layouts](../../../docs/workspace-files-and-layout.md): open documents, browse project branches, use menus and resize panes.
-- [Workspace guide](../../../docs/README.md): find applications and individual model files.
+- [Workspace files and layouts](../../../platform/workspace/docs/workspace-files-and-layout.md): open documents, browse project branches, use menus and resize panes.
+- [Workspace guide](../../../platform/workspace/docs/README.md): find applications and individual model files.
 
 The application guide must be updated when the application is delivered to describe its actual supported profiles, editing, validation, Study, cancellation, recovery and result workflows. Until then, format availability and the installed schema's capabilities remain distinct.
 

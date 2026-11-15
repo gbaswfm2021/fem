@@ -20,12 +20,34 @@ Implement only the files required by the catalog, schema declarations, and these
 |---|---|
 | `applications/{APP_ID}/{SCHEMA_FILE}` | Schema-authored tree, Settings, validation rules, widgets, actions, graphics scenes, result recipes, runtime registrations, and storage declarations. |
 | `applications/{APP_ID}/schema-documents.js` | Load and activate the selected schema graph using the documented schema-loader interface. |
+| `applications/{APP_ID}/fem-rust/src/scenarios/` | Register versioned, application-owned solver scenario contracts and their schema, material, Physics, boundary, capability, UI, validation, and executable declarations beside the Rust runner sources. The authored base schema stays scenario-neutral; runtime loaders compose installed scenario declarations. |
 | `applications/{APP_ID}/package.js` | Export the runtime package, launcher profiles, model factory, bindings, adapters, and application UI hooks required by the schema. |
 | `applications/{APP_ID}/js/` | Model-preserving projections, actions, route requests, operation orchestration, result normalization, and application-specific control logic. |
 | `applications/{APP_ID}/ui/` | Graphics-scene conversion, selection/highlight mapping, custom Settings, and result-specific panels. |
 | `applications/{APP_ID}/docs/README.md` | User guide for the implemented application and actual supported workflows, discovered beside its interpreting schema by Help. Update it as part of application delivery and verify it from a real project model. |
-| `applications/{APP_ID}/fem-rust/` | Supplied fixed solver dependency. Integrate through documented entry points without changing native behavior or source. Provision missing build artifacts from unchanged source only through the documented toolchain; record their identities. |
-| `applications/{APP_ID}/mesh-rust/` | Supplied fixed mesher dependency. Integrate through documented entry points without changing native behavior or source. Provision missing build artifacts from unchanged source only through the documented toolchain; record their identities. |
+| `applications/{APP_ID}/fem-rust/` | Native dispatcher and scenario-specific solver implementations. The dispatcher loads the application-owned scenario registry and composes the same profile metadata used by the editor; numerical kernels remain solver-specific. |
+| `applications/{APP_ID}/fem-rust/src/mesh/` | Native mesher. Its schema adapter loads the application-owned scenario registry so dimension, formulation, and mesh capabilities match the editor and dispatcher. |
+
+### Runtime scenario boundary
+
+The authored `fem.schema.json` defines stable Model 2 structure and generic FEM
+behavior. It does not enumerate installed profile IDs, PDE material
+coefficients, profile-specific Physics formulations, or supported boundary
+schemas. Shared condition-processing rules may remain in the base schema;
+scenario contracts determine which boundary and feature types are available
+and contribute profile-specific constraints. The versioned registry at
+`fem-rust/src/scenarios/registry.json` lists sibling contracts named after the
+profile ID without hyphens, followed by `.json`. `schema-documents.js` discovers and composes those
+contracts for the editor. The shared FEM-owned Rust loader in
+`fem-rust/src/scenario_runtime.rs` performs the corresponding composition for the
+dispatcher and mesher.
+
+The three consumers read the same registry and package files at process load;
+they currently compose in memory with separate JavaScript and Rust code. Adding
+or changing a contract requires reloading the editor and restarting native
+processes. A shared content-addressed effective-schema artifact and persisted
+schema/contract hashes are not yet implemented. Keep this distinction visible
+in runtime records and acceptance claims until those identities are added.
 
 Keep implementation ownership explicit. Generic tree, widgets, Settings drafts, document storage, graphics controls, network queue, checked artifact access, and the Operation strip are shared platform responsibilities. The application supplies domain data and bindings plus the application-owned package, adapters, renderers, and runtime registrations required to use them. A required capability missing from the documented shared interfaces or supplied native programs is a blocker with a reproducible case, not permission for an undocumented patch.
 
@@ -66,7 +88,7 @@ Every rule must have an isolated passing input, a failing input, an exact diagno
 2. Author the full schema from the Model 2 contract and application behavior contracts using the Schema Editor. Save, reopen, validate, inspect TDUV counters and branch behavior, and resolve every declaration path.
 3. Build the package and its `js/` and `ui/` interfaces from their named contracts. New visible application components use the supported React + JSX workflow and compiled public provider adapters. Confirm the catalog loads the selected package and schema without application-ID assumptions, with correct mount/update/disposal and shared-widget reuse.
 4. Integrate the supplied mesh and solver programs through the documented registrations. Verify their executable paths, allowed entries, input/output contracts, optimized build selection where available, and failure messages without changing those programs.
-5. Complete Level 1 schema acceptance, the frontend/provider and visible-replay gate, then Level 2 behavior replay using disposable models authored from the frozen contracts. Use explicit fixture/live services and the same visible localhost editor for normal-command checkpoints and watched reload/selected fixture replay. Preserve real input/layout/graphics and native execution checks. The builder must not receive or inspect saved project JSONs during implementation or debugging.
+5. Complete Level 1 schema acceptance, the frontend/provider and visible-replay gate, then Level 2 behavior replay using disposable models authored from the frozen contracts. Identify fixture/live services and the visible editor. Reuse applicable shared evidence for generic checkpoints and watched reload; verify FEM-owned state and hooks where present. Preserve FEM-specific input, layout, graphics and native execution checks. The builder must not receive or inspect saved project JSONs during implementation or debugging.
 6. Repair application-owned schema, package, JavaScript/JSX, action and adapter defects, then rerun the affected schema and behavior cases. Reserve dependency blockers for identified fixed shared/native components; record their exact reproduction and keep the affected outcome unverified.
 
 If a required behavior is unspecified, record the exact affected model path, UI action or route, expected result, observed result, and owner. Resolve the normative requirement before treating implementation judgment as acceptance.

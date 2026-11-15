@@ -4,21 +4,44 @@
 //! Validation checks declarations without preparing or running a Study. Meshing
 //! and scenario programs own run-time checks on generated and numerical data.
 
-mod model_expression;
-mod model_schema;
+pub(crate) mod model_expression;
+pub(crate) mod model_schema;
 mod model_validation;
+mod mesh;
+pub(crate) mod field_output;
+pub(crate) mod integration;
+pub(crate) mod material;
+pub(crate) mod mesh2d;
 mod operation_retry;
+pub(crate) mod preflight_client;
 mod result_clear;
 mod result_resolve;
 mod result_save;
 mod run_record_guard;
-#[path = "../../mesh-rust/src/sha256.rs"]
-mod sha256;
-mod solver_options;
+pub(crate) mod scalar2d;
+pub(crate) mod scenario_solver_cli;
+pub(crate) mod solver_common;
+pub(crate) mod solver_options;
+pub(crate) mod solver_request;
+include!(concat!(env!("OUT_DIR"), "/scenario_runners.rs"));
+#[path = "solver_orchestration.rs"]
+mod solver_orchestration;
+use crate::mesh::sha256;
 #[cfg(test)]
 mod study_lifecycle_tests;
 mod study_prepare;
 mod validation_receipt;
+
+pub(crate) use solver_common::{
+    C, MU0, SolverCache, TET_Q, TRI_Q, c_add, c_mul, c_scale, solve_linear_system,
+};
+pub(crate) use model_schema as json_schema;
+
+pub(crate) fn run_shared_operation(arguments: &[String]) -> std::result::Result<i32, String> {
+    solver_orchestration::run_shared_operation(arguments)
+        .map(|code| if code == std::process::ExitCode::SUCCESS { 0 } else { 1 })
+        .map_err(|error| error.to_string())
+}
 
 use serde_json::{Value, json};
 use std::collections::HashSet;
@@ -30,6 +53,43 @@ use std::process::{Command, Stdio};
 
 const MODEL_FILE: &str = "fem_model.json";
 type Result<T> = std::result::Result<T, String>;
+
+pub(crate) fn study_run_id(model_id: &str, study_id: &str) -> String {
+    let identity = format!("{model_id}\0{study_id}");
+    format!("study-{}", sha256::hex_digest(identity.as_bytes()))
+}
+
+pub(crate) fn safe_remove_tree_without_links(path: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("Could not inspect {}: {error}", path.display()))?;
+    if is_link(&metadata) {
+        return Err(format!("Refusing to remove a directory containing a link at {}.", path.display()));
+    }
+    if metadata.is_dir() {
+        for entry in fs::read_dir(path)
+            .map_err(|error| format!("Could not read {}: {error}", path.display()))?
+        {
+            safe_remove_tree_without_links(&entry.map_err(|error| error.to_string())?.path())?;
+        }
+        fs::remove_dir(path).map_err(|error| format!("Could not remove {}: {error}", path.display()))?;
+    } else if metadata.is_file() {
+        fs::remove_file(path).map_err(|error| format!("Could not remove {}: {error}", path.display()))?;
+    } else {
+        return Err(format!("Refusing to remove an unsupported run artifact at {}.", path.display()));
+    }
+    Ok(())
+}
+
+fn declared_scenario_module(metadata: &Value) -> Result<Option<&str>> {
+    let Some(module) = metadata.get("solverModule") else {
+        return Ok(None);
+    };
+    module
+        .as_str()
+        .filter(|module| !module.trim().is_empty())
+        .map(Some)
+        .ok_or_else(|| "Scenario solverModule must be a non-empty string.".into())
+}
 
 fn application_id_is_valid(value: &str) -> bool {
     let mut characters = value.chars();
@@ -172,6 +232,20 @@ fn windows_path_without_verbatim_prefix(path: &Path) -> PathBuf {
     }
 }
 
+fn same_executable_path(left: &Path, right: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        let left = windows_path_without_verbatim_prefix(left);
+        let right = windows_path_without_verbatim_prefix(right);
+        left.to_string_lossy()
+            .eq_ignore_ascii_case(&right.to_string_lossy())
+    }
+    #[cfg(not(windows))]
+    {
+        left == right
+    }
+}
+
 fn executable_relative_to_root(root: &Path, executable: &Path) -> Option<PathBuf> {
     #[cfg(windows)]
     {
@@ -213,6 +287,21 @@ struct Registry {
 
 #[cfg(test)]
 #[test]
+fn scenario_runner_is_selected_by_package_module_metadata() {
+    let metadata = json!({
+        "profile":{"id":"elastic-3d","dimension":3},
+        "solverModule":"elastic3d"
+    });
+    assert_eq!(declared_scenario_module(&metadata), Ok(Some("elastic3d")));
+    assert_eq!(
+        declared_scenario_module(&json!({"profile":{"id":"elastic-3d"}})),
+        Ok(None)
+    );
+    assert!(declared_scenario_module(&json!({"solverModule":false})).is_err());
+}
+
+#[cfg(test)]
+#[test]
 fn missing_preparation_route_names_the_stage_and_selection() {
     let registry = Registry {
         root: PathBuf::new(),
@@ -228,9 +317,53 @@ fn missing_preparation_route_names_the_stage_and_selection() {
 }
 
 fn main() {
-    let entry = env::args().nth(1).unwrap_or_default();
+    let raw_arguments = env::args().skip(1).collect::<Vec<_>>();
+    let entry = raw_arguments.first().map(String::as_str).unwrap_or_default();
+    if matches!(
+        entry,
+        "check"
+            | "compile"
+            | "preview"
+            | "mesh"
+            | "build"
+            | "--mesh-only"
+            | "--operation-check"
+            | "--operation-compile"
+    ) {
+        let status = mesh::dispatch(raw_arguments);
+        std::process::exit(if status == std::process::ExitCode::SUCCESS {
+            0
+        } else {
+            1
+        });
+    }
+    if raw_arguments.first().map(String::as_str) == Some("--scenario-module") {
+        let Some(module) = raw_arguments.get(1) else {
+            eprintln!("fullmeta-fem: --scenario-module requires a registered module ID.");
+            std::process::exit(1);
+        };
+        if !scenario_runner_contains(module) {
+            eprintln!(
+                "fullmeta-fem: scenario runner module {module:?} is not available in this build."
+            );
+            std::process::exit(1);
+        }
+        let code = match run_scenario_runner(module, &raw_arguments[2..]) {
+            Ok(code) => code,
+            Err(error) => {
+                eprintln!("fullmeta-fem scenario runner {module}: {error}");
+                1
+            }
+        };
+        std::process::exit(code);
+    }
+    let entry = raw_arguments.first().cloned().unwrap_or_default();
     if entry == "--describe-operations" {
-        println!("{}", fullmeta_operation_contracts::describe(Some("fem")));
+        if raw_arguments.get(1).map(String::as_str) == Some("mesh") {
+            println!("{}", fullmeta_operation_contracts::describe(Some("mesh")));
+        } else {
+            println!("{}", operation_description());
+        }
         return;
     }
     let contract = match fullmeta_operation_contracts::binding_from_environment("fem", &entry) {
@@ -265,6 +398,19 @@ fn main() {
         }
     };
     std::process::exit(code);
+}
+
+fn operation_description() -> Value {
+    let mut description = fullmeta_operation_contracts::describe(Some("fem"));
+    let mesh = fullmeta_operation_contracts::describe(Some("mesh"));
+    if let (Some(operations), Some(mesh_operations)) = (
+        description.get_mut("operations").and_then(Value::as_object_mut),
+        mesh.get("operations").and_then(Value::as_object),
+    ) {
+        operations.extend(mesh_operations.iter().map(|(id, operation)| (id.clone(), operation.clone())));
+    }
+    description["programs"] = json!(["fem", "mesh"]);
+    description
 }
 
 fn run(operation_contract: Option<&fullmeta_operation_contracts::ContractIdentity>) -> Result<i32> {
@@ -496,14 +642,17 @@ fn run(operation_contract: Option<&fullmeta_operation_contracts::ContractIdentit
                     return Ok(0);
                 }
                 registry.require_valid_dispatch(model, scenario, study_id)?;
+                let scenario_module = registry.scenario_module(model)?;
                 let executable = registry.scenario_executable(model, study_id)?;
                 launch_preflighted(
                     &registry.root,
                     &executable,
+                    scenario_module.as_deref(),
                     arguments,
                     Some(&input),
                     model,
                     server_run.as_ref().map(|run| run.id.as_str()),
+                    operation_contract.map(|contract| contract.id.as_str()),
                 )
             })();
             let reported_failure =
@@ -576,8 +725,18 @@ fn run(operation_contract: Option<&fullmeta_operation_contracts::ContractIdentit
             require_valid_report(&report)?;
             registry.require_preparation_route(&model, options.study_id.as_deref())?;
             registry.require_valid_dispatch(&model, scenario, options.study_id.as_deref())?;
+            let scenario_module = registry.scenario_module(&model)?;
             let executable = registry.scenario_executable(&model, options.study_id.as_deref())?;
-            launch_preflighted(&registry.root, &executable, arguments, None, &model, None)
+            launch_preflighted(
+                &registry.root,
+                &executable,
+                scenario_module.as_deref(),
+                arguments,
+                None,
+                &model,
+                None,
+                None,
+            )
         }
         mode => Err(format!(
             "The CLI declaration selects an unknown dispatcher action {mode:?}."
@@ -613,12 +772,36 @@ impl ServerRun {
             Err(error) => return Err(format!("Could not create run storage: {error}")),
         }
         let runs = checked_descendant(project, Path::new(&runs_name), true)?;
-        let directory = runs.join(&id);
+        let model_id = model
+            .pointer("/metadata/id")
+            .and_then(Value::as_str)
+            .ok_or("The Study model has no metadata.id.")?;
+        let run_id = study_run_id(model_id, study_id);
+        let directory = runs.join(&run_id);
+        match fs::symlink_metadata(&directory) {
+            Ok(metadata) if is_link(&metadata) || !metadata.is_dir() => {
+                return Err("The stable Study run path must be a real directory.".into());
+            }
+            Ok(_) => {
+                let previous_path = directory.join("run.json");
+                if previous_path.is_file() {
+                    let previous = read_json(&previous_path)?;
+                    if previous.get("state").and_then(Value::as_str) == Some("running")
+                        && run_liveness(&previous) == "active"
+                    {
+                        return Err(format!(
+                            "Study {study_id:?} already has an active run ({}).",
+                            previous.get("operationId").and_then(Value::as_str).unwrap_or("unknown operation")
+                        ));
+                    }
+                }
+                safe_remove_tree_without_links(&directory)?;
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("Could not inspect the Study run directory: {error}")),
+        }
         fs::create_dir(&directory).map_err(|error| {
-            format!(
-                "Could not create Study run {}: {error}",
-                directory.display()
-            )
+            format!("Could not create Study run {}: {error}", directory.display())
         })?;
         let path = directory.join("run.json");
         let study = model
@@ -632,7 +815,7 @@ impl ServerRun {
         let stage = "preparation";
         let snapshot_bytes = serde_json::to_vec(model).map_err(|error| error.to_string())?;
         let mut record = json!({
-            "schema":"fullmeta-run/1", "kind":"study", "runId":id, "operationId":id,
+            "schema":"fullmeta-run/1", "kind":"study", "runId":run_id, "operationId":id,
             "state":"running", "startedAt":utc_timestamp(), "completedAt":null,
             "model":{"file":document_name,"id":model.pointer("/metadata/id"),"snapshot":model,
                 "sha256":sha256::hex_digest(&snapshot_bytes)},
@@ -665,11 +848,11 @@ impl ServerRun {
             .map_err(|error| format!("Could not write the Study run manifest: {error}"))?;
         println!(
             "{}",
-            json!({"type":"start","state":"running","stage":stage,"runId":id,"operationId":id,
+            json!({"type":"start","state":"running","stage":stage,"runId":run_id,"operationId":id,
             "message":"Preparing the Study…","completedPoints":0,"totalPoints":null})
         );
         io::stdout().flush().map_err(|error| error.to_string())?;
-        Ok(Self { id, path })
+        Ok(Self { id: run_id, path })
     }
 
     fn fail(&self, diagnostic: &str) -> Result<()> {
@@ -1287,6 +1470,20 @@ fn utc_timestamp() -> String {
 }
 
 impl Registry {
+    fn scenario_module(&self, model: &Value) -> Result<Option<String>> {
+        let profile = model_validation::declared_profile(model)?;
+        let metadata = model_schema::scenario_metadata_for_profile(profile)?;
+        let Some(module) = declared_scenario_module(metadata)? else {
+            return Ok(None);
+        };
+        if !scenario_runner_contains(module) {
+            return Err(format!(
+                "Scenario {profile:?} declares solver module {module:?}, but this runtime was built without it. Rebuild the FEM runtime from the registered scenario package."
+            ));
+        }
+        Ok(Some(module.to_string()))
+    }
+
     fn require_preparation_route(&self, model: &Value, study_id: Option<&str>) -> Result<()> {
         let profile = model_validation::declared_profile(model)?;
         let context = format!(
@@ -1299,7 +1496,7 @@ impl Registry {
             .and_then(|profiles| profiles.get(profile))
             .ok_or_else(|| format!("{context}: preparationByProfile registration is missing."))?;
         match preparation.get("kind").and_then(Value::as_str) {
-            Some("frequencyPlan" | "configuredFrequencyRequest") => Ok(()),
+            Some("frequencyPlan" | "configuredFrequencyRequest" | "stationaryPlan") => Ok(()),
             Some("scenario") => {
                 let id = preparation
                     .get("programId")
@@ -1503,6 +1700,7 @@ impl Registry {
 
     fn scenario_executable(&self, model: &Value, requested_study: Option<&str>) -> Result<PathBuf> {
         let profile = model_validation::declared_profile(model)?;
+        let scenario_module = self.scenario_module(model)?;
         let studies = model.pointer("/model/study").and_then(Value::as_array);
         let study = if let Some(id) = requested_study {
             Some(
@@ -1564,12 +1762,20 @@ impl Registry {
                 name.to_string()
             }
         };
-        model_schema::validate_declaration(
-            "x-fullmeta-launchValidation",
-            &json!({
-                "destinationName":normalize_name(&name), "launcherName":normalize_name(dispatcher_name),
-            }),
-        )?;
+        if let Some(module) = scenario_module {
+            if !same_executable_path(&candidate, &self.executable) {
+                return Err(format!(
+                    "Scenario {profile:?} declares in-process runner {module:?}, but its registered executable does not resolve to this FEM dispatcher."
+                ));
+            }
+        } else {
+            model_schema::validate_declaration(
+                "x-fullmeta-launchValidation",
+                &json!({
+                    "destinationName":normalize_name(&name), "launcherName":normalize_name(dispatcher_name),
+                }),
+            )?;
+        }
         Ok(candidate)
     }
 }
@@ -1786,27 +1992,133 @@ fn require_valid_report(report: &Value) -> Result<()> {
     Err(format!("Model preflight failed:\n{errors}"))
 }
 
+#[derive(Clone)]
+struct OperationTerminalTypes {
+    discriminator: String,
+    success: HashSet<String>,
+    failure: HashSet<String>,
+}
+
+impl OperationTerminalTypes {
+    fn from_contract(operation_id: &str) -> Result<Self> {
+        let declaration = fullmeta_operation_contracts::descriptor(operation_id)
+            .map_err(|issue| issue.to_string())?;
+        let terminal = declaration
+            .get("terminal")
+            .and_then(Value::as_object)
+            .ok_or_else(|| {
+                format!("Operation contract {operation_id} has no terminal event declaration.")
+            })?;
+        let discriminator = terminal
+            .get("discriminator")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                format!("Operation contract {operation_id} has no terminal discriminator.")
+            })?
+            .to_string();
+        let read_types = |key: &str| -> Result<HashSet<String>> {
+            let values = terminal.get(key).and_then(Value::as_array).ok_or_else(|| {
+                format!("Operation contract {operation_id} has no terminal {key} event types.")
+            })?;
+            let types = values
+                .iter()
+                .map(|value| {
+                    value
+                        .as_str()
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_string)
+                        .ok_or_else(|| format!("Operation contract {operation_id} has an invalid terminal {key} event type."))
+                })
+                .collect::<Result<HashSet<_>>>()?;
+            if types.is_empty() {
+                return Err(format!(
+                    "Operation contract {operation_id} has no terminal {key} event types."
+                ));
+            }
+            Ok(types)
+        };
+        let success = read_types("success")?;
+        let failure = read_types("failure")?;
+        if !success.is_disjoint(&failure) {
+            return Err(format!(
+                "Operation contract {operation_id} classifies an event as both successful and failed."
+            ));
+        }
+        Ok(Self {
+            discriminator,
+            success,
+            failure,
+        })
+    }
+
+    fn event_type<'a>(&self, event: &'a Value) -> Option<&'a str> {
+        event.get(&self.discriminator).and_then(Value::as_str)
+    }
+
+    fn is_terminal(&self, event: &Value) -> bool {
+        self.event_type(event)
+            .is_some_and(|kind| self.success.contains(kind) || self.failure.contains(kind))
+    }
+
+    fn is_success(&self, event: &Value) -> bool {
+        self.event_type(event)
+            .is_some_and(|kind| self.success.contains(kind))
+    }
+}
+
+#[derive(Default)]
+struct ChildEventCapture {
+    terminal: Option<Value>,
+    event_after_terminal: bool,
+}
+
+impl ChildEventCapture {
+    /// Return true while events may be forwarded. Terminal events are held until
+    /// the child exits so the dispatcher can emit exactly one terminal event.
+    fn record(&mut self, event: Value, terminal_types: &OperationTerminalTypes) -> bool {
+        if self.terminal.is_some() {
+            self.event_after_terminal = true;
+            return false;
+        }
+        if terminal_types.is_terminal(&event) {
+            self.terminal = Some(event);
+            false
+        } else {
+            true
+        }
+    }
+}
+
 fn launch_preflighted(
     root: &Path,
     executable: &Path,
+    scenario_module: Option<&str>,
     arguments: &[String],
     input: Option<&[u8]>,
     model: &Value,
     run_id: Option<&str>,
+    operation_id: Option<&str>,
 ) -> Result<i32> {
-    let capture_completion =
-        run_id.is_some() && env::var_os("FULLMETA_OPERATION_CONTRACT").is_some();
+    let capture_events = run_id.is_some() && operation_id.is_some();
+    let terminal_types = operation_id
+        .filter(|_| capture_events)
+        .map(OperationTerminalTypes::from_contract)
+        .transpose()?;
     let mut command = Command::new(executable);
     command
-        .args(arguments)
         .current_dir(root)
         .env_remove("FULLMETA_OPERATION_CONTRACT")
-        .stdout(if capture_completion {
+        .stdout(if capture_events {
             Stdio::piped()
         } else {
             Stdio::inherit()
         })
         .stderr(Stdio::inherit());
+    if let Some(module) = scenario_module {
+        command.arg("--scenario-module").arg(module);
+    }
+    command.args(arguments);
     let model_bytes = serde_json::to_vec(model)
         .map_err(|error| format!("Could not prepare the validated model receipt: {error}"))?;
     command.env(
@@ -1832,25 +2144,43 @@ fn launch_preflighted(
             executable.display()
         )
     })?;
-    let stream = if capture_completion {
+    let stream = if capture_events {
         let stdout = child
             .stdout
             .take()
             .ok_or("The Study worker has no event pipe.")?;
-        Some(std::thread::spawn(move || -> Result<Option<Value>> {
-            let mut complete = None;
+        let terminal_types = terminal_types
+            .as_ref()
+            .expect("captured events have a contract")
+            .clone();
+        let operation_id = operation_id
+            .expect("captured events have a contract")
+            .to_string();
+        Some(std::thread::spawn(move || -> Result<ChildEventCapture> {
+            let mut capture = ChildEventCapture::default();
             for line in BufReader::new(stdout).lines() {
                 let line = line.map_err(|error| error.to_string())?;
+                if capture.terminal.is_some() {
+                    capture.event_after_terminal = true;
+                    continue;
+                }
                 let event: Value = serde_json::from_str(&line)
                     .map_err(|error| format!("The Study worker emitted invalid NDJSON: {error}"))?;
-                if event["type"] == "complete" {
-                    complete = Some(event);
-                } else {
+                if let Err(issues) =
+                    fullmeta_operation_contracts::validate_event(&operation_id, &event)
+                {
+                    return Err(issues
+                        .into_iter()
+                        .map(|issue| issue.to_string())
+                        .collect::<Vec<_>>()
+                        .join("\n"));
+                }
+                if capture.record(event, &terminal_types) {
                     println!("{line}");
                     io::stdout().flush().map_err(|error| error.to_string())?;
                 }
             }
-            Ok(complete)
+            Ok(capture)
         }))
     } else {
         None
@@ -1870,15 +2200,41 @@ fn launch_preflighted(
         )
     })?;
     if let Some(stream) = stream {
-        let completion = stream
+        let capture = stream
             .join()
             .map_err(|_| "The Study event reader stopped unexpectedly.")??;
-        if status.success() {
-            let event = completion.ok_or("The Study worker exited without a completion event.")?;
-            operation_retry::save_completion(root, run_id.expect("captured run"), &event)?;
-            println!("{event}");
-            io::stdout().flush().map_err(|error| error.to_string())?;
+        if capture.event_after_terminal {
+            let terminal_type = capture
+                .terminal
+                .as_ref()
+                .and_then(|event| terminal_types.as_ref()?.event_type(event))
+                .unwrap_or("unknown");
+            let detail = capture
+                .terminal
+                .as_ref()
+                .and_then(|event| event.get("message"))
+                .and_then(Value::as_str)
+                .filter(|message| !message.trim().is_empty())
+                .map(|message| format!(" Terminal message: {message}"))
+                .unwrap_or_default();
+            return Err(format!(
+                "The Study worker emitted an event after its terminal event ({terminal_type}).{detail}"
+            ));
         }
+        let terminal_event = capture
+            .terminal
+            .ok_or("The Study worker exited without a terminal event.")?;
+        let terminal_types = terminal_types.expect("captured events have a contract");
+        if status.success() && terminal_types.is_success(&terminal_event) {
+            operation_retry::save_completion(root, run_id.expect("captured run"), &terminal_event)?;
+        } else if !status.success() && terminal_types.is_success(&terminal_event) {
+            return Err(format!(
+                "The Study worker exited with code {} after emitting a success terminal event.",
+                status.code().unwrap_or(1)
+            ));
+        }
+        println!("{terminal_event}");
+        io::stdout().flush().map_err(|error| error.to_string())?;
     }
     if let Err(error) = input_result {
         // A child that rejects input may close its pipe early. Preserve its own

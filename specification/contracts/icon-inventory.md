@@ -42,6 +42,7 @@ This catalog is a normative visual specification for the target application inte
 | Sweep result | ICON-034 |
 | Union feature | ICON-035 |
 | Document or project root | ICON-036 |
+| Definition collection group | ICON-037 |
 
 ## Schema Editor tree bindings
 
@@ -50,7 +51,7 @@ Bind the SVG to the declaration that the Schema Editor projects for each row. St
 | Projected schema row | Owning declaration | Icon token |
 | --- | --- | --- |
 | Document title | Document root `#` | ICON-036 |
-| Definitions | Definitions group descriptor in `x-fullmeta-ui-tree` | No icon |
+| Definitions | Definitions group descriptor in `x-fullmeta-ui-tree` | ICON-037 |
 | Parameters | Model `parameters` property | ICON-020 |
 | Global variables | Model `variables` property | ICON-024 |
 | Pointwise variables | Model `pointwiseVariables` property | ICON-021 |
@@ -72,17 +73,17 @@ Bind the SVG to the declaration that the Schema Editor projects for each row. St
 | Results | Model `results` property | ICON-022 |
 | Field result, Sweep result, Sweep plot | Each concrete result or plot declaration | ICON-011, ICON-034, ICON-033 respectively |
 
-Use the shared Schema Editor presentation authoring on the owning declaration or the root contract authoring tools for the root envelope. After Preview, Apply and Save, reopen the schema and expand the declarations to verify the saved bindings. The folder icon belongs to the document title. The Definitions descriptor leaves the icon unset. `ICON-001` and `ICON-008` belong to explicitly acoustic and electromagnetic family roles where exposed. The shared Physics row uses `ICON-032` for every family.
+Use the shared Schema Editor presentation authoring on the owning declaration or the root contract authoring tools for the root envelope. After Preview, Apply and Save, reopen the schema and expand the declarations to verify the saved bindings. The folder icon belongs to the document title. The Definitions group descriptor owns `ICON-037`. `ICON-001` and `ICON-008` belong to explicitly acoustic and electromagnetic family roles where exposed. The shared Physics row uses `ICON-032` for every family.
 
 ## Model Editor tree bindings
 
-Render the project title with `ICON-036` and the Definitions heading without an icon. Use the collection and item roles in the Schema Editor table for the corresponding project rows. A collection glyph belongs to its heading. A concrete item's selected variant determines its glyph after active profile and item resolution. In particular, Geometry and each Union or Intersection Features heading use `ICON-013`. Nested Box, Rectangle, Circle and Cylinder rows use `ICON-003`, `ICON-027`, `ICON-004` and `ICON-006` respectively at every supported nesting depth. Apply the same concrete-variant rule to the other primitive and operation rows. Collection and add-action artwork belongs to the collection and action surfaces.
+Render the project title with `ICON-036` and the Definitions heading with `ICON-037`. Use the collection and item roles in the Schema Editor table for the corresponding project rows. A collection glyph belongs to its heading. A concrete item's selected variant determines its glyph after active profile and item resolution. In particular, Geometry and each Union or Intersection Features heading use `ICON-013`. Nested Box, Rectangle, Circle and Cylinder rows use `ICON-003`, `ICON-027`, `ICON-004` and `ICON-006` respectively at every supported nesting depth. Apply the same concrete-variant rule to the other primitive and operation rows. Collection and add-action artwork belongs to the collection and action surfaces.
 
 The Physics row at `/model/physics` uses `ICON-032` in every supported profile. Each boundary condition resolves its own glyph. A Parameter sweep row at `/model/study/<index>/parameterSweep` uses `ICON-025` whenever that object is present. Preserve this binding through active profile and Study variant resolution. A Study without a parameter sweep has no sweep row.
 
 ## Icon acceptance
 
-Check both surfaces. In the saved Schema Editor projection, record the row path, resolved source declaration or group descriptor, visible row label, expected token and observed SVG for each binding in the table. For the collection rows that share `ICON-013`, separately verify that the Geometry collection reads **Geometry features** and that the collections inside Union and Intersection read **Features**. In the rendered tree, verify the SVG against the matching literal payload below after decoding the image source and normalizing line endings and surrounding whitespace. Check the absence of an icon on Definitions as a separate assertion. A count of SVG payloads or populated icon fields does not establish the row bindings.
+Check both surfaces. In the saved Schema Editor projection, record the row path, resolved source declaration or group descriptor, visible row label, expected token and observed SVG for each binding in the table. For the collection rows that share `ICON-013`, separately verify that the Geometry collection reads **Geometry features** and that the collections inside Union and Intersection read **Features**. In the rendered tree, verify the SVG against the matching literal payload below after decoding the image source and normalizing line endings and surrounding whitespace. Verify that Definitions uses `ICON-037` from its group descriptor rather than inheriting the document-root icon. A count of SVG payloads or populated icon fields does not establish the row bindings.
 
 Exercise the Model Editor with disposable documents written from the specification. Cover the concrete primitive rows at root and within composed geometry, both Union and Intersection Features collections, Physics across supported profiles, condition variants, and a harmonic Study with and without a sweep. For each exercised row, record the model path, role, visible label, and decoded SVG or expected absence. In each editor, capture the expanded Geometry features and nested Features rows in the same tree state so the evidence shows both headings and their parent paths. A valid Schema Editor projection and a passing Model Editor tree are separate observations.
 
@@ -346,6 +347,13 @@ Exercise the Model Editor with disposable documents written from the specificati
 
 ```svg
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#8bdacb" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 4a1.5 1.5 0 0 1 1.5-1.5h3l1.5 2H13A1.5 1.5 0 0 1 14.5 6v6A1.5 1.5 0 0 1 13 13.5H3A1.5 1.5 0 0 1 1.5 12z"/><path d="M1.8 6h12.4"/></svg>
+```
+
+### ICON-037
+
+
+```svg
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#8bdacb" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"><circle cx="3.3" cy="3.2" r="1.25"/><path d="M6 3.2h8M6 8h8M6 12.8h8"/><path d="m3.3 6.6 1.4 1.4-1.4 1.4-1.4-1.4z"/><circle cx="3.3" cy="12.8" r="1.25"/></svg>
 ```
 
 

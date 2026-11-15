@@ -15,7 +15,7 @@ export async function runMeshBuild(services,readInputs,execution){
   if(document.hasUnsavedChanges())await document.save();
   const current=readInputs();
   if(identity!==JSON.stringify([current.folder,current.file])||snapshot!==JSON.stringify(current.model)||document.hasUnsavedChanges())throw new Error('The document changed while saving. Save the latest inputs and build again.');
-  const id=operation.createId(),runId=`mesh-${id}`,cwd=`${initial.folder}/${initial.runs}/${runId}`,kind=execution.workflow.operationKind;
+  const id=operation.createId(),runId='mesh',cwd=`${initial.folder}/${initial.runs}/mesh`,kind=execution.workflow.operationKind;
   const values={...initial,runId,operationId:id,modelFile:`${initial.folder}/${initial.file}`};
   const args=execution.command.args.map(arg=>Object.hasOwn(arg,'value')?arg.value:values[arg.input]);
   if(args.some(arg=>typeof arg!=='string'))throw new Error('A declared mesh argument could not be resolved.');

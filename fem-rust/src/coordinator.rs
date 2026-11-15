@@ -2,11 +2,10 @@
 mod run_artifacts;
 #[path = "run_record_guard.rs"]
 mod run_record_guard;
-#[path = "../../mesh-rust/src/sha256.rs"]
-mod sha256;
+use crate::mesh::sha256;
 
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
@@ -299,21 +298,8 @@ fn process_is_alive(pid: u32) -> bool {
     }
 }
 
-pub(crate) fn dispatch() -> ExitCode {
-    #[cfg(any(
-        feature = "solver-native-acoustic2d",
-        feature = "solver-native-acoustic3d",
-        feature = "solver-native-em2d",
-        feature = "solver-native-em3d"
-    ))]
-    let result = entry();
-    #[cfg(not(any(
-        feature = "solver-native-acoustic2d",
-        feature = "solver-native-acoustic3d",
-        feature = "solver-native-em2d",
-        feature = "solver-native-em3d"
-    )))]
-    let result = dispatch_to_scenario_executable();
+pub(crate) fn dispatch_with_arguments(arguments: &[String]) -> ExitCode {
+    let result = entry(arguments);
     match result {
         Ok(code) => code,
         Err(error) => {
@@ -323,126 +309,6 @@ pub(crate) fn dispatch() -> ExitCode {
     }
 }
 
-/// The public coordinator validates the project and selects a scenario binary
-/// from the capability catalog. Each scenario binary then owns its full run.
-fn dispatch_to_scenario_executable() -> Result<ExitCode> {
-    let arguments: Vec<String> = env::args().skip(1).collect();
-    let root = repository_root()?;
-    if arguments
-        .first()
-        .is_some_and(|argument| argument == "--server")
-    {
-        let model = read_stdin_json()?;
-        validate_model(&model)?;
-        let executable = scenario_executable(&root, &model, None)?;
-        let mut child = crate::model_schema::command(&executable)?
-            .arg("--server")
-            .current_dir(&root)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .map_err(|error| {
-                Failure(format!(
-                    "Could not start scenario executable {}: {error}",
-                    executable.display()
-                ))
-            })?;
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or("Could not provide model JSON to the scenario executable")?;
-        stdin.write_all(&serde_json::to_vec(&model)?)?;
-        drop(stdin);
-        return Ok(if child.wait()?.success() {
-            ExitCode::SUCCESS
-        } else {
-            ExitCode::FAILURE
-        });
-    }
-    if arguments.is_empty()
-        || arguments
-            .iter()
-            .any(|argument| argument == "--help" || argument == "-h")
-    {
-        println!(
-            "Usage: fullmeta-fem <project-folder-name> [--validate] [--study <study-id>] [--csv <filename>]\\nValidates the saved model and dispatches complete Study runs to the scenario executable."
-        );
-        return Ok(if arguments.is_empty() {
-            ExitCode::FAILURE
-        } else {
-            ExitCode::SUCCESS
-        });
-    }
-
-    let folder = project_folder_name(&arguments[0])?;
-    let mut validate_only = false;
-    let mut study_id = None;
-    let mut csv_filename = None;
-    let mut index = 1;
-    while index < arguments.len() {
-        match arguments[index].as_str() {
-            "--validate" => validate_only = true,
-            "--study" => {
-                index += 1;
-                study_id = Some(
-                    arguments
-                        .get(index)
-                        .ok_or("--study requires an ID")?
-                        .clone(),
-                );
-            }
-            "--csv" => {
-                index += 1;
-                csv_filename = Some(
-                    arguments
-                        .get(index)
-                        .ok_or("--csv requires a filename")?
-                        .clone(),
-                );
-            }
-            option => return Err(format!("Unknown option {option}. Use --help for usage.").into()),
-        }
-        index += 1;
-    }
-    if validate_only && (study_id.is_some() || csv_filename.is_some()) {
-        return Err(
-            "--validate cannot be combined with --study or --csv; it validates the complete model."
-                .into(),
-        );
-    }
-    let project = safe_project_directory(&root, &folder)?;
-    let model_filename = MODEL_FILE;
-    let model_path = safe_project_file(&project, model_filename)?;
-    let model: Value = serde_json::from_slice(&fs::read(&model_path)?)
-        .map_err(|error| Failure(format!("Invalid {} JSON: {error}", model_path.display())))?;
-    validate_model(&model)?;
-    if validate_only {
-        println!("Model validation successful.");
-        return Ok(ExitCode::SUCCESS);
-    }
-
-    let executable = scenario_executable(&root, &model, study_id.as_deref())?;
-    let status = crate::model_schema::command(&executable)?
-        .args(&arguments)
-        .current_dir(&root)
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status()
-        .map_err(|error| {
-            Failure(format!(
-                "Could not start scenario executable {}: {error}",
-                executable.display()
-            ))
-        })?;
-    Ok(if status.success() {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::FAILURE
-    })
-}
-
 fn read_stdin_json() -> Result<Value> {
     let mut text = String::new();
     io::stdin().read_to_string(&mut text)?;
@@ -450,75 +316,7 @@ fn read_stdin_json() -> Result<Value> {
         .map_err(|error| Failure(format!("Invalid service request JSON: {error}")))
 }
 
-fn option_value<'a>(arguments: &'a [String], option: &str) -> Option<&'a str> {
-    arguments
-        .windows(2)
-        .find(|pair| pair[0] == option)
-        .map(|pair| pair[1].as_str())
-}
-
-fn scenario_executable(
-    root: &Path,
-    model: &Value,
-    requested_study: Option<&str>,
-) -> Result<PathBuf> {
-    let profile = model
-        .pointer("/scenario/profileId")
-        .and_then(Value::as_str)
-        .ok_or("The model does not declare scenario.profileId.")?;
-    let study_items = model
-        .pointer("/model/study")
-        .and_then(Value::as_array)
-        .ok_or("model.model.study must be an array")?;
-    let study = match requested_study {
-        Some(id) => study_items
-            .iter()
-            .find(|study| study.get("id").and_then(Value::as_str) == Some(id))
-            .ok_or_else(|| Failure(format!("Unknown Study ID {id:?}.")))?,
-        None => study_items
-            .first()
-            .ok_or("The model does not contain a Study to run")?,
-    };
-    let capabilities = crate::json_schema::engine_capabilities()?;
-    let backend = study
-        .pointer("/solver/backend")
-        .and_then(Value::as_str)
-        .or_else(|| {
-            capabilities
-                .pointer("/study/solverDefaults/backend")
-                .and_then(Value::as_str)
-        })
-        .ok_or_else(|| Failure("No shared default solver backend is configured.".into()))?;
-    let runtime = capabilities.pointer("/study/solverRuntimesByProfile")
-        .and_then(|profiles| profiles.get(profile))
-        .and_then(|backends| backends.get(backend))
-        .ok_or_else(|| Failure(format!("No scenario executable is registered for profile {profile:?} and backend {backend:?}.")))?;
-    if runtime.get("kind").and_then(Value::as_str) != Some("executable") {
-        return Err(Failure(format!(
-            "The configured runtime for profile {profile:?} must be an executable."
-        )));
-    }
-    let program_id = runtime
-        .get("programId")
-        .and_then(Value::as_str)
-        .ok_or("Capability runtime is missing its registered program ID")?;
-    let configured_name = crate::json_schema::external_program_executable(program_id)?;
-    let file_name = Path::new(configured_name)
-        .file_name()
-        .and_then(|value| value.to_str());
-    if file_name != Some(configured_name) || configured_name.contains(['/', '\\', ':']) {
-        return Err(Failure(format!(
-            "Unsafe scenario executable name {configured_name:?} in capability catalog."
-        )));
-    }
-    let stem = configured_name
-        .strip_suffix(".exe")
-        .unwrap_or(configured_name);
-    executable(root, stem)
-}
-
-fn entry() -> Result<ExitCode> {
-    let arguments: Vec<String> = env::args().skip(1).collect();
+fn entry(arguments: &[String]) -> Result<ExitCode> {
     if arguments
         .first()
         .is_some_and(|argument| argument == "--validate")
@@ -693,26 +491,6 @@ fn project_folder_name(input: &str) -> Result<String> {
     Ok(name.to_string())
 }
 
-fn safe_project_directory(root: &Path, folder: &str) -> Result<PathBuf> {
-    let name = project_folder_name(folder)?;
-    let projects = root.join("projects");
-    let projects_meta = fs::symlink_metadata(&projects)
-        .map_err(|error| Failure(format!("Could not open projects/: {error}")))?;
-    if projects_meta.file_type().is_symlink() || !projects_meta.is_dir() {
-        return Err("projects/ must be a real directory beside the application.".into());
-    }
-    let candidate = projects.join(&name);
-    let meta = fs::symlink_metadata(&candidate).map_err(|error| {
-        Failure(format!(
-            "Project folder projects/{name} is unavailable: {error}"
-        ))
-    })?;
-    if meta.file_type().is_symlink() || !meta.is_dir() {
-        return Err("Project folders must be real directories, not symbolic links.".into());
-    }
-    Ok(candidate)
-}
-
 fn safe_model_directory(root: &Path, folder: &str) -> Result<(String, PathBuf)> {
     let relative = folder.trim();
     if relative.is_empty()
@@ -801,21 +579,6 @@ fn configured_runs_directory() -> String {
     RUNS_DIR.into()
 }
 
-fn safe_project_file(project: &Path, filename: &str) -> Result<PathBuf> {
-    if filename != MODEL_FILE {
-        return Err(format!("The model file must be named {MODEL_FILE}.").into());
-    }
-    let path = project.join(filename);
-    let meta = fs::symlink_metadata(&path)
-        .map_err(|error| Failure(format!("Could not read {filename}: {error}")))?;
-    if meta.file_type().is_symlink() || !meta.is_file() {
-        return Err(
-            "The model manifest must be a regular file directly in its project folder.".into(),
-        );
-    }
-    Ok(path)
-}
-
 fn run_request(input: ProjectInput, sink: &EventSink, cli: bool) -> Result<()> {
     let root = repository_root()?;
     let (model_folder, project) = safe_model_directory(&root, &input.folder)?;
@@ -884,17 +647,31 @@ fn run_request(input: ProjectInput, sink: &EventSink, cli: bool) -> Result<()> {
         .pointer("/scenario/profileId")
         .and_then(Value::as_str)
         .unwrap_or("");
-    let is_model2_native_profile = model_format == MODEL_FORMAT_V2
-        && matches!(profile_id, "acoustic-2d" | "acoustic-3d" | "em-2d");
-    let is_model2_em3d = model_format == MODEL_FORMAT_V2 && profile_id == "em-3d";
     if model_format != MODEL_FORMAT_V2 {
         return Err(format!("fullmeta-fem only supports {MODEL_FORMAT_V2} projects.").into());
     }
-    if !is_model2_native_profile && !is_model2_em3d {
+    let study_type = study
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or("The selected Study must declare its type.")?;
+    let scenario = crate::model_schema::scenario_metadata_for_profile(profile_id)?;
+    let declared_study_type = scenario
+        .get("studyType")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            Failure(format!(
+                "Scenario {profile_id:?} does not declare studyType."
+            ))
+        })?;
+    if declared_study_type != study_type {
         return Err(format!(
-            "fullmeta-fem does not yet have an execution path for Model 2 profile {profile_id:?}."
-        )
-        .into());
+            "Study type {study_type:?} is not supported by scenario {profile_id:?} (declared {declared_study_type:?})."
+        ).into());
+    }
+    if study_type == "stationary"
+        && scenario.get("supportsStationary").and_then(Value::as_bool) != Some(true)
+    {
+        return Err(format!("Scenario {profile_id:?} does not support stationary studies.").into());
     }
     let component_id = "model";
 
@@ -907,7 +684,25 @@ fn run_request(input: ProjectInput, sink: &EventSink, cli: bool) -> Result<()> {
                 error.0
             ))
         })?;
-    if is_model2_native_profile {
+    if study_type == "stationary" {
+        return run_stationary_study(
+            &root,
+            &model_folder,
+            &project,
+            &model,
+            &model_filename,
+            &runs_directory_name,
+            input.model_hash.as_deref(),
+            study,
+            &study_id,
+            component_id,
+            profile_id,
+            &normalized,
+            &mesh_exe,
+            sink,
+        );
+    }
+    if study_type == "frequencyDomain" && profile_id != "em-3d" {
         return run_model2(
             &root,
             &model_folder,
@@ -926,10 +721,13 @@ fn run_request(input: ProjectInput, sink: &EventSink, cli: bool) -> Result<()> {
             cli,
         );
     }
-    // EM 3D uses its specialized FEM backend request, prepared from the same
-    // Model 2 project contract as the other scenario profiles.
-    if !is_model2_em3d {
-        return Err("The Model 2 Study runner selected an invalid execution route.".into());
+    // Retain the existing configured frequency request path for the 3D EM
+    // backend until that request shape is normalized into the common sweep path.
+    if study_type != "frequencyDomain" || profile_id != "em-3d" {
+        return Err(format!(
+            "No shared execution route is registered for Study type {study_type:?}."
+        )
+        .into());
     }
     run_model_em3d(
         &root,
@@ -946,6 +744,362 @@ fn run_request(input: ProjectInput, sink: &EventSink, cli: bool) -> Result<()> {
         sink,
         cli,
     )
+}
+
+fn run_stationary_study(
+    root: &Path,
+    model_folder: &str,
+    project: &Path,
+    model: &Value,
+    model_filename: &str,
+    runs_directory_name: &str,
+    supplied_model_hash: Option<&str>,
+    study: &Value,
+    study_id: &str,
+    component_id: &str,
+    profile_id: &str,
+    plan: &Value,
+    mesh_exe: &Path,
+    sink: &EventSink,
+) -> Result<()> {
+    if plan.get("schema").and_then(Value::as_str) != Some("fullmeta-study-plan/1")
+        || plan.get("studyType").and_then(Value::as_str) != Some("stationary")
+        || plan.get("profileId").and_then(Value::as_str) != Some(profile_id)
+    {
+        return Err("The shared stationary Study preparer returned an incompatible plan.".into());
+    }
+    let scenario = crate::model_schema::scenario_metadata_for_profile(profile_id)?;
+    let dimension = scenario
+        .pointer("/profile/dimension")
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .filter(|value| matches!(value, 2 | 3))
+        .ok_or_else(|| {
+            Failure(format!(
+                "Scenario {profile_id:?} must declare dimension 2 or 3."
+            ))
+        })?;
+    let capabilities = crate::json_schema::engine_capabilities()?;
+    let family = capabilities
+        .pointer(&format!("/mesh/familyByDimension/{dimension}"))
+        .and_then(Value::as_str)
+        .ok_or("The FEM schema does not declare an element family for this dimension.")?;
+    let (cell_key, boundary_key) = match dimension {
+        2 => ("triangles", "boundaryEdges"),
+        3 => ("tetrahedra", "boundaryTriangles"),
+        _ => unreachable!(),
+    };
+    let csv_name = plan
+        .get("csvFilename")
+        .and_then(Value::as_str)
+        .filter(|name| safe_filename(name, ".csv"))
+        .ok_or("The stationary Study plan has no safe CSV filename.")?;
+    let fields_enabled = plan
+        .get("fieldFiles")
+        .and_then(Value::as_bool)
+        .ok_or("The stationary Study plan has no field output policy.")?;
+    let field_filename = plan
+        .get("stationaryFieldFilename")
+        .and_then(Value::as_str)
+        .filter(|name| safe_filename(name, ".json"));
+    let field_schema = plan
+        .get("stationaryFieldSchema")
+        .and_then(Value::as_str)
+        .filter(|schema| !schema.trim().is_empty());
+    if fields_enabled && (field_filename.is_none() || field_schema.is_none()) {
+        return Err("Stationary field output requires a safe filename and declared schema.".into());
+    }
+    let settings = plan
+        .get("solverSettings")
+        .ok_or("The stationary Study plan has no solver settings.")?;
+    let backend = settings
+        .get("solverBackend")
+        .and_then(Value::as_str)
+        .ok_or("Prepared solver settings omit solverBackend.")?;
+    let mut request = plan
+        .get("request")
+        .cloned()
+        .ok_or("The stationary Study plan has no solver request.")?;
+    let announced_run_id = run_artifacts::coordinated_run_id();
+    if let Some(id) = &announced_run_id {
+        update_preparation_stage(&project.join(runs_directory_name).join(id), "geometry", 1)?;
+    }
+    sink.emit(
+        json!({"type":"progress","state":"running","stage":"geometry",
+        "message":format!("Preparing {dimension}D stationary Study geometry and mesh…"),
+        "totalPoints":1,"completedPoints":0,"runId":announced_run_id}),
+    );
+
+    let model_hash = match supplied_model_hash {
+        Some(value)
+            if value.len() == 64
+                && value.chars().all(|character| character.is_ascii_hexdigit()) =>
+        {
+            value.to_string()
+        }
+        Some(_) => return Err("The editor supplied an invalid model content hash.".into()),
+        None => canonical_hash(model)?,
+    };
+    let model_id = model
+        .pointer("/metadata/id")
+        .and_then(Value::as_str)
+        .ok_or("metadata.id is required.")?;
+    let runs_directory = ensure_real_child_directory(project, runs_directory_name)?;
+    let (compiled, prepared_mesh) = compile_and_prepare_run_mesh(
+        mesh_exe,
+        root,
+        project,
+        &runs_directory,
+        model,
+        component_id,
+        study_id,
+    )?;
+    let run_id = prepared_mesh.run_id.clone();
+    let run_relative =
+        relative_model_path(model_folder, &format!("{runs_directory_name}/{run_id}"));
+    let run_directory = prepared_mesh.run_directory.clone();
+    let output_directory = ensure_real_child_directory(&run_directory, "output")?;
+    let logs_directory = ensure_real_child_directory(&run_directory, "logs")?;
+    let run_path = run_directory.join("run.json");
+    let request_path = run_directory.join("request.json");
+    write_json_new(&run_directory.join("model.json"), model)?;
+
+    request["modelFile"] = json!("model.json");
+    request["meshFile"] = json!(run_relative_reference(
+        &run_directory,
+        &prepared_mesh.paths.mesh
+    )?);
+    request["modelMapFile"] = json!(run_relative_reference(
+        &run_directory,
+        &prepared_mesh.paths.map
+    )?);
+    request["outputDirectory"] = json!("output");
+    request["csvFilename"] = json!(csv_name);
+    request["fieldFiles"] = json!(fields_enabled);
+    if let Some(filename) = field_filename {
+        request["fieldFilename"] = json!(filename);
+    }
+    write_json_new(&request_path, &request)?;
+    let formulation = settings
+        .get("fieldFormulation")
+        .and_then(Value::as_str)
+        .ok_or("Prepared solver settings omit fieldFormulation.")?;
+    let element_order = settings
+        .get("elementOrder")
+        .and_then(Value::as_u64)
+        .ok_or("Prepared solver settings omit elementOrder.")?;
+    let record = json!({
+        "schema":"fullmeta-run/1","kind":"study","runId":run_id,"state":"running",
+        "startedAt":timestamp(),"completedAt":null,
+        "model":{"file":relative_model_path(model_folder,model_filename),"id":model_id,
+            "modelFormat":MODEL_FORMAT_V2,"sha256":model_hash,"snapshot":model},
+        "study":{"id":study_id,"name":study.get("name").and_then(Value::as_str).unwrap_or("Study"),
+            "type":"stationary","snapshot":study},
+        "solver":{"executable":"fullmeta-fem","module":scenario.get("solverModule"),
+            "formulation":formulation,"studyType":"stationary","requestFile":"request.json",
+            "backend":request["solverBackend"],"ordering":request["solverOrdering"],
+            "threads":request["solverThreads"],"elementOrder":element_order,
+            "constitutiveQuadrature":request["constitutiveQuadrature"],"fieldFiles":fields_enabled},
+        "geometry":{},
+        "artifacts":{"csv":format!("output/{csv_name}"),
+            "fields":field_filename.map(|name|format!("output/{name}")),"fieldFiles":[],
+            "stdout":"logs/solver.stdout.log","stderr":"logs/solver.stderr.log",
+            "meshLog":run_relative_reference(&run_directory, &prepared_mesh.paths.gmsh_log)?},
+        "progress":{"stage":"geometry","totalPoints":1,"completedPoints":0},"error":null
+    });
+    let mut record = record;
+    let adopted = run_artifacts::adopt_server_record(&run_path, &mut record)?;
+    if adopted {
+        write_json_replace(&run_path, &record)?;
+    } else {
+        write_json_new(&run_path, &record)?;
+    }
+
+    let execution = (|| -> Result<()> {
+        let (report, mesh_reused) = get_or_generate_mesh(
+            mesh_exe,
+            root,
+            &prepared_mesh.paths,
+            &compiled.geometry_hash,
+            model_id,
+            sink,
+            1,
+            &run_id,
+            &run_directory,
+            &logs_directory,
+        )?;
+        let nodes = report.get("nodes").and_then(Value::as_u64).unwrap_or(0);
+        let cells = report.get(cell_key).and_then(Value::as_u64).unwrap_or(0);
+        if nodes == 0 || cells == 0 {
+            return Err(format!("The {dimension}D mesh report has no nodes or {cell_key}.").into());
+        }
+        check_mesh_resources(
+            profile_id,
+            mesh_resource_limits(profile_id)?,
+            nodes,
+            cells,
+            cell_key,
+            0,
+        )?;
+        record["geometry"] = json!({
+            "geometryHash":compiled.geometry_hash,
+            "source":run_relative_reference(&run_directory,&prepared_mesh.paths.source)?,
+            "msh":run_relative_reference(&run_directory,&prepared_mesh.paths.msh)?,
+            "mesh":run_relative_reference(&run_directory,&prepared_mesh.paths.mesh)?,
+            "report":run_relative_reference(&run_directory,&prepared_mesh.paths.report)?,
+            "map":run_relative_reference(&run_directory,&prepared_mesh.paths.map)?,
+            "cache":run_relative_reference(&run_directory,&prepared_mesh.paths.cache)?,
+            "files":describe_artifacts(&prepared_mesh.paths, &run_directory)?,"reused":mesh_reused
+        });
+        record["progress"]["stage"] = json!("solve");
+        record["progress"]["stageStartedAt"] = json!(timestamp());
+        write_json_replace(&run_path, &record)?;
+        sink.emit(json!({"type":"mesh","state":"success","runId":run_id,
+            "message":if mesh_reused {"Mesh ready (reused)."} else {"Mesh generated."},
+            "mesh":{"dimension":dimension,"elementFamily":family,"nodes":nodes,
+                "cells":cells,"boundaryCount":report.get(boundary_key),"reused":mesh_reused}}));
+        sink.emit(json!({"type":"progress","state":"running","stage":"solve",
+            "message":"Starting the stationary solver…","totalPoints":1,"completedPoints":0,"runId":run_id}));
+
+        let stdout_path = logs_directory.join("solver.stdout.log");
+        let stderr_path = logs_directory.join("solver.stderr.log");
+        let mut stdout_log = File::create(&stdout_path)?;
+        let mut timings = run_artifacts::SolverStageTimings::create(
+            &logs_directory.join("solver-stage-timings.csv"),
+        )?;
+        record["solver"]["stageTimings"] = json!("logs/solver-stage-timings.csv");
+        let mut callback_error = None;
+        let runtime = solver_runtime(root, profile_id, backend)?;
+        let solver_result = super::run_solver_case(&runtime, &request_path, &mut |line| {
+            if callback_error.is_some() {
+                return;
+            }
+            let result = (|| -> Result<()> {
+                writeln!(stdout_log, "{line}")?;
+                stdout_log.flush()?;
+                if let Some((stage, message)) = run_artifacts::solver_stage(line)? {
+                    timings.start(0, None, stage)?;
+                    record["progress"]["stage"] = json!(stage);
+                    record["progress"]["stageStartedAt"] = json!(timestamp());
+                    write_json_replace(&run_path, &record)?;
+                    sink.emit(
+                        json!({"type":"progress","event":"stage-start","state":"running",
+                        "stage":stage,"message":message,"runId":run_id,
+                        "totalPoints":1,"completedPoints":0}),
+                    );
+                }
+                Ok(())
+            })();
+            if let Err(error) = result {
+                callback_error = Some(error);
+            }
+        });
+        timings.finish()?;
+        if let Some(error) = callback_error {
+            return Err(error);
+        }
+        let (exit_code, stderr) = solver_result.map_err(|error| Failure(error.to_string()))?;
+        fs::write(
+            &stderr_path,
+            if stderr.is_empty() {
+                if exit_code == 0 {
+                    "Solver completed without standard error output.\n"
+                } else {
+                    "Solver failed without standard error output.\n"
+                }
+            } else {
+                &stderr
+            },
+        )?;
+        if exit_code != 0 {
+            return Err(format!(
+                "Stationary solver exited with code {exit_code}: {}",
+                stderr.trim()
+            )
+            .into());
+        }
+        if stdout_log.metadata()?.len() == 0 {
+            writeln!(
+                stdout_log,
+                "Stationary solver completed without standard output."
+            )?;
+        }
+        stdout_log.flush()?;
+
+        sink.emit(
+            json!({"type":"progress","state":"running","stage":"verification",
+            "message":"Checking stationary Study outputs…","runId":run_id,
+            "totalPoints":1,"completedPoints":1}),
+        );
+        let csv_path = output_directory.join(csv_name);
+        let csv_metadata = fs::metadata(&csv_path).map_err(|error| {
+            Failure(format!(
+                "The stationary solver did not create its requested CSV output: {error}"
+            ))
+        })?;
+        if !csv_metadata.is_file() || csv_metadata.len() == 0 {
+            return Err("The stationary solver CSV output is empty or not a regular file.".into());
+        }
+        let field_artifacts = if fields_enabled {
+            let filename = field_filename.ok_or("Stationary field filename is missing.")?;
+            let field_path = output_directory.join(filename);
+            let field: Value = serde_json::from_slice(&fs::read(&field_path)?)?;
+            if field.get("schema").and_then(Value::as_str) != field_schema {
+                return Err(format!("The stationary field artifact does not match its declared schema {field_schema:?}.").into());
+            }
+            vec![run_artifacts::register_case_field_file(
+                &output_directory,
+                filename,
+                0,
+                &json!({"stationary":true,"label":plan.get("stationaryFieldLabel").and_then(Value::as_str).unwrap_or("Stationary field")}),
+            )?]
+        } else {
+            Vec::new()
+        };
+        let field_names = run_artifacts::case_field_file_names(
+            &output_directory,
+            &field_artifacts,
+            if fields_enabled { 1 } else { 0 },
+        )?;
+        record["state"] = json!("completed");
+        record["completedAt"] = json!(timestamp());
+        record["progress"]["stage"] = json!("verification");
+        record["progress"]["completedPoints"] = json!(1);
+        record["artifacts"]["fieldFiles"] = json!(field_artifacts);
+        record["artifacts"]["fieldFileCount"] = json!(field_names.len());
+        record["artifacts"]["csvBytes"] = json!(csv_metadata.len());
+        write_json_replace(&run_path, &record)?;
+        let output_files = ["run.json", "request.json"]
+            .iter()
+            .map(|name| format!("{run_relative}/{name}"))
+            .chain(run_artifacts::completion_solver_log_files(&run_relative))
+            .chain([
+                format!(
+                    "{run_relative}/mesh/{}",
+                    file_name(&prepared_mesh.paths.gmsh_log)?
+                ),
+                format!("{run_relative}/output/{csv_name}"),
+            ])
+            .chain(
+                field_names
+                    .iter()
+                    .map(|name| format!("{run_relative}/output/{name}")),
+            )
+            .collect::<Vec<_>>();
+        sink.emit(json!({"type":"complete","state":"success",
+            "message":"Stationary Study completed.","runId":run_id,
+            "runDirectory":run_relative,"totalPoints":1,"completedPoints":1,
+            "dimension":dimension,"elementFamily":family,"csv":format!("output/{csv_name}"),
+            "fields":field_names,"outputFiles":output_files}));
+        Ok(())
+    })();
+    if let Err(error) = &execution {
+        record["state"] = json!("failed");
+        record["completedAt"] = json!(timestamp());
+        record["error"] = json!(error.0);
+        let _ = write_json_replace(&run_path, &record);
+    }
+    execution
 }
 
 fn model_for_sweep_case(model: &Value, study_id: &str, case: &Value) -> Result<Value> {
@@ -1232,12 +1386,10 @@ fn run_model2(
         "study":{"id":study_id,"name":study_snapshot.get("name").and_then(Value::as_str).unwrap_or("Study"),"snapshot":study_snapshot},
         "solver":{"executable":profile_id,"formulation":formulation,"backend":solver_backend,"ordering":solver_ordering,"threads":solver_threads,"elementOrder":element_order,"constitutiveQuadrature":constitutive_quadrature,"requestFile":"request.json","fieldFiles":fields_enabled},
         "geometry":{"geometryHash":primary_case.compiled.geometry_hash,"source":run_relative_reference(&run_dir,&primary_case.paths.source)? ,"msh":run_relative_reference(&run_dir,&primary_case.paths.msh)? ,"mesh":run_relative_reference(&run_dir,&primary_case.paths.mesh)? ,"report":run_relative_reference(&run_dir,&primary_case.paths.report)? ,"map":run_relative_reference(&run_dir,&primary_case.paths.map)? ,"cache":run_relative_reference(&run_dir,&primary_case.paths.cache)? ,"files":null,"cases":geometry_case_records},
-        "artifacts":{"csv":format!("output/{csv_name}"),"debugCsv":format!("output/{debug_csv}"),"fields":format!("output/{field_prefix}<frequency-Hz-to-6-decimals>Hz.json"),"stdout":"logs/solver.stdout.log","stderr":"logs/solver.stderr.log","meshLog":run_geometry_reference(&format!("{geo_stem}-gmsh.log"))},
+        "artifacts":{"csv":format!("output/{csv_name}"),"debugCsv":format!("output/{debug_csv}"),"fields":format!("output/{field_prefix}<frequency-Hz-to-6-decimals>Hz.json"),"stdout":"logs/solver.stdout.log","stderr":"logs/solver.stderr.log","meshLog":run_relative_reference(&run_dir, &primary_case.paths.gmsh_log)?},
         "progress":{"totalPoints":total_points,"completedPoints":0,"currentFrequencyHz":null},"error":null
     });
-    if run_artifacts::adopt_server_record(&run_path, &mut record)?
-        || prepared_mesh.promoted_mesh_run
-    {
+    if run_artifacts::adopt_server_record(&run_path, &mut record)? {
         write_json_replace(&run_path, &record)?;
     } else {
         write_json_new(&run_path, &record)?;
@@ -1275,7 +1427,7 @@ fn run_model2(
                 .unwrap_or_else(|| json!(0));
             sink.emit(json!({"type":"mesh","state":"success","message":if case_mesh.reused {format!("Sweep case {} mesh ready (reused)",index+1)} else {format!("Sweep case {} mesh generated",index+1)},"runId":run_id,"mesh":mesh_summary}));
         }
-        record["geometry"]["files"] = describe_artifacts(&primary_case.paths)?;
+        record["geometry"]["files"] = describe_artifacts(&primary_case.paths, &run_dir)?;
         write_json_replace(&run_path, &record)?;
         sink.emit(json!({"type":"progress","state":"running","message":format!("{dimension}D {} solver is starting…", if profile_id.starts_with("acoustic-") { "acoustic pressure" } else { "electromagnetic scalar field" }),"totalPoints":total_points,"completedPoints":0,"runId":run_id}));
         let solver_runtime = solver_runtime(root, profile_id, solver_backend)?;
@@ -1354,11 +1506,6 @@ fn run_model2(
             .iter()
             .map(|name| format!("{run_relative}/{name}"))
             .chain(run_artifacts::completion_solver_log_files(&run_relative))
-            .chain(completion_mesh_log_files(
-                &run_relative,
-                &run_dir,
-                &case_meshes,
-            )?)
             .chain(std::iter::once(format!("{run_relative}/output/{csv_name}")))
             .chain(std::iter::once(format!(
                 "{run_relative}/output/{debug_csv}"
@@ -1570,16 +1717,14 @@ fn run_model_em3d(
             "backend":solver_backend,"ordering":request["solverOrdering"],"threads":request["solverThreads"],
             "elementOrder":request["elementOrder"],"constitutiveQuadrature":request["constitutiveQuadrature"]},
         "geometry":{"geometryHash":primary_case.compiled.geometry_hash,"source":run_relative_reference(&run_dir,&primary_case.paths.source)?,"msh":run_relative_reference(&run_dir,&primary_case.paths.msh)?,"mesh":run_relative_reference(&run_dir,&primary_case.paths.mesh)?,"report":run_relative_reference(&run_dir,&primary_case.paths.report)?,"map":run_relative_reference(&run_dir,&primary_case.paths.map)?,"cache":run_relative_reference(&run_dir,&primary_case.paths.cache)?,"files":null,"cases":geometry_case_records},
-        "artifacts":{"csv":format!("output/{sweep_csv}"),"debugCsv":format!("output/{debug_csv}"),"stdout":"logs/solver.stdout.log","stderr":"logs/solver.stderr.log","meshLog":run_geometry_reference(&format!("{}-gmsh.log",primary_case.paths.source.file_stem().and_then(|value|value.to_str()).unwrap_or("model")) )},
+        "artifacts":{"csv":format!("output/{sweep_csv}"),"debugCsv":format!("output/{debug_csv}"),"stdout":"logs/solver.stdout.log","stderr":"logs/solver.stderr.log","meshLog":run_relative_reference(&run_dir, &primary_case.paths.gmsh_log)?},
         "progress":{"totalPoints":total_points,"completedPoints":0,"currentFrequencyGHz":null},"error":null
     });
     if field_files {
         record["artifacts"]["fields"] =
             json!("output/<field-prefix>_<frequency-GHz-to-12-decimals>GHz.json");
     }
-    if run_artifacts::adopt_server_record(&run_path, &mut record)?
-        || prepared_mesh.promoted_mesh_run
-    {
+    if run_artifacts::adopt_server_record(&run_path, &mut record)? {
         write_json_replace(&run_path, &record)?;
     } else {
         write_json_new(&run_path, &record)?;
@@ -1603,7 +1748,7 @@ fn run_model_em3d(
             check_mesh_resources("em-3d", resource_limits, nodes, cells, "tetrahedra", index)?;
             sink.emit(json!({"type":"mesh","state":"success","message":if case_mesh.reused {format!("Sweep case {} mesh ready (reused)",index+1)} else {format!("Sweep case {} mesh generated",index+1)},"runId":run_id,"mesh":{"nodes":nodes,"tetrahedra":cells,"caseIndex":index,"geometryHash":case_mesh.compiled.geometry_hash,"reused":case_mesh.reused,"materialDiagnostics":case_mesh.report.get("materialDiagnostics").cloned().unwrap_or_else(||json!([]))}}));
         }
-        record["geometry"]["files"] = describe_artifacts(&primary_case.paths)?;
+        record["geometry"]["files"] = describe_artifacts(&primary_case.paths, &run_dir)?;
         write_json_replace(&run_path, &record)?;
         sink.emit(json!({"type":"progress","state":"running","message":"Rust solver is starting…","totalPoints":total_points,"completedPoints":0,"runId":run_id}));
         let stdout_log = logs_dir.join("solver.stdout.log");
@@ -1684,11 +1829,6 @@ fn run_model_em3d(
             .iter()
             .map(|name| format!("{run_relative}/{name}"))
             .chain(run_artifacts::completion_solver_log_files(&run_relative))
-            .chain(completion_mesh_log_files(
-                &run_relative,
-                &run_dir,
-                &case_meshes,
-            )?)
             .chain(std::iter::once(format!(
                 "{run_relative}/output/{sweep_csv}"
             )))
@@ -1796,23 +1936,6 @@ fn executable(_root: &Path, stem: &str) -> Result<PathBuf> {
 }
 
 fn solver_runtime(root: &Path, profile_id: &str, backend: &str) -> Result<super::SolverRuntime> {
-    #[cfg(feature = "solver-native-acoustic2d")]
-    if profile_id == "acoustic-2d" {
-        return Ok(super::SolverRuntime::NativeAcoustic2d);
-    }
-    #[cfg(feature = "solver-native-acoustic3d")]
-    if profile_id == "acoustic-3d" {
-        return Ok(super::SolverRuntime::NativeAcoustic3d);
-    }
-    #[cfg(feature = "solver-native-em2d")]
-    if profile_id == "em-2d" {
-        return Ok(super::SolverRuntime::NativeEm2d);
-    }
-    #[cfg(feature = "solver-native-em3d")]
-    if profile_id == "em-3d" {
-        return Ok(super::SolverRuntime::NativeEm3d);
-    }
-
     let capabilities = crate::json_schema::engine_capabilities()?;
     let runtime = capabilities.pointer("/study/solverRuntimesByProfile")
         .and_then(|profiles| profiles.get(profile_id))
@@ -1827,6 +1950,21 @@ fn solver_runtime(root: &Path, profile_id: &str, backend: &str) -> Result<super:
         .get("programId")
         .and_then(Value::as_str)
         .ok_or("Solver runtime is missing its registered program ID")?;
+    let scenario = crate::model_schema::scenario_metadata_for_profile(profile_id)?;
+    if let Some(module) = scenario
+        .get("solverModule")
+        .and_then(Value::as_str)
+        .filter(|module| !module.trim().is_empty())
+    {
+        if !crate::scenario_runner_contains(module) {
+            return Err(Failure(format!(
+                "Scenario {profile_id:?} declares solver module {module:?}, but it is not included in this FEM runtime. Rebuild from the registered scenario package."
+            )));
+        }
+        return Ok(super::SolverRuntime::Native {
+            module: module.to_string(),
+        });
+    }
     let name = crate::json_schema::external_program_executable(program_id)?;
     if Path::new(name).file_name().and_then(|value| value.to_str()) != Some(name)
         || name.contains(['/', '\\', ':'])
@@ -1921,171 +2059,134 @@ struct CompiledGeometry {
 }
 
 struct CachedRunMesh {
-    run_id: String,
-    run_directory: PathBuf,
-    time: String,
+    paths: MeshPaths,
 }
 
 struct PreparedRunMesh {
     run_id: String,
     run_directory: PathBuf,
     paths: MeshPaths,
-    promoted_mesh_run: bool,
     reused_mesh: bool,
 }
 
-fn find_reusable_run_mesh(project: &Path, geometry_hash: &str) -> Result<Option<CachedRunMesh>> {
+fn find_reusable_run_mesh(
+    project: &Path,
+    compiled: &CompiledGeometry,
+) -> Result<Option<CachedRunMesh>> {
     let runs_directory = project.join(configured_runs_directory());
-    let entries = match fs::read_dir(&runs_directory) {
-        Ok(entries) => entries,
+    let shared_mesh = runs_directory.join("mesh");
+    let shared_meta = match fs::symlink_metadata(&shared_mesh) {
+        Ok(metadata) if !metadata.file_type().is_symlink() && metadata.is_dir() => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
+        _ => return Err("The shared FEM mesh path must be a real directory.".into()),
     };
-    let mut candidates = Vec::new();
-    for entry in entries {
-        let entry = entry?;
-        let run_meta = fs::symlink_metadata(entry.path())?;
-        if run_meta.file_type().is_symlink() || !run_meta.is_dir() {
-            continue;
+    let _ = shared_meta;
+    let mut candidate_directories = vec![shared_mesh.clone()];
+    let cases = shared_mesh.join("cases");
+    match fs::symlink_metadata(&cases) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            return Err("The shared geometry cache must be a real directory.".into());
         }
-        let run_id = entry.file_name().to_string_lossy().to_string();
-        if !run_id
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
-        {
-            continue;
+        Ok(_) => {
+            for entry in fs::read_dir(&cases)? {
+                let entry = entry?;
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let Some(hash) = name.strip_prefix("geometry-") else {
+                    continue;
+                };
+                if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                    continue;
+                }
+                let metadata = fs::symlink_metadata(entry.path())?;
+                if !metadata.file_type().is_symlink() && metadata.is_dir() {
+                    candidate_directories.push(entry.path());
+                }
+            }
         }
-        let run_directory = entry.path();
-        let record: Value = match fs::read(run_directory.join("run.json"))
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        {
-            Some(record) => record,
-            None => continue,
-        };
-        let state = record.get("state").and_then(Value::as_str).unwrap_or("");
-        if state != "mesh-only"
-            || record
-                .pointer("/geometry/geometryHash")
-                .and_then(Value::as_str)
-                != Some(geometry_hash)
-        {
-            continue;
-        }
-        let source = record
-            .pointer("/geometry/source")
-            .and_then(Value::as_str)
-            .unwrap_or("");
-        let Some(source_name) = source.strip_prefix("mesh/") else {
-            continue;
-        };
-        if !safe_filename(source_name, ".geo") {
-            continue;
-        }
-        let mesh_directory = run_directory.join("mesh");
-        match fs::symlink_metadata(&mesh_directory) {
-            Ok(meta) if !meta.file_type().is_symlink() && meta.is_dir() => (),
-            _ => continue,
-        }
-        let source_path = mesh_directory.join(source_name);
-        let paths = match MeshPaths::new(&source_path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    for directory in candidate_directories {
+        let source = directory.join(&compiled.geo_name);
+        let paths = match MeshPaths::new(&source) {
             Ok(paths) => paths,
             Err(_) => continue,
         };
-        if check_generated_paths(&paths).is_err()
-            || read_valid_cache(&paths, geometry_hash)?.is_none()
+        if check_generated_paths(&paths).is_ok()
+            && read_valid_cache(&paths, &compiled.geometry_hash)?.is_some()
         {
-            continue;
+            return Ok(Some(CachedRunMesh { paths }));
         }
-        let time = record
-            .get("completedAt")
-            .or_else(|| record.get("startedAt"))
-            .and_then(Value::as_str)
-            .unwrap_or(&run_id)
-            .to_string();
-        candidates.push(CachedRunMesh {
-            run_id,
-            run_directory,
-            time,
-        });
     }
-    candidates.sort_by(|left, right| right.time.cmp(&left.time));
-    Ok(candidates.into_iter().next())
+    Ok(None)
 }
 
 fn prepare_run_mesh(
     runs_directory: &Path,
+    model_id: &str,
     study_id: &str,
     geometry_directory: &Path,
     compiled: &CompiledGeometry,
     cached: Option<CachedRunMesh>,
 ) -> Result<PreparedRunMesh> {
-    // A mesh-only folder is a prepared run awaiting Study output. Completed and
-    // failed Study runs remain self-contained and are never used as a new run's cache.
     let coordinated = run_artifacts::coordinated_run_id();
-    let promote = coordinated.is_none() && cached.is_some();
-    let run_id = coordinated.clone().unwrap_or_else(|| {
-        cached
-            .as_ref()
-            .map(|mesh| mesh.run_id.clone())
-            .unwrap_or_else(|| make_run_id(study_id))
-    });
+    let run_id = coordinated
+        .clone()
+        .unwrap_or_else(|| crate::study_run_id(model_id, study_id));
     let run_directory = runs_directory.join(&run_id);
     if coordinated.is_some() {
         let manifest = fs::symlink_metadata(run_directory.join("run.json"))?;
         if !manifest.is_file() || manifest.file_type().is_symlink() {
             return Err("The coordinated Study run manifest must be a regular file.".into());
         }
-    } else if !promote {
-        fs::create_dir(&run_directory).map_err(|error| {
-            Failure(format!(
-                "Could not create run folder {}: {error}",
-                run_directory.display()
-            ))
-        })?;
     } else {
-        let cached_directory = &cached.as_ref().unwrap().run_directory;
-        if cached_directory != &run_directory {
-            return Err("A reusable mesh-only run resolved to an unexpected folder.".into());
+        if fs::symlink_metadata(&run_directory).is_ok() {
+            crate::safe_remove_tree_without_links(&run_directory)?;
         }
+        fs::create_dir(&run_directory).map_err(|error| {
+            Failure(format!("Could not create Study folder {}: {error}", run_directory.display()))
+        })?;
     }
-    let mesh_directory = ensure_real_child_directory(&run_directory, "mesh")?;
-    let geometry_source = geometry_directory.join(&compiled.geo_name);
-    if !promote {
+    let mesh_directory = ensure_real_child_directory(runs_directory, "mesh")?;
+    let paths = MeshPaths::new(&mesh_directory.join(&compiled.geo_name))?;
+    check_generated_paths(&paths)?;
+    let reused_mesh = cached.is_some();
+    if let Some(cache) = cached.as_ref().filter(|cache| cache.paths.source.parent() != Some(mesh_directory.as_path())) {
+        clear_mesh_root_artifacts(&mesh_directory)?;
+        let previous = &cache.paths;
+        for (from, to) in [
+            (&previous.source, &paths.source),
+            (&previous.msh, &paths.msh),
+            (&previous.mesh, &paths.mesh),
+            (&previous.gmsh_log, &paths.gmsh_log),
+            (&previous.report, &paths.report),
+            (&previous.map, &paths.map),
+            (&previous.cache, &paths.cache),
+        ] {
+            fs::copy(from, to)?;
+        }
+        let mut report: Value = serde_json::from_slice(&fs::read(&paths.report)?)?;
+        report["geometry"] = json!(paths.source);
+        report["msh"] = json!(paths.msh);
+        report["mesh"] = json!(paths.mesh);
+        report["gmshLog"] = json!(paths.gmsh_log);
+        write_json_replace(&paths.report, &report)?;
+        write_mesh_cache(&paths, &compiled.geometry_hash, &report)?;
+    } else if cached.is_none() {
+        clear_mesh_root_artifacts(&mesh_directory)?;
+        let geometry_source = geometry_directory.join(&compiled.geo_name);
         fs::copy(&geometry_source, mesh_directory.join(&compiled.geo_name))?;
         fs::copy(
             geometry_directory.join(&compiled.map_name),
             mesh_directory.join(&compiled.map_name),
         )?;
     }
-    let source_path = mesh_directory.join(&compiled.geo_name);
-    let paths = MeshPaths::new(&source_path)?;
-    check_generated_paths(&paths)?;
-    if let (Some(_), Some(cache)) = (coordinated, cached.as_ref()) {
-        let previous = MeshPaths::new(&cache.run_directory.join("mesh").join(&compiled.geo_name))?;
-        if let Some(mut report) = read_valid_cache(&previous, &compiled.geometry_hash)? {
-            for (from, to) in [
-                (&previous.msh, &paths.msh),
-                (&previous.mesh, &paths.mesh),
-                (&previous.gmsh_log, &paths.gmsh_log),
-                (&previous.map, &paths.map),
-            ] {
-                fs::copy(from, to)?;
-            }
-            report["geometry"] = json!(paths.source);
-            report["msh"] = json!(paths.msh);
-            report["mesh"] = json!(paths.mesh);
-            report["gmshLog"] = json!(paths.gmsh_log);
-            write_json_new(&paths.report, &report)?;
-            write_mesh_cache(&paths, &compiled.geometry_hash, &report)?;
-        }
-    }
     Ok(PreparedRunMesh {
         run_id,
         run_directory,
         paths,
-        promoted_mesh_run: promote,
-        reused_mesh: cached.is_some(),
+        reused_mesh,
     })
 }
 
@@ -2169,9 +2270,14 @@ fn compile_and_prepare_run_mesh(
     let staging_directory = ensure_real_child_directory(runs_directory, &staging_name)?;
     let result = (|| {
         let compiled = compile_geometry(mesh_exe, root, model, component, &staging_directory)?;
-        let cached_mesh = find_reusable_run_mesh(project, &compiled.geometry_hash)?;
+        let cached_mesh = find_reusable_run_mesh(project, &compiled)?;
+        let model_id = model
+            .pointer("/metadata/id")
+            .and_then(Value::as_str)
+            .ok_or("metadata.id is required to locate the Study run directory")?;
         let prepared = prepare_run_mesh(
             runs_directory,
+            model_id,
             study_id,
             &staging_directory,
             &compiled,
@@ -2216,6 +2322,87 @@ fn ensure_real_child_directory(parent: &Path, name: &str) -> Result<PathBuf> {
     // the directory from redirecting outside the project. Keep the absolute path
     // as supplied so Windows installs do not depend on final-path resolution.
     Ok(path)
+}
+
+fn clear_mesh_root_artifacts(directory: &Path) -> Result<()> {
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name == "run.json" || name == "cases" {
+            continue;
+        }
+        let generated = name.ends_with(".geo")
+            || name.ends_with(".msh")
+            || name.ends_with("-mesh.mesh")
+            || name.ends_with("-mesh-report.json")
+            || name.ends_with("-model-map.json")
+            || name.ends_with("-mesh-cache.json")
+            || name.ends_with("-gmsh.log");
+        if !generated {
+            continue;
+        }
+        let metadata = fs::symlink_metadata(entry.path())?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(format!("Shared mesh artifact {} must be a regular file.", entry.path().display()).into());
+        }
+        fs::remove_file(entry.path())?;
+    }
+    Ok(())
+}
+
+fn ensure_shared_mesh_record(
+    paths: &MeshPaths,
+    model_id: &str,
+    geometry_hash: &str,
+    report: &Value,
+) -> Result<()> {
+    let path = paths
+        .source
+        .parent()
+        .ok_or("Shared geometry has no parent directory")?
+        .join("run.json");
+    let existing = match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            return Err("The shared mesh ownership record must be a regular file.".into());
+        }
+        Ok(_) => {
+            let current: Value = serde_json::from_slice(&fs::read(&path)?)?;
+            if current.get("runId").and_then(Value::as_str) != Some("mesh")
+                || (current.get("kind").and_then(Value::as_str) != Some("mesh")
+                    && current.get("state").and_then(Value::as_str) != Some("mesh-only"))
+            {
+                return Err("The shared mesh directory is owned by an incompatible run record.".into());
+            }
+            Some(current)
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    let prior_model_id = existing
+        .as_ref()
+        .and_then(|record| record.pointer("/model/id"))
+        .and_then(Value::as_str);
+    let prior_model_file = existing
+        .as_ref()
+        .filter(|_| prior_model_id == Some(model_id))
+        .and_then(|record| record.pointer("/model/file"))
+        .and_then(Value::as_str);
+    let mut model = json!({"id":model_id});
+    if let Some(file) = prior_model_file {
+        model["file"] = json!(file);
+    }
+    let started_at = existing
+        .as_ref()
+        .and_then(|record| record["startedAt"].as_str())
+        .map(str::to_string)
+        .unwrap_or_else(timestamp);
+    let record = json!({
+        "schema":"fullmeta-run/1","kind":"mesh","runId":"mesh","state":"mesh-only",
+        "startedAt":started_at,"completedAt":timestamp(),"model":model,
+        "geometry":{"geometryHash":geometry_hash,"source":file_name(&paths.source)?,"mesh":file_name(&paths.mesh)?,
+            "nodes":report.get("nodes"),"triangles":report.get("triangles"),"tetrahedra":report.get("tetrahedra")}
+    });
+    write_json_replace(&path, &record)
 }
 
 #[derive(Clone)]
@@ -2268,33 +2455,30 @@ struct PreparedCaseMesh {
 }
 
 fn run_relative_reference(run_directory: &Path, path: &Path) -> Result<String> {
-    let relative = path.strip_prefix(run_directory).map_err(|_| {
-        Failure(format!(
-            "Generated solver input {} is outside its run directory.",
-            path.display()
-        ))
-    })?;
+    let relative = if let Ok(relative) = path.strip_prefix(run_directory) {
+        relative.to_path_buf()
+    } else {
+        let shared_mesh = run_directory
+            .parent()
+            .ok_or("Study run folder has no shared run-storage parent")?
+            .join("mesh");
+        let relative = path.strip_prefix(&shared_mesh).map_err(|_| {
+            Failure(format!(
+                "Generated solver input {} is outside both the Study folder and shared mesh folder.",
+                path.display()
+            ))
+        })?;
+        Path::new("..").join("mesh").join(relative)
+    };
     let reference = relative.to_string_lossy().replace('\\', "/");
-    if reference.is_empty() || reference.starts_with("../") || reference.contains("/../") {
+    if reference.is_empty()
+        || reference.starts_with("../") && !reference.starts_with("../mesh/")
+        || reference.contains("/../")
+        || reference.contains("../mesh/../")
+    {
         return Err("Generated solver input path is not a safe run-relative reference.".into());
     }
     Ok(reference)
-}
-
-fn completion_mesh_log_files(
-    run_relative: &str,
-    run_directory: &Path,
-    case_meshes: &[PreparedCaseMesh],
-) -> Result<Vec<String>> {
-    let mut files = Vec::new();
-    for case_mesh in case_meshes {
-        let path = run_relative_reference(run_directory, &case_mesh.paths.gmsh_log)?;
-        let path = format!("{run_relative}/{path}");
-        if !files.contains(&path) {
-            files.push(path);
-        }
-    }
-    Ok(files)
 }
 
 fn prepare_case_meshes(
@@ -2313,13 +2497,19 @@ fn prepare_case_meshes(
     if case_models.is_empty() {
         return Err("The prepared Study has no cases to mesh.".into());
     }
-    let case_mesh_root = ensure_real_child_directory(&run_directory.join("mesh"), "cases")?;
+    let model_id = case_models[0]
+        .pointer("/metadata/id")
+        .and_then(Value::as_str)
+        .ok_or("metadata.id is required to identify the shared mesh")?;
+    let shared_mesh = ensure_real_child_directory(runs_directory, "mesh")?;
+    let case_mesh_root = ensure_real_child_directory(&shared_mesh, "cases")?;
     let mut geometry_by_hash = HashMap::<String, PreparedCaseMesh>::new();
     let mut geometry_by_model = HashMap::<String, PreparedCaseMesh>::new();
     let mut case_meshes = Vec::with_capacity(case_models.len());
     for (index, model) in case_models.iter().enumerate() {
         let model_hash = canonical_hash(model)?;
-        let prepared = if let Some(existing) = geometry_by_model.get(&model_hash) {
+        let geometry_key = geometry_input_hash(model).unwrap_or_else(|| model_hash.clone());
+        let prepared = if let Some(existing) = geometry_by_model.get(&geometry_key) {
             let mut reused = existing.clone();
             reused.reused = true;
             reused
@@ -2329,6 +2519,7 @@ fn prepare_case_meshes(
                 root,
                 &initial_mesh.paths,
                 &initial_geometry.geometry_hash,
+                model_id,
                 sink,
                 total_points,
                 &initial_mesh.run_id,
@@ -2370,6 +2561,7 @@ fn prepare_case_meshes(
                     root,
                     &paths,
                     &compiled.geometry_hash,
+                    model_id,
                     sink,
                     total_points,
                     &initial_mesh.run_id,
@@ -2398,11 +2590,84 @@ fn prepare_case_meshes(
             .entry(prepared.compiled.geometry_hash.clone())
             .or_insert_with(|| prepared.clone());
         geometry_by_model
-            .entry(model_hash)
+            .entry(geometry_key)
             .or_insert_with(|| prepared.clone());
         case_meshes.push(prepared);
     }
     Ok(case_meshes)
+}
+
+/// Hash everything the geometry compiler can observe, reducing model parameters
+/// to those referenced by geometry, selections, and mesh inputs. Sweep cases
+/// that only change solver/material parameters then share the first compiled
+/// geometry without launching the mesh executable again.
+///
+/// Any unrecognized or malformed expression falls back to the full model hash
+/// at the call site, preserving the existing compile-and-compare behavior.
+fn geometry_input_hash(model: &Value) -> Option<String> {
+    let component = model.get("model")?.as_object()?;
+    let parameters = component.get("parameters")?.as_array()?;
+    let mut symbols = BTreeSet::new();
+    for key in ["geometry", "selections", "mesh"] {
+        collect_geometry_expression_symbols(component.get(key)?, &mut symbols)?;
+    }
+    let parameters = geometry_parameters(parameters, symbols)?;
+    let mut projection = model.clone();
+    projection["model"]["parameters"] = json!(parameters);
+    canonical_hash(&projection).ok()
+}
+
+fn collect_geometry_expression_symbols(
+    value: &Value,
+    symbols: &mut BTreeSet<String>,
+) -> Option<()> {
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                collect_geometry_expression_symbols(value, symbols)?;
+            }
+        }
+        Value::Object(object) => {
+            for (key, value) in object {
+                if matches!(key.as_str(), "expression" | "coordinateExpression") {
+                    let (_, references, _) =
+                        crate::model_expression::inspect(value.as_str()?).ok()?;
+                    symbols.extend(references);
+                } else {
+                    collect_geometry_expression_symbols(value, symbols)?;
+                }
+            }
+        }
+        _ => {}
+    }
+    Some(())
+}
+
+fn geometry_parameters(parameters: &[Value], symbols: BTreeSet<String>) -> Option<Vec<Value>> {
+    let mut definitions = HashMap::<&str, &Value>::with_capacity(parameters.len());
+    for parameter in parameters {
+        let symbol = parameter.get("symbol")?.as_str()?;
+        if definitions.insert(symbol, parameter).is_some() {
+            return None;
+        }
+    }
+    let mut pending = symbols.into_iter().collect::<Vec<_>>();
+    let mut referenced = BTreeSet::new();
+    while let Some(symbol) = pending.pop() {
+        let Some(parameter) = definitions.get(symbol.as_str()) else {
+            continue;
+        };
+        if !referenced.insert(symbol) {
+            continue;
+        }
+        let (_, dependencies, _) =
+            crate::model_expression::inspect(parameter.get("expression")?.as_str()?).ok()?;
+        pending.extend(dependencies);
+    }
+    referenced
+        .iter()
+        .map(|symbol| definitions.get(symbol.as_str()).map(|row| (*row).clone()))
+        .collect()
 }
 
 fn check_generated_paths(paths: &MeshPaths) -> Result<()> {
@@ -2440,6 +2705,7 @@ fn get_or_generate_mesh(
     root: &Path,
     paths: &MeshPaths,
     geometry_hash: &str,
+    model_id: &str,
     sink: &EventSink,
     total: usize,
     run_id: &str,
@@ -2447,6 +2713,11 @@ fn get_or_generate_mesh(
     logs_dir: &Path,
 ) -> Result<(Value, bool)> {
     if let Some(report) = read_valid_cache(paths, geometry_hash)? {
+        if paths.source.parent().and_then(Path::file_name)
+            == Some(std::ffi::OsStr::new("mesh"))
+        {
+            ensure_shared_mesh_record(paths, model_id, geometry_hash, &report)?;
+        }
         return Ok((report, true));
     }
     if run_artifacts::coordinated_run_id().is_some() {
@@ -2469,6 +2740,9 @@ fn get_or_generate_mesh(
     let report = read_complete_report(paths)?
         .ok_or("Mesh tool succeeded without a complete .msh, .mesh, and non-empty mesh report")?;
     write_mesh_cache(paths, geometry_hash, &report)?;
+    if paths.source.parent().and_then(Path::file_name) == Some(std::ffi::OsStr::new("mesh")) {
+        ensure_shared_mesh_record(paths, model_id, geometry_hash, &report)?;
+    }
     Ok((report, false))
 }
 
@@ -2564,7 +2838,7 @@ fn write_mesh_cache(paths: &MeshPaths, geometry_hash: &str, report: &Value) -> R
     write_json_replace(&paths.cache, &cache)
 }
 
-fn describe_artifacts(paths: &MeshPaths) -> Result<Value> {
+fn describe_artifacts(paths: &MeshPaths, run_directory: &Path) -> Result<Value> {
     let mut files = serde_json::Map::new();
     for (name, source) in [
         ("source", &paths.source),
@@ -2597,14 +2871,9 @@ fn describe_artifacts(paths: &MeshPaths) -> Result<Value> {
             )
             .into());
         }
-        let artifact_name = file_name(source)?;
-        files.insert(name.into(), json!({"path":run_geometry_reference(&artifact_name),"bytes":bytes.len(),"sha256":sha256::hex_digest(&bytes)}));
+        files.insert(name.into(), json!({"path":run_relative_reference(run_directory, source)?,"bytes":bytes.len(),"sha256":sha256::hex_digest(&bytes)}));
     }
     Ok(Value::Object(files))
-}
-
-fn run_geometry_reference(filename: &str) -> String {
-    format!("mesh/{filename}")
 }
 
 fn run_solver(
@@ -2780,6 +3049,9 @@ fn write_json_new(path: &Path, value: &Value) -> Result<()> {
 
 fn write_json_replace(path: &Path, value: &Value) -> Result<()> {
     if path.file_name().and_then(|name| name.to_str()) == Some("run.json") {
+        if value.get("kind").and_then(Value::as_str) == Some("mesh") {
+            return run_record_guard::write_mesh_record(path, value).map_err(Failure);
+        }
         return run_record_guard::write_scenario_record(path, value).map_err(Failure);
     }
     let text = format!("{}\n", serde_json::to_string_pretty(value)?);

@@ -35,7 +35,7 @@ For `fem.studyRun`, the descriptor permits an empty `logs/solver.stderr.log` onl
 
 ## Dependency and application evidence
 
-Use the supplied shared editor/platform and identified `fem-rust/` and `mesh-rust/` dependencies. The application builder owns its schema, package, JavaScript/JSX, actions, adapters and tests. Repair those files when they cause a failure; record fixed-dependency blockers without weakening a requirement.
+Use the supplied shared editor/platform and identified `fem-rust/` (including its mesher) dependencies. The application builder owns its schema, package, JavaScript/JSX, actions, adapters and tests. Repair those files when they cause a failure; record fixed-dependency blockers without weakening a requirement.
 
 Record the shared interfaces and candidate-specific frontend/schema/package/native identities in application acceptance. Build and watch commands are maintained in the [frontend development guide](../../../platform/ui/frontend-development.md); the [debugging guide](../../../platform/ui/editor-debugging.md) covers optional source reload and replay. Shared platform acceptance is evidence about those mechanisms, while [FEM acceptance](ACCEPTANCE.md) must exercise FEM's own providers, routes, profiles, live results and numerical outcomes.
 

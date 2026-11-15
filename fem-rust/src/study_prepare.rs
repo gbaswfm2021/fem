@@ -419,7 +419,7 @@ pub fn uses_common_preparation(model: &Value, capabilities: &Value) -> Result<bo
             .and_then(|profiles| profiles.get(profile))
             .and_then(|entry| entry.get("kind"))
             .and_then(Value::as_str),
-        Some("frequencyPlan" | "configuredFrequencyRequest")
+        Some("frequencyPlan" | "configuredFrequencyRequest" | "stationaryPlan")
     ))
 }
 
@@ -514,6 +514,89 @@ pub(crate) fn prepare_validated_study(envelope: &Value, capabilities: &Value) ->
         .get("threads")
         .and_then(Value::as_u64)
         .ok_or("Resolved solver settings omit an unsigned thread count.")?;
+    if preparation == "stationaryPlan" {
+        let scenario = crate::model_schema::scenario_metadata_for_profile(profile_id)?;
+        let result_defaults = scenario.get("resultDefaults").unwrap_or(&Value::Null);
+        let default_csv = scenario
+            .pointer("/studyFingerprint/defaultCsvFilename")
+            .and_then(Value::as_str);
+        let output = study.get("output").unwrap_or(&Value::Null);
+        let csv_name = envelope
+            .get("csvFilename")
+            .and_then(Value::as_str)
+            .or_else(|| output.get("csvFilename").and_then(Value::as_str))
+            .or(default_csv)
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("{study_id}.csv"));
+        if csv_name.len() > 103
+            || !csv_name.ends_with(".csv")
+            || csv_name.len() <= 4
+            || !csv_name.chars().enumerate().all(|(index, character)| {
+                if index == 0 {
+                    character.is_ascii_alphanumeric()
+                } else {
+                    character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')
+                }
+            })
+        {
+            return Err("The stationary Study CSV must be one safe .csv filename.".into());
+        }
+        let field_files = output
+            .get("fieldFiles")
+            .and_then(Value::as_bool)
+            .or_else(|| capability_study.pointer("/outputDefaults/fieldFiles").and_then(Value::as_bool))
+            .ok_or("Study output defaults must declare fieldFiles.")?;
+        let field_filename = result_defaults
+            .get("stationaryFieldFilename")
+            .and_then(Value::as_str);
+        let field_schema = result_defaults
+            .get("stationaryFieldSchema")
+            .and_then(Value::as_str);
+        if field_files && (field_filename.is_none() || field_schema.is_none()) {
+            return Err("A stationary scenario with field output must declare stationaryFieldFilename and stationaryFieldSchema in its result defaults.".into());
+        }
+        let request = json!({
+            "schema":"fem-solver-request/1",
+            "solver":profile_id,
+            "studyId":study_id,
+            "fieldFormulation":formulation,
+            "elementOrder":order,
+            "constitutiveQuadrature":constitutive_quadrature,
+            "solverBackend":backend,
+            "solverOrdering":ordering,
+            "solverThreads":threads,
+            "csvFilename":csv_name,
+            "fieldFiles":field_files,
+            "fieldFilename":field_filename,
+            "modelFile":envelope.get("modelFile").and_then(Value::as_str).unwrap_or("model.json"),
+            "meshFile":str_field(envelope, "meshFile", "prepare request")?,
+            "modelMapFile":envelope.get("modelMapFile").and_then(Value::as_str).unwrap_or("mesh/model-model-map.json"),
+            "outputDirectory":envelope.get("outputDirectory").and_then(Value::as_str).unwrap_or("output")
+        });
+        return Ok(json!({
+            "schema":"fullmeta-study-plan/1",
+            "studyId":study_id,
+            "profileId":profile_id,
+            "studyType":"stationary",
+            "totalPoints":1,
+            "solverSettings":{
+                "fieldFormulation":formulation,
+                "elementOrder":order,
+                "constitutiveQuadrature":constitutive_quadrature,
+                "solverBackend":backend,
+                "solverOrdering":ordering,
+                "solverThreads":threads
+            },
+            "request":request,
+            "study":study,
+            "component":component,
+            "csvFilename":csv_name,
+            "fieldFiles":field_files,
+            "stationaryFieldFilename":field_filename,
+            "stationaryFieldSchema":field_schema,
+            "stationaryFieldLabel":result_defaults.get("stationaryFieldLabel")
+        }));
+    }
     let cases = frequency_cases(study, physics, model)?;
     let frequencies_hz = cases.iter().map(|case| case.frequency).collect::<Vec<_>>();
     for (index, frequency) in frequencies_hz.iter().enumerate() {

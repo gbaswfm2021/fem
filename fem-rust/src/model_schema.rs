@@ -8,19 +8,23 @@ use serde_json::{Value, json};
 use std::sync::OnceLock;
 use std::{collections::BTreeSet, env, fs, path::PathBuf};
 
+#[path = "scenario_runtime.rs"]
+mod scenario_runtime;
+
 static SELECTED_MODEL_SCHEMA_PATH: OnceLock<PathBuf> = OnceLock::new();
 
 /// The caller selects the installed root; the generic loader follows its refs.
 pub(crate) fn context() -> Result<&'static SchemaContext, String> {
     static CONTEXT: OnceLock<Result<SchemaContext, String>> = OnceLock::new();
     match CONTEXT.get_or_init(|| {
-        let mut documents =
-            fullmeta_model::schema_documents::load_schema_documents(&runtime_model_schema_path()?)?;
+        let schema_path = runtime_model_schema_path()?;
+        let mut documents = fullmeta_model::schema_documents::load_schema_documents(&schema_path)?;
         if documents.is_empty() {
             return Err("The model schema document is not loaded.".into());
         }
         let root = documents.remove(0);
-        documents.extend(embedded_scenario_documents(&root)?);
+        let (root, scenario_documents) = scenario_runtime::compose(root, &schema_path)?;
+        documents.extend(scenario_documents);
         let mut entrypoints = vec!["/$defs/solverRequest".to_string()];
         for pointer in root
             .pointer("/x-fullmeta-rules/entrypoints")
@@ -42,51 +46,6 @@ pub(crate) fn context() -> Result<&'static SchemaContext, String> {
         Ok(context) => Ok(context),
         Err(error) => Err(error.clone()),
     }
-}
-
-fn embedded_scenario_documents(root: &Value) -> Result<Vec<Value>, String> {
-    let Some(profiles) = root
-        .pointer("/$defs/femProfiles")
-        .and_then(Value::as_object)
-    else {
-        return Ok(Vec::new());
-    };
-    let root_id = root
-        .get("$id")
-        .and_then(Value::as_str)
-        .ok_or("The FEM model schema must declare a $id before embedding profile schemas.")?;
-    let base = root_id
-        .rsplit_once('/')
-        .map(|(base, _)| format!("{base}/"))
-        .ok_or("The FEM model schema $id must include a document path.")?;
-    profiles
-        .iter()
-        .map(|(key, profile_schema)| {
-            let profile_id = profile_schema
-                .pointer("/x-fem-scenario/profile/id")
-                .and_then(Value::as_str)
-                .ok_or_else(|| {
-                    format!("Embedded FEM profile {key:?} must declare x-fem-scenario.profile.id.")
-                })?;
-            if key != profile_id {
-                return Err(format!(
-                    "Embedded FEM profile key {key:?} must match its profile ID {profile_id:?}."
-                ));
-            }
-            let mut document = profile_schema.clone();
-            let object = document
-                .as_object_mut()
-                .ok_or_else(|| format!("Embedded FEM profile {key:?} must be a schema object."))?;
-            object.insert(
-                "$id".into(),
-                Value::String(format!("{base}{profile_id}.schema.json")),
-            );
-            if let Some(dialect) = root.get("$schema") {
-                object.insert("$schema".into(), dialect.clone());
-            }
-            Ok(document)
-        })
-        .collect()
 }
 
 pub(crate) fn root() -> Result<&'static Value, String> {
@@ -123,18 +82,51 @@ pub(crate) fn physics_conditions_mut(physics: &mut Value) -> impl Iterator<Item 
         })
 }
 
+fn declared_boundary_condition_types() -> BTreeSet<String> {
+    let mut types = BTreeSet::new();
+    if let Ok(context) = context() {
+        for document in context.documents() {
+            if let Some(values) = document
+                .pointer("/x-fem-physics/supportedBoundaryTypes")
+                .and_then(Value::as_array)
+            {
+                types.extend(values.iter().filter_map(Value::as_str).map(str::to_string));
+            }
+        }
+    }
+    types
+}
+
 pub(crate) fn physics_boundary_conditions(physics: &Value) -> impl Iterator<Item = &Value> {
-    physics_conditions(physics).filter(|value| {
-        matches!(
-            value.get("type").and_then(Value::as_str),
-            Some("dirichlet" | "neumann" | "impedance")
-        )
+    let supported = declared_boundary_condition_types();
+    physics_conditions(physics).filter(move |value| {
+        value
+            .get("type")
+            .and_then(Value::as_str)
+            .is_some_and(|condition_type| supported.contains(condition_type))
     })
 }
 
 pub(crate) fn physics_periodic_conditions(physics: &Value) -> impl Iterator<Item = &Value> {
-    physics_conditions(physics)
-        .filter(|value| value.get("type").and_then(Value::as_str) == Some("periodicCondition"))
+    let mut pair_types = BTreeSet::new();
+    if let Ok(context) = context() {
+        for document in context.documents() {
+            if let Some(handling) = document
+                .pointer("/x-fem-physics/featureHandlingByType")
+                .and_then(Value::as_object)
+            {
+                pair_types.extend(handling.iter().filter_map(|(condition_type, behavior)| {
+                    (behavior.as_str() == Some("periodicPair")).then(|| condition_type.clone())
+                }));
+            }
+        }
+    }
+    physics_conditions(physics).filter(move |value| {
+        value
+            .get("type")
+            .and_then(Value::as_str)
+            .is_some_and(|condition_type| pair_types.contains(condition_type))
+    })
 }
 
 /// Resolve a registered executable name from the selected model schema.

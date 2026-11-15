@@ -2,6 +2,8 @@
 
 This is the entry point for the complete target FEM application. It defines what to build and how to establish acceptance. The [application guide](../docs/README.md) describes delivered behavior; [AGENTS.md](../AGENTS.md) supplies working instructions for an agent.
 
+The [FEM Rust and scenario interface guide](../docs/fem-rust-and-scenario-interfaces.md) explains how the current native commands, scenario contracts and numerical runners connect.
+
 The application consumes the fixed [FEM Model 2 public format](../docs/fullmeta-model-2.md). Its interpreting schema, package, widgets, validation programs and native bindings implement the application behavior specified here. A format definition and an application capability are separate contracts.
 
 ## Reading order

@@ -18,12 +18,12 @@ function frequencyParameter(model) {
 
 function fallbackFrequencyUnit(model, declaredUnit) {
   if (Object.hasOwn(unitScaleToHz, declaredUnit)) return declaredUnit;
-  return model?.scenario?.profileId === 'em-3d' ? 'GHz' : 'Hz';
+  return 'Hz';
 }
 
 /** Format checked GHz result coordinates using linked Physics/parameter declarations. */
 export function formatFieldFrequency(frequencyGHz, model, _action, declaredUnit) {
-  if (model?.scenario?.physics === 'thermal' || !Number.isFinite(frequencyGHz) || frequencyGHz <= 0) return '';
+  if (!model?.model?.physics?.frequency || !Number.isFinite(frequencyGHz) || frequencyGHz <= 0) return '';
   const frequencyHz = frequencyGHz * unitScaleToHz.GHz;
   if (!Number.isFinite(frequencyHz) || frequencyHz <= 0) return '';
 

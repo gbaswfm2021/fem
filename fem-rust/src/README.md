@@ -1,15 +1,41 @@
-# FEM solver implementation
+# FEM Rust source map
 
-The Rust sources here implement common FEM preflight, Study preparation and finite-element solves. Four wave executables handle harmonic electromagnetic/acoustic studies. The fifth executable, `thermal2d`, handles stationary 2D heat conduction. Each numerical executable runs its prepared problem and writes run artifacts under the selected project's `fem_runs/` directory.
+`dispatcher.rs` is the single FEM command entry point. It performs common
+preflight, discovers the selected scenario package, and delegates numerical
+work through a generated in-process module registry. `build.rs` generates that
+registry from `src/scenarios/registry.json` and each package's
+`solverModule` declaration.
 
-The standalone `dispatcher.rs` builds `fullmeta-fem`: it reads application registrations from disk, performs common whole-model FEM preflight and selects the declared preparation mode. `study_prepare` supplies common frequency and parameter preparation; `coordinator` orchestrates wave runs. `thermal2d_project.rs` owns the stationary adapter, geometry/mesh generation, solving, run records and summary output.
+All scenario-specific numerical kernels and module entry points live under
+`scenarios/`. There are no scenario-specific Cargo binary targets or
+wrapper files. A runner exports the common `run(arguments)` interface and is
+invoked by `fullmeta-fem` in a child mode, preserving the existing operation,
+event, and progress lifecycle.
 
-Reusable supplied-schema validation, schema bundling, tree navigation and ID checks live in the application-neutral `platform/model-rust/`. `model_validation.rs` performs common FEM checks using deployed schema declarations. Scenario implementation files retain checks on actual mesh connectivity, constitutive evaluation, boundary correspondence, supported numerical methods and computed systems. Direct scenario validation delegates to common preflight through `preflight_client.rs`. A new scenario that uses these contracts supplies its schema metadata and numerical implementation and can be compiled independently of shared WASM and other executables.
+Shared implementation stays at the source root. `coordinator.rs` owns common
+project orchestration, including stationary-study preparation and execution;
+`study_prepare.rs` builds schema-declared Study plans; `model_validation.rs`
+checks model declarations; `scenario_runtime.rs` loads versioned scenario
+packages; and the remaining modules implement common expressions, material
+handling, solver requests, results, operation lifecycle, and schema access.
+Scenario runners own physics algorithms and checks on numerical inputs and
+generated mesh data.
 
-`bin/thermal2d.rs` is the thermal entry point. It supports project CLI runs, saved/stdin validation, `--prepare-study`, `--server`, and prepared-request `--solve`. `thermal2d.rs` solves stationary conduction with first order triangles and constant isotropic conductivity per material selection. Material and boundary quantities accept parameter expressions through the shared quantity core, in units compatible with `W/(m*K)`, `K`, and `W/m^2`. Spatial material/boundary expressions remain unsupported. Components without prescribed temperature use the Study's `meanTemperature` reference, defaulting to zero, and require compatible net heat flux. Conductivity and temperature signs are unrestricted. Thermal sweeps and custom global/pointwise variables remain unavailable. Output includes nodal `T` in `temperature.json`, cell heat flux/conductivity and a summary CSV. See `fem-rust/README.md` for commands and the normalized request contract.
+The authored `fem.schema.json` is scenario-neutral. The editor and native
+consumers load `src/scenarios/registry.json` and its versioned packages.
+The editor composes them in `schema-documents.js`; the FEM dispatcher and
+mesher use the shared loader in `scenario_runtime.rs`. These declarations
+supply profile, material, Physics, field, capability, validation, UI, and
+runtime data without profile-ID branches in shared FEM source.
 
-The shared quantity core uses five SI dimension exponents `[m, kg, s, A, K]` and accepts legacy four-exponent JSON vectors. Changes to shared runtime code require rebuilding its affected consumers. A scenario that reuses the deployed contracts can build its own executable independently.
+To add a scenario, add its package and registry entry under `src/scenarios/`, then
+add its numerical runner under `src/scenarios/`. Declare its `solverModule`
+and supported Study types in the JSON package. The generated registry compiles
+it into `fullmeta-fem`; adding an ordinary scenario does not require a new
+Cargo target, shared dispatcher branch, or edit outside `fem-rust/`.
 
-The surrounding JavaScript handles model editing, browser interaction, and result plotting. The selected model schema embeds its built-in scenario modules under `$defs.femProfiles`, can import optional extension modules, and registers result-adapter modules under `x-fullmeta-runtime.resources.resultAdapters`: `*` selects harmonic fields, while `thermal-2d` selects stationary temperature fields. Adding a future thermal-3d schema, executable and adapter mapping requires no scenario branch in the shared editor implementation in `platform/ui/widgets/model-editor/`, the generic Rust Kernel route host, or the dispatcher. FEM model checks belong to common native preflight; mesh-dependent and numerical checks remain with numerical execution. WASM supplies generic schema/edit operations only.
-
-Tests and numerical reference comparisons were not run for this integration, as requested. Supported physics and limits are documented in `fem-rust/README.md` and declared across the FEM application schemas.
+Reusable supplied-schema validation, schema bundling, tree navigation, and ID
+checks live in the application-neutral `platform/model-rust/`. The shared
+quantity core uses five SI dimension exponents `[m, kg, s, A, K]` and accepts
+legacy four-exponent JSON vectors. See [the Rust application guide](../README.md)
+for commands and scenario limits.

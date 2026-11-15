@@ -87,9 +87,13 @@ export function normalizeFieldArtifact(raw,{model,modelSchema,action,resolved={}
   if(raw.studyId!==undefined&&resolved.studyId!==undefined&&raw.studyId!==resolved.studyId)fail(artifactPath,'field belongs to another Study.');
   if(raw.runId!==undefined&&resolved.runId!==undefined&&raw.runId!==resolved.runId)fail(artifactPath,'field belongs to another run.');
   if(resolved.modelFreshness!==undefined&&resolved.modelFreshness!=='current')fail(artifactPath,'field belongs to a stale model snapshot.');
-  const stationary=model.scenario.physics==='thermal';
+  const studies=Array.isArray(model?.model?.study)?model.model.study:[];
+  const selectedStudy=resolved.studyId!==undefined
+    ?studies.find(study=>study?.id===resolved.studyId)
+    :studies.length===1?studies[0]:undefined;
+  const stationary=resolved.stationary===true||selectedStudy?.type==='stationary';
   const frequencyHz=raw.frequencyHz??(raw.frequencyGHz===undefined?undefined:raw.frequencyGHz*1e9);
-  if(!stationary&&(!(finite(frequencyHz,`${artifactPath}.frequencyHz`)>0)))fail(artifactPath,'wave frequency must be positive.');
+  if(model?.model?.physics?.frequency&&!(finite(frequencyHz,`${artifactPath}.frequencyHz`)>0))fail(artifactPath,'declared Physics frequency must be positive.');
   if(!stationary&&resolved.frequencyGHz!==undefined&&Math.abs(frequencyHz-resolved.frequencyGHz*1e9)>Math.max(1,Math.abs(frequencyHz))*1e-10)fail(artifactPath,'field frequency differs from the selected case.');
   const quantities=resultQuantityDescriptors(model,modelSchema),fields={},cellFields={};
   const catalog=modelSchema.$defs.femProfiles[model.scenario.profileId]['x-fem-scenario'].fields.formulations[model.model.physics.formulation];
