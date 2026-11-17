@@ -12,6 +12,7 @@ import { projectModel } from './js/model-projection.js';
 import { resultFields } from './js/result-fields.js';
 import { createApplicationResultAdapters } from './js/result-adapters.js';
 import { createResultPresentation } from './ui/result-presentation.js';
+import { createResultRecipeRefresh } from './js/result-recipe-refresh.js';
 import { createApplicationActions } from './js/operation-actions.js';
 import { restorePreview, restorePreviewAfterStudy } from './js/preview-restoration.js';
 import { fieldChoiceRecords } from './js/field-choices.js';
@@ -239,6 +240,7 @@ export async function createApplicationPackage(options = {}) {
   let actionServices;
   let checkedFieldState;
   let historyHost;
+  const resultRecipeRefresh=createResultRecipeRefresh();
   const history=createStudyHistory({services:()=>actionServices,render:view=>renderStudyHistory(historyHost,view)});
   const readArtifact=options.resolveArtifact||((url,requestOptions)=>{
     if(!actionServices?.network?.requestJson)throw new Error('The editor artifact service is unavailable.');
@@ -260,9 +262,11 @@ export async function createApplicationPackage(options = {}) {
     renderPreview(context) {
       return renderPreview({ ...context, expressionPolicy: bindRuntimePolicy(context?.model ?? null, {}, schema['x-fullmeta-expressionRuntime'].real, schema) });
     },
-    mountEditorPanels(context){const dispose=mountEditorPanels(context);historyHost=context.settingsView.querySelector('[data-fem-study-history]');return ()=>{history.dispose();historyHost=null;dispose();};},
+    mountEditorPanels(context){const dispose=mountEditorPanels(context);historyHost=context.settingsView.querySelector('[data-fem-study-history]');return ()=>{resultRecipeRefresh.reset();history.dispose();historyHost=null;dispose();};},
     renderResultSettings(context){
       checkedFieldState=context.fieldPlotState;if(updateCheckedFieldView(context.model,checkedFieldState))context.drawPreview();renderResultSettings(context);
+      const selectedResult=context.isResultPath(context.selectedPath)?context.valueAt(context.selectedPath):null;
+      resultRecipeRefresh.observe(selectedResult,context.loadResultAction)?.catch(error=>context.showResultMessage(error.message,'error'));
       const path=context.selectedPath,study=Array.isArray(path)&&path.length===3&&path[0]==='model'&&path[1]==='study'?context.valueAt(path):null;
       if(study?.id&&actionServices)history.select({studyId:study.id,...actionServices.resolveInputs({folder:'document.folder',file:'document.file'})});else history.clear();
     },

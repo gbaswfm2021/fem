@@ -1869,6 +1869,7 @@
                 "format": "fullmeta-ui-behavior/1",
                 "payload": {
                   "presentation": {
+                    "hidden": true,
                     "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"#8bdacb\" stroke-width=\"1.2\" stroke-linejoin=\"round\"><path d=\"m5.5 2 4 2.2v4.4l-4 2.2-4-2.2V4.2zM1.5 4.2l4 2.3 4-2.3M5.5 6.5v4.3\"/><circle cx=\"11.5\" cy=\"11.2\" r=\"3\"/><path d=\"M11.5 8.2v6M8.5 11.2h6\"/></svg>"
                   }
                 },
@@ -1926,7 +1927,19 @@
             "features",
             "tolerance"
           ],
-          "type": "object"
+          "type": "object",
+          "x-fullmeta-ui-behavior": {
+            "context": "projectEditing",
+            "format": "fullmeta-ui-behavior/1",
+            "payload": {
+              "presentation": {
+                "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"#8bdacb\" stroke-width=\"1.2\" stroke-linejoin=\"round\"><path d=\"m5.5 2 4 2.2v4.4l-4 2.2-4-2.2V4.2zM1.5 4.2l4 2.3 4-2.3M5.5 6.5v4.3\"/><circle cx=\"11.5\" cy=\"11.2\" r=\"3\"/><path d=\"M11.5 8.2v6M8.5 11.2h6\"/></svg>"
+              }
+            },
+            "target": {
+              "kind": "field"
+            }
+          }
         },
         "integrationOperators": {
           "items": {
@@ -40839,6 +40852,18 @@
     ]
   },
   "x-fullmeta-ui-tree": {
+    "menuTargets": [
+      {
+        "when": {
+          "path": ["model", "geometry"],
+          "scope": "item"
+        },
+        "arrayPath": {
+          "from": "itemPath",
+          "append": ["features"]
+        }
+      }
+    ],
     "actionMenus": [
       {
         "entries": [
@@ -42135,12 +42160,17 @@
         }
       },
       {
+        "children": [
+          {
+            "path": ["features"],
+            "role": "children"
+          }
+        ],
         "path": [
           "model",
-          "geometry",
-          "features"
+          "geometry"
         ],
-        "role": "collection",
+        "role": "objectRoot",
         "title": "Geometry features"
       },
       {

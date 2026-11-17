@@ -4,6 +4,9 @@ import { createTableData, resolveTableSelection } from '../../../platform/ui/wid
 const fail=(path,message)=>{throw new Error(`${path}: ${message}`);};
 const owns=(value,key)=>Object.hasOwn(value||{},key);
 const finite=(value,path)=>{if(typeof value!=='number'||!Number.isFinite(value))fail(path,'expected a finite numeric sample.');return value;};
+// EM3D writes frequency_GHz to eight decimal places: the rounding error can
+// reach half of 1e-8 GHz, or 5 Hz, even for an otherwise matching saved case.
+const coordinateTolerance=(key,value)=>Math.max(1,Math.abs(value))*1e-10+(key==='frequency_GHz'?5:0);
 
 export function parseNumericCsv(text,path='CSV artifact') {
   if(typeof text!=='string')fail(path,'expected CSV text.');
@@ -63,14 +66,19 @@ export function prepareResultDataset(text,dataset,action,model) {
     if(metadata.coordinates.length!==rows.length)fail(path,'CSV row count differs from the checked Study case count.');
     rows.forEach((row,index)=>{
       const expected=metadata.coordinates[index].frequencyHz;
-      if(expected!==undefined)for(const key of ['frequency_Hz','frequency_GHz'])if(owns(row,key)&&Math.abs(row[key]-finite(expected,path))>Math.max(1,Math.abs(expected))*1e-10)fail(path,`CSV frequency differs from saved case ${index}.`);
+      if(expected!==undefined)for(const key of ['frequency_Hz','frequency_GHz'])if(owns(row,key)){
+        const frequency=finite(expected,path);
+        if(Math.abs(row[key]-frequency)>coordinateTolerance(key,frequency))fail(path,`CSV frequency differs from saved case ${index}.`);
+        // Preserve the checked case's full precision for plots and filters.
+        row[key]=frequency;
+      }
     });
     for(const descriptor of metadata.columns||[]){
       const actual=unit(descriptor.unit,`${path}.${descriptor.key}`),display=descriptor.key===dataset.xColumn?dataset.xUnit||descriptor.unit:descriptor.unit;
       const displayUnit=unit(display,`${path}.${descriptor.key}`);compatible(actual,displayUnit,`${path}.${descriptor.key}`);
       rows.forEach((row,index)=>{
         const value=finite(metadata.coordinates[index].values?.[descriptor.key],`${path}: saved case ${index}`);
-        if(owns(row,descriptor.key)&&Math.abs(row[descriptor.key]-value)>Math.max(1,Math.abs(value))*1e-10)fail(path,`CSV parameter ${descriptor.key} differs from saved case ${index}.`);
+        if(owns(row,descriptor.key)&&Math.abs(row[descriptor.key]-value)>coordinateTolerance(descriptor.key,value))fail(path,`CSV parameter ${descriptor.key} differs from saved case ${index}.`);
         row[descriptor.key]=value;
       });
       const column={...structuredClone(descriptor),unit:display,displayScale:displayUnit.scale,role:'parameter'};

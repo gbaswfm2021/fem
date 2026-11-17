@@ -26,7 +26,7 @@ The Model Editor renders the project hierarchy with the shared [Tree widget](../
 | Branch | Model data/function | Tree requirements |
 | --- | --- | --- |
 | Definitions | Parameters, global variables, and pointwise variables. | Expandable presentation group with the dedicated `ICON-037` icon and three counted `collectionLink` rows. Each link opens the collection's shared Settings table. |
-| Geometry features | Primitives and composed feature groups under `model.geometry.features`. | Collection with per-kind icons/titles and add actions; selecting a feature highlights its geometry. |
+| Geometry features | Geometry tolerance and primitives and composed feature groups under `model.geometry`. | Selecting the heading edits tolerance; expanding it reveals feature rows with per-kind icons/titles and add actions. Selecting a feature highlights its geometry. |
 | Selections | Domain, boundary, edge, point, or coordinate-filtered selections under `model.selections`. | Each named selection appears once. Selecting its row highlights the resolved entity set and opens its Settings, including its shared Keyed Choice Matrix. |
 | Integration operators | Named operators used by model-defined observables. | Selecting an operator shows its referenced selection and operation settings. |
 | Mesh | Element family, Gmsh options, size controls, periodic pairs. | Expose mesh actions and settings; generated mesh visibility is controlled separately from geometry. |
@@ -62,7 +62,7 @@ Use this table as the implementation map for tree identity and behavior. `*` den
 | Parameters collection link | `/model/parameters` | `Parameters (count)` | Shared Parameters Settings table in array order | Open the default structure scene. |
 | Global variables collection link | `/model/variables` | `Global variables (count)` | Shared Global variables Settings table in array order | Open the default structure scene. |
 | Pointwise variables collection link | `/model/pointwiseVariables` | `Pointwise variables (count)` | Shared Pointwise variables Settings table in array order | Open the default structure scene. |
-| Geometry features section | Presentation group mapped to `/model/geometry/features` | Geometry features | No separate Settings form | Expands the geometry feature rows. |
+| Geometry features section | `/model/geometry` | Geometry features | Geometry tolerance | Expands the geometry feature rows; its context menu adds to `/model/geometry/features`. |
 | Geometry feature row | `/model/geometry/features/*` and nested `features/*` | Feature `name`, then `id` | Selected feature's own fields | Highlights the selected primitive or composed feature. Children are nested beneath their owning feature. |
 | Selections section | `/model/selections` | Selections | Section add action and selection rows | Disclosure leaves the current selection and view active. |
 | Named selection row | `/model/selections/*` | Selection `name`, then `id` | Entity, coordinate filter, and ordered addresses in the shared Keyed Choice Matrix | Highlights the resolved selected entity set. An omitted membership key displays Outside. |

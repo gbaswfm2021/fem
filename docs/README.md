@@ -52,6 +52,10 @@ and [mesher guide](../fem-rust/src/mesh/GUIDE.md) for the native interfaces.
 
 ## Editing and validation
 
+Select **Geometry features** to edit the geometry tolerance and its unit. Expand
+the section to reach the individual features; right-click the heading to add a
+feature.
+
 The current validation declarations compare selection membership addresses with
 omitted entries treated as Outside, preserving the stored rows. They also
 check definition-symbol uniqueness and material quantity expressions. Constant
@@ -112,6 +116,8 @@ Periodic condition can enable an explicit Floquet phase vector.
 For a configured global-variable plot, **Save figure** exports its checked
 Plot view to the selected `.svg`, `.png` or `.pdf` filename and reports the
 saved path and byte count. Table view uses the same selected samples and units.
+After editing a plot's settings, select **Apply item** to refresh its Plot and
+Table using the existing Study results; a new Study run is not needed.
 
 The Windows mesher supports membership references to nested child features and
 nonlinear coordinate zero expressions. For a nonlinear filter, the expression
