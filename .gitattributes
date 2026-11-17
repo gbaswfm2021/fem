@@ -1,0 +1,3 @@
+# The Kernel checks the exact bytes embedded in the FEM executable.
+# Keep this registry identical in Windows checkouts and GitHub ZIP archives.
+/native-operations.json text eol=lf
