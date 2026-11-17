@@ -1,6 +1,7 @@
 //! Opt-in durable retry identity. Never start another worker for an existing operation ID.
 use super::{checked_descendant, checked_run_id, model_schema, read_json, study_run_id};
-use fullmeta_operation_contracts::{ContractIdentity, Diagnostic, digest};
+use crate::operation_contracts as fullmeta_operation_contracts;
+use crate::operation_contracts::{ContractIdentity, Diagnostic, digest};
 use serde_json::{Value, json};
 use std::{
     env, fs,
@@ -241,6 +242,7 @@ mod tests {
     use super::*;
     #[test]
     fn exact_retry_identity_includes_unknown_data_schema_and_study() {
+        crate::initialize_operation_registry().unwrap();
         let model = json!({"x-unknown":{"order":[2,1],"flag":false}});
         let initial = fingerprint_for(&model, "study", "models/a.json", "schema.json", b"schema1");
         assert_eq!(

@@ -507,20 +507,17 @@ fn run_model(
             if let Some(&material) = constant_materials.get(tag) {
                 samples.resize(quadrature.len(), material);
             } else {
-                for q in &quadrature {
-                    let point = (0..3).fold([0.0; 3], |mut point, local| {
+                let sample_points = quadrature.iter().map(|q| {
+                    (0..3).fold([0.0; 3], |mut point, local| {
                         for axis in 0..3 {
                             point[axis] += q[local] * points[local][axis];
                         }
                         point
-                    });
-                    let values = compiled_materials.evaluate(
-                        *tag,
-                        &parameter_symbols,
-                        frequency,
-                        point,
-                        &format!("triangle {element} quadrature point"),
-                    )?;
+                    })
+                }).collect::<Vec<_>>();
+                let rows = compiled_materials.evaluate_batch(*tag, &parameter_symbols, frequency,
+                    &sample_points, &format!("triangle {element} quadrature point"))?;
+                for values in rows {
                     samples.push(em_material_from_values(&values, frequency, formulation)?);
                 }
             }

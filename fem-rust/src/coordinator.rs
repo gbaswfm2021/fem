@@ -1068,16 +1068,15 @@ fn run_stationary_study(
         record["artifacts"]["fieldFiles"] = json!(field_artifacts);
         record["artifacts"]["fieldFileCount"] = json!(field_names.len());
         record["artifacts"]["csvBytes"] = json!(csv_metadata.len());
+        // Completion artifacts must belong to this run; the mesh cache is shared.
+        fs::copy(&prepared_mesh.paths.gmsh_log, logs_directory.join("gmsh.log"))?;
         write_json_replace(&run_path, &record)?;
         let output_files = ["run.json", "request.json"]
             .iter()
             .map(|name| format!("{run_relative}/{name}"))
             .chain(run_artifacts::completion_solver_log_files(&run_relative))
             .chain([
-                format!(
-                    "{run_relative}/mesh/{}",
-                    file_name(&prepared_mesh.paths.gmsh_log)?
-                ),
+                format!("{run_relative}/logs/gmsh.log"),
                 format!("{run_relative}/output/{csv_name}"),
             ])
             .chain(

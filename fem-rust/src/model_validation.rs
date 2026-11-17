@@ -8,9 +8,9 @@ use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) fn structure_errors(model: &Value) -> Vec<String> {
-    match schema::root() {
-        Ok(root) => {
-            let mut errors = schema::validate(model, root);
+    match schema::context() {
+        Ok(context) => {
+            let mut errors = context.validate(model);
             if let Some(physics) = model.pointer("/model/physics").and_then(Value::as_object) {
                 for (key, condition) in physics {
                     if let (Some(id), Some(_)) = (
@@ -77,7 +77,7 @@ fn semantic_errors(model: &Value, external: &Value) -> Vec<String> {
     let result = (|| {
         let context = validation_context(model, external)?;
         let schemas = schema::context()?;
-        fullmeta_model::rules::validate(model, schemas.root(), schemas.documents(), &context)
+        schemas.validate_rules(model, &context)
     })();
     match result {
         Ok(errors) => errors,
@@ -101,13 +101,7 @@ pub(crate) fn validate_preparation_request(
         .get("x-fullmeta-preparationValidation")
         .ok_or("The model schema must declare its preparation request validation.")?;
     let context = validation_context(model, external)?;
-    let errors = fullmeta_model::rules::validate_declaration(
-        envelope,
-        schemas.root(),
-        schemas.documents(),
-        &context,
-        declaration,
-    )?;
+    let errors = schemas.validate_declaration(envelope, &context, declaration)?;
     if errors.is_empty() {
         Ok(())
     } else {

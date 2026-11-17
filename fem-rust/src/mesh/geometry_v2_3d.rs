@@ -455,6 +455,8 @@ fn compile_domain_feature(
     path: &str,
     next_geo_id: &mut usize,
     next_boolean_id: &mut usize,
+    capture_nested: bool,
+    nested_probes: &mut Vec<(String, String)>,
     geo: &mut Vec<String>,
 ) -> Result<Feature> {
     let kind = value.get("type").and_then(Value::as_str).unwrap_or("");
@@ -490,8 +492,20 @@ fn compile_domain_feature(
                 &format!("{path}.features[{index}]"),
                 next_geo_id,
                 next_boolean_id,
+                capture_nested,
+                nested_probes,
                 geo,
             )?);
+        }
+        // A parent Boolean operation consumes its children. Preserve copies
+        // before that happens so nested addresses can use CAD overlap even
+        // when a fragment's center of mass lies outside the fragment.
+        if capture_nested {
+            for child in &built {
+                let probe = format!("domainNestedProbe{}", nested_probes.len());
+                geo.push(format!("{probe}[] = Duplicata{{ Volume{{{}}}; }};", child.geo_id));
+                nested_probes.push((child.id.clone(), probe));
+            }
         }
         let result = format!("{}{}", kind, *next_boolean_id);
         *next_boolean_id += 1;
@@ -620,7 +634,7 @@ fn emit_domain_selection(
     variable: &str,
     selection_id: &str,
     selections: &HashMap<String, &Value>,
-    features: &[Feature],
+    feature_memberships: &HashMap<String, usize>,
     address_primitives: &[Value],
     _feature_by_id: &HashMap<String, usize>,
     tolerance: f64,
@@ -644,17 +658,8 @@ fn emit_domain_selection(
     let membership = address_primitives
         .iter()
         .map(|primitive| {
-            features
-                .iter()
-                .enumerate()
-                .find(|(_, feature)| primitive["id"].as_str() == Some(feature.id.as_str()))
-                .and_then(|(index, feature)| {
-                    matches!(
-                        feature.primitive.get("type").and_then(Value::as_str),
-                        Some("union" | "intersection")
-                    )
-                    .then(|| format!("domainFeatureMembership{index}"))
-                })
+            primitive["id"].as_str().and_then(|id| feature_memberships.get(id))
+                .map(|index| format!("domainFeatureMembership{index}"))
         })
         .collect::<Vec<_>>();
     crate::mesh::selection_address::emit_domain_address_union_with_membership(
@@ -702,11 +707,22 @@ pub fn compile(model: &Value, component_id: Option<&str>) -> Result<CompiledGeom
     if feature_values.is_empty() {
         return Err("model.geometry.features must contain at least one feature.".into());
     }
+    let root_ids = feature_values.iter().filter(|feature| {
+        !matches!(feature.get("type").and_then(Value::as_str),
+            Some("circleCurve" | "lineSegment" | "planeRectangle" | "diskSurface"))
+    }).filter_map(|feature| feature.get("id").and_then(Value::as_str)).collect::<HashSet<_>>();
+    let has_nested_address = component.get("selections").and_then(Value::as_array)
+        .into_iter().flatten()
+        .flat_map(|selection| selection.get("addresses").and_then(Value::as_array).into_iter().flatten())
+        .filter_map(|row| row.get("membership").and_then(Value::as_object))
+        .flat_map(|map| map.keys())
+        .any(|id| !root_ids.contains(id.as_str()));
     let mut features = Vec::with_capacity(feature_values.len());
     let mut lower_features = Vec::<LowerFeature>::new();
     let mut feature_by_id = HashMap::<String, usize>::new();
     let mut next_geo_id = 1usize;
     let mut next_boolean_id = 1usize;
+    let mut nested_probes = Vec::<(String, String)>::new();
     let mut geo = vec![
         format!("// Generated from FullMeta model {}.", comment(c_name)),
         "SetFactory(\"OpenCASCADE\");".to_string(),
@@ -735,6 +751,8 @@ pub fn compile(model: &Value, component_id: Option<&str>) -> Result<CompiledGeom
             &path,
             &mut next_geo_id,
             &mut next_boolean_id,
+            has_nested_address,
+            &mut nested_probes,
             &mut geo,
         )?;
         if lower_features.iter().any(|feature| feature.id == built.id) {
@@ -753,10 +771,13 @@ pub fn compile(model: &Value, component_id: Option<&str>) -> Result<CompiledGeom
         .iter()
         .enumerate()
         .filter_map(|(index, feature)| {
-            matches!(
-                feature.primitive.get("type").and_then(Value::as_str),
-                Some("union" | "intersection")
-            )
+            // Fragmenting several primitives can produce a ring whose center
+            // lies in its hole. A lone convex primitive keeps the old path.
+            (features.len() > 1
+                || matches!(
+                    feature.primitive.get("type").and_then(Value::as_str),
+                    Some("union" | "intersection")
+                ))
             .then(|| {
                 (
                     index,
@@ -789,8 +810,15 @@ pub fn compile(model: &Value, component_id: Option<&str>) -> Result<CompiledGeom
         );
     }
     geo.push(format!("tol={};", fmt(tolerance)));
+    let mut feature_memberships = HashMap::<String, usize>::new();
     for (feature_index, probe, _) in &boolean_membership_probes {
         emit_boolean_membership_map(&mut geo, *feature_index, probe, tolerance);
+        feature_memberships.insert(features[*feature_index].id.clone(), *feature_index);
+    }
+    for (offset, (id, probe)) in nested_probes.iter().enumerate() {
+        let index = features.len() + offset;
+        emit_boolean_membership_map(&mut geo, index, probe, tolerance);
+        feature_memberships.insert(id.clone(), index);
     }
     let root_address_primitives = features
         .iter()
@@ -802,25 +830,6 @@ pub fn compile(model: &Value, component_id: Option<&str>) -> Result<CompiledGeom
         .collect::<Vec<_>>();
     let nested_primitives =
         crate::mesh::selection_address::nested_address_primitives(&root_address_primitives)?;
-    let root_ids = features
-        .iter()
-        .map(|feature| feature.id.as_str())
-        .collect::<HashSet<_>>();
-    let has_nested_address = component
-        .get("selections")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .flat_map(|selection| {
-            selection
-                .get("addresses")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-        })
-        .filter_map(|row| row.get("membership").and_then(Value::as_object))
-        .flat_map(|map| map.keys())
-        .any(|id| !root_ids.contains(id.as_str()));
     let address_primitives = if has_nested_address {
         nested_primitives
     } else {
@@ -834,6 +843,38 @@ pub fn compile(model: &Value, component_id: Option<&str>) -> Result<CompiledGeom
         .iter()
         .filter_map(|selection| Some((selection.get("id")?.as_str()?.to_string(), selection)))
         .collect();
+    let active_selection_ids = component
+        .pointer("/physics/domainSelectionIds")
+        .and_then(Value::as_array)
+        .filter(|ids| {
+            !ids.is_empty() && (features.len() > 1 || matches!(
+                features[0].primitive.get("type").and_then(Value::as_str),
+                Some("union" | "intersection")
+            ))
+        });
+    if let Some(ids) = active_selection_ids {
+        geo.push("activeVolumes[] = {};".to_string());
+        for (index, selection_id) in ids.iter().enumerate() {
+            let selection_id = text(selection_id, "model.physics.domainSelectionIds[]")?;
+            let variable = format!("physicsVolumes_{index}");
+            emit_domain_selection(
+                &mut geo,
+                &variable,
+                selection_id,
+                &selections,
+                &feature_memberships,
+                &address_primitives,
+                &feature_by_id,
+                tolerance,
+            )?;
+            geo.push(format!("activeVolumes[] += {{{variable}[]}};"));
+        }
+        geo.push("activeVolumes[] = Unique[activeVolumes[]];".to_string());
+        geo.push(
+            "If (#activeVolumes[] == 0) Error(\"Physics selects no 3D volumes.\"); EndIf"
+                .to_string(),
+        );
+    }
     let materials = component
         .get("materials")
         .and_then(Value::as_array)
@@ -883,7 +924,7 @@ pub fn compile(model: &Value, component_id: Option<&str>) -> Result<CompiledGeom
             &variable,
             &selection_id,
             &selections,
-            &features,
+            &feature_memberships,
             &address_primitives,
             &feature_by_id,
             tolerance,
@@ -901,7 +942,12 @@ pub fn compile(model: &Value, component_id: Option<&str>) -> Result<CompiledGeom
             .push(json!({"id":id,"name":name,"physicalTag":index+1,"selectionId":selection_id}));
     }
     let unassigned_tag = materials.len() + 1;
-    geo.push("unassignedVolumes[] = {allVolumes[]};".to_string());
+    geo.push(if active_selection_ids.is_some() {
+        "unassignedVolumes[] = {activeVolumes[]};".to_string()
+    } else {
+        // Preserve geometry authoring before Physics and the single-body path.
+        "unassignedVolumes[] = {allVolumes[]};".to_string()
+    });
     geo.push("unassignedVolumes[] -= {claimedVolumes[]};".to_string());
     geo.push("If (#unassignedVolumes[] > 0)".to_string());
     geo.push(format!("  Physical Volume(\"__FullMeta_unassigned_volume_check__\", {unassigned_tag}) = {{unassignedVolumes[]}};"));
@@ -943,17 +989,8 @@ pub fn compile(model: &Value, component_id: Option<&str>) -> Result<CompiledGeom
     let feature_membership = address_primitives
         .iter()
         .map(|primitive| {
-            features
-                .iter()
-                .enumerate()
-                .find(|(_, feature)| primitive["id"].as_str() == Some(feature.id.as_str()))
-                .and_then(|(index, feature)| {
-                    matches!(
-                        feature.primitive.get("type").and_then(Value::as_str),
-                        Some("union" | "intersection")
-                    )
-                    .then(|| format!("domainFeatureMembership{index}"))
-                })
+            primitive["id"].as_str().and_then(|id| feature_memberships.get(id))
+                .map(|index| format!("domainFeatureMembership{index}"))
         })
         .collect::<Vec<_>>();
     let mut boundary_selections = Vec::new();
@@ -1184,7 +1221,7 @@ pub fn compile(model: &Value, component_id: Option<&str>) -> Result<CompiledGeom
                     &variable,
                     &control.selection_id,
                     &selections,
-                    &features,
+                    &feature_memberships,
                     &address_primitives,
                     &feature_by_id,
                     tolerance,
@@ -1210,6 +1247,13 @@ pub fn compile(model: &Value, component_id: Option<&str>) -> Result<CompiledGeom
     }
     crate::mesh::mesh_items::emit_background_entity_size_fields(&mut geo, 1, &size_fields);
     crate::mesh::mesh_options::emit(&mut geo, &options, !size_fields.is_empty(), 3);
+    if active_selection_ids.is_some() {
+        // Resolve construction interfaces before removing inactive fragments,
+        // so the hollow solid retains its inner-wall boundary selections.
+        geo.push("inactiveVolumes[] = {allVolumes[]};".to_string());
+        geo.push("inactiveVolumes[] -= {activeVolumes[]};".to_string());
+        geo.push("Delete { Volume{inactiveVolumes[]}; }".to_string());
+    }
     geo.push("Mesh 3;".to_string());
     let primitive_rows = address_primitives.clone();
     let domain_selections: Vec<&Value> = selection_values

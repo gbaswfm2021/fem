@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fullmeta.local/contracts/native-operations.json",
+  "format": "fullmeta-native-operations/1",
+  "operations": {
+    "mesh.check": {
+      "version": 1,
+      "program": "mesh",
+      "entry": "--operation-check",
+      "protocol": "json-stdio",
+      "description": "Check the supplied opaque model through the existing application-selected geometry compiler without writing artifacts.",
+      "effects": { "readOnly": true, "createsArtifacts": false, "idempotent": true },
+      "inputSchema": { "$ref": "#/$defs/meshInput" },
+      "resultSchema": { "$ref": "#/$defs/meshCheckResult" }
+    },
+    "mesh.compile": {
+      "version": 1,
+      "program": "mesh",
+      "entry": "--operation-compile",
+      "protocol": "json-stdio",
+      "description": "Compile the supplied opaque model with the existing geometry compiler into checked geometry and model-map artifacts.",
+      "effects": { "readOnly": false, "createsArtifacts": true, "idempotent": true },
+      "inputSchema": { "$ref": "#/$defs/meshCompileInput" },
+      "resultSchema": { "$ref": "#/$defs/meshCompileResult" },
+      "artifacts": { "location": "result", "paths": ["/geoPath", "/mapPath"], "minimumBytes": 1 }
+    },
+    "fem.prepareStudy": {
+      "version": 1,
+      "program": "fem",
+      "entry": "--prepare-study",
+      "protocol": "json-stdio",
+      "description": "Prepare a selected Study using the existing application-selected native preparation implementation. Model data remains opaque and is not rewritten.",
+      "effects": { "readOnly": true, "createsArtifacts": false, "idempotent": true },
+      "inputSchema": { "$ref": "#/$defs/prepareStudyInput" },
+      "resultSchema": { "$ref": "#/$defs/preparedStudyResult" }
+    },
+    "fem.studyRun": {
+      "version": 1,
+      "program": "fem",
+      "entry": "--server",
+      "protocol": "ndjson-stdio",
+      "description": "Run the existing selected Study with its original document, schema, operation ID and storage context, streaming native run events.",
+      "effects": { "readOnly": false, "createsArtifacts": true, "idempotent": true },
+      "inputSchema": { "$ref": "#/$defs/opaqueModel" },
+      "eventSchema": { "$ref": "#/$defs/studyEvent" },
+      "terminal": { "discriminator": "type", "success": ["complete"], "failure": ["error", "cancelled"] },
+      "artifacts": { "location": "event", "eventType": "complete", "pathsPointer": "/outputFiles", "minimumBytes": 1, "allowEmptySuffixes": ["/logs/solver.stderr.log"], "requiredSuffixes": ["/run.json", "/request.json", "/logs/solver.stdout.log", "/logs/solver.stderr.log", "/logs/solver-stage-timings.csv"] }
+    }
+  },
+  "$defs": {
+    "opaqueModel": { "type": "object", "additionalProperties": true },
+    "meshInput": {
+      "type": "object", "required": ["model"],
+      "properties": { "model": { "$ref": "#/$defs/opaqueModel" }, "componentId": { "type": "string", "minLength": 1 } },
+      "additionalProperties": false
+    },
+    "meshCompileInput": {
+      "type": "object", "required": ["model"],
+      "properties": { "model": { "$ref": "#/$defs/opaqueModel" }, "componentId": { "type": "string", "minLength": 1 }, "outputDirectory": { "type": "string", "minLength": 1 } },
+      "additionalProperties": false
+    },
+    "meshCheckResult": {
+      "type": "object", "required": ["modelId", "componentId", "artifactVersion", "geometryHash", "bytes"],
+      "properties": { "modelId": { "type": "string" }, "componentId": { "type": "string" }, "artifactVersion": { "const": 14 }, "geometryHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "bytes": { "type": "integer", "minimum": 1 } },
+      "additionalProperties": true
+    },
+    "meshCompileResult": {
+      "allOf": [{ "$ref": "#/$defs/meshCheckResult" }],
+      "type": "object", "required": ["geoPath", "mapPath", "geoName", "mapName"],
+      "properties": { "geoPath": { "type": "string", "minLength": 1 }, "mapPath": { "type": "string", "minLength": 1 }, "geoName": { "type": "string", "minLength": 1 }, "mapName": { "type": "string", "minLength": 1 } },
+      "additionalProperties": true
+    },
+    "prepareStudyInput": {
+      "type": "object", "required": ["model", "studyId"],
+      "properties": { "model": { "$ref": "#/$defs/opaqueModel" }, "studyId": { "type": "string", "minLength": 1 }, "csvFilename": { "type": "string", "minLength": 1 } },
+      "additionalProperties": true
+    },
+    "preparedStudyResult": {
+      "anyOf": [{ "$ref": "#/$defs/preparedStudyPlan" }, { "$ref": "#/$defs/preparedSolverRequest" }]
+    },
+    "preparedStudyPlan": {
+      "type": "object", "required": ["schema", "studyId", "profileId", "solverSettings", "frequenciesHz", "frequencyCases"],
+      "properties": { "schema": { "const": "fullmeta-study-plan/1" }, "studyId": { "type": "string", "minLength": 1 }, "profileId": { "type": "string", "minLength": 1 }, "solverSettings": { "type": "object" }, "frequenciesHz": { "type": "array", "minItems": 1, "items": { "type": "number", "exclusiveMinimum": 0 } }, "frequencyCases": { "type": "array", "minItems": 1, "items": { "type": "object" } } },
+      "additionalProperties": true
+    },
+    "preparedSolverRequest": {
+      "type": "object", "required": ["request"],
+      "properties": { "request": { "type": "object", "required": ["schema", "solver", "studyId"], "properties": { "schema": { "const": "fem-solver-request/1" }, "solver": { "type": "string", "minLength": 1 }, "studyId": { "type": "string", "minLength": 1 } }, "additionalProperties": true } },
+      "additionalProperties": true
+    },
+    "studyEvent": {
+      "type": "object", "required": ["type", "state"],
+      "properties": {
+        "type": { "enum": ["start", "progress", "mesh", "complete", "error", "cancelled"] },
+        "state": { "enum": ["running", "success", "error", "cancelled"] },
+        "message": { "type": "string" }, "stage": { "type": "string" },
+        "operationId": { "type": "string", "minLength": 1 }, "runId": { "type": "string", "minLength": 1 },
+        "completedPoints": { "type": "integer", "minimum": 0 },
+        "totalPoints": { "type": ["integer", "null"], "minimum": 0 },
+        "outputFiles": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+        "diagnostics": { "type": "array", "items": { "$ref": "#/$defs/diagnostic" } }
+      },
+      "allOf": [
+        { "if": { "properties": { "type": { "const": "complete" } } }, "then": { "required": ["runId", "outputFiles"], "properties": { "state": { "const": "success" } } } },
+        { "if": { "properties": { "type": { "const": "error" } } }, "then": { "required": ["message"], "properties": { "state": { "const": "error" } } } },
+        { "if": { "properties": { "type": { "const": "cancelled" } } }, "then": { "properties": { "state": { "const": "cancelled" } } } }
+      ],
+      "additionalProperties": true
+    },
+    "diagnostic": {
+      "type": "object", "required": ["code", "message", "path", "stage"],
+      "properties": { "code": { "type": "string", "minLength": 1 }, "message": { "type": "string", "minLength": 1 }, "path": { "type": ["string", "null"] }, "stage": { "type": "string", "minLength": 1 }, "operationId": { "type": "string" }, "runId": { "type": "string" } },
+      "additionalProperties": true
+    }
+  }
+}

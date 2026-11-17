@@ -2,9 +2,8 @@
 //! Parsing, units, dependency resolution and numerical expression algorithms
 //! live in the application-neutral model/kernel libraries.
 use fullmeta_core::pointwise::ComplexValue;
-use fullmeta_core::quantity::Dimension;
+use fullmeta_core::quantity::{self, Dimension, EvaluationPolicy};
 pub use fullmeta_core::quantity::QuantityValue as Scalar;
-use fullmeta_model::runtime_expressions as runtime;
 use serde_json::{Value, json};
 use std::collections::{BTreeSet, HashMap};
 use std::sync::OnceLock;
@@ -19,7 +18,7 @@ fn bind_policy(kind: &str, model: &Value, context: &Value) -> Result<Value> {
         .ok_or_else(|| {
             format!("The model schema must declare x-fullmeta-expressionRuntime.{kind}.")
         })?;
-    runtime::bind_policy(model, root, context, declaration)
+    crate::model_schema::context()?.bind_policy(model, context, declaration)
 }
 
 fn runtime_policy(kind: &str) -> Result<&'static Value> {
@@ -55,15 +54,15 @@ pub fn inspect(source: &str) -> Result<(Value, BTreeSet<String>, BTreeSet<String
 
 #[derive(Clone, Debug)]
 pub struct CompiledExpression {
-    compiled: runtime::CompiledExpression,
+    compiled: quantity::CompiledExpression,
 }
 
 impl CompiledExpression {
     pub fn compile(source: &str) -> Result<Self> {
         Ok(Self {
-            compiled: runtime::CompiledExpression::compile(
+            compiled: quantity::CompiledExpression::compile(
                 source,
-                runtime_policy("real")?,
+                EvaluationPolicy::from_json(runtime_policy("real")?)?,
                 "expression",
             )?,
         })
@@ -79,13 +78,17 @@ impl CompiledExpression {
 
 #[derive(Clone, Debug)]
 pub struct CompiledQuantity {
-    compiled: runtime::CompiledQuantity,
+    compiled: quantity::CompiledQuantity,
 }
 
 impl CompiledQuantity {
     pub fn compile(quantity: &Value, path: &str) -> Result<Self> {
         Ok(Self {
-            compiled: runtime::CompiledQuantity::compile(quantity, runtime_policy("real")?, path)?,
+            compiled: quantity::CompiledQuantity::compile(
+                quantity,
+                EvaluationPolicy::from_json(runtime_policy("real")?)?,
+                path,
+            )?,
         })
     }
     pub fn uses_symbol(&self, name: &str) -> bool {
@@ -94,6 +97,9 @@ impl CompiledQuantity {
     pub fn evaluate(&self, symbols: &HashMap<String, Scalar>, path: &str) -> Result<f64> {
         self.compiled
             .evaluate_with(|name| symbols.get(name).copied(), path)
+    }
+    pub fn evaluate_batch(&self, rows: &[HashMap<String, Scalar>], path: &str) -> Result<Vec<f64>> {
+        self.compiled.evaluate_batch(rows.len(), |row, name| rows[row].get(name).copied(), path)
     }
 }
 
@@ -112,7 +118,7 @@ pub fn resolve_parameters(parameters: &[Value], model: &Value) -> Result<HashMap
         model,
         &json!({"reservedSymbols":reserved,"realPolicy":runtime_policy("real")?}),
     )?;
-    runtime::resolve_parameters(parameters, &policy)?
+    resolve_parameters_with_policy(parameters, &policy)?
         .into_iter()
         .map(|(name, value)| {
             let scalar: Scalar =
@@ -120,6 +126,35 @@ pub fn resolve_parameters(parameters: &[Value], model: &Value) -> Result<HashMap
             Ok((name, scalar))
         })
         .collect()
+}
+
+/// Preserve the schema-bound parameter policy checks at the FEM boundary.
+pub(crate) fn resolve_parameters_with_policy(
+    parameters: &[Value],
+    policy: &Value,
+) -> Result<serde_json::Map<String, Value>> {
+    let reserved = policy
+        .get("reservedSymbols")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "Expression policy requires the \"reservedSymbols\" array.".to_string())?
+        .iter()
+        .map(|name| {
+            name.as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| "Expression policy \"reservedSymbols\" entries must be strings.".to_string())
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let path = policy
+        .get("path")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or("Parameter expression policy requires a nonempty path label.")?;
+    quantity::resolve_parameters_with_policy(
+        parameters,
+        &reserved,
+        &EvaluationPolicy::from_json(policy)?,
+        path,
+    )
 }
 
 pub fn evaluate_quantity(
@@ -243,4 +278,37 @@ pub fn scalar_incident_quantity(
     }
     Ok(incident_component_quantities(boundary, &units, path)?
         .and_then(|mut components| components.pop()))
+}
+
+#[cfg(test)]
+mod policy_tests {
+    use super::resolve_parameters_with_policy;
+    use serde_json::{Value, json};
+
+    fn policy() -> Value {
+        json!({"reservedSymbols":[],"path":"model.parameters","allowedFunctions":["sign"],
+            "builtinSymbols":["pi","e"],"dimensionTolerance":1e-10,
+            "allowDimensionlessZeroAddition":false,"requireFiniteIntermediates":true,
+            "signZeroMode":"signedOne"})
+    }
+
+    #[test]
+    fn parameter_policy_retains_checks_and_core_evaluation() {
+        let values = vec![json!({"symbol":"xval","expression":"sign(0)","unit":"1"})];
+        assert_eq!(resolve_parameters_with_policy(&values, &policy()).unwrap()["xval"]["value"], json!(1.0));
+        let mut invalid = policy();
+        invalid.as_object_mut().unwrap().remove("reservedSymbols");
+        assert_eq!(resolve_parameters_with_policy(&values, &invalid).unwrap_err(), "Expression policy requires the \"reservedSymbols\" array.");
+        invalid["reservedSymbols"] = json!([42]);
+        assert_eq!(resolve_parameters_with_policy(&values, &invalid).unwrap_err(), "Expression policy \"reservedSymbols\" entries must be strings.");
+        invalid["reservedSymbols"] = json!([]);
+        invalid["path"] = json!("");
+        assert_eq!(resolve_parameters_with_policy(&values, &invalid).unwrap_err(), "Parameter expression policy requires a nonempty path label.");
+        invalid["path"] = json!("model.parameters");
+        invalid["reservedSymbols"] = json!(["xval"]);
+        assert!(resolve_parameters_with_policy(&values, &invalid).unwrap_err().contains("reserved"));
+        invalid["reservedSymbols"] = json!([]);
+        invalid["signZeroMode"] = json!("invalid");
+        assert!(resolve_parameters_with_policy(&values, &invalid).unwrap_err().contains("signZeroMode"));
+    }
 }

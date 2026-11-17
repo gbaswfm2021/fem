@@ -1,5 +1,5 @@
 pub use fullmeta_core::quantity::QuantityValue as Scalar;
-use fullmeta_model::runtime_expressions as runtime;
+use fullmeta_core::quantity::{CompiledExpression, CompiledQuantity, EvaluationPolicy};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
@@ -304,7 +304,7 @@ fn real_policy() -> Result<&'static Value> {
 }
 
 pub fn validate_expression(source: &str, path: &str) -> Result<()> {
-    runtime::CompiledExpression::compile(source, real_policy()?, path).map(|_| ())
+    CompiledExpression::compile(source, EvaluationPolicy::from_json(real_policy()?)?, path).map(|_| ())
 }
 
 pub fn evaluate_expression(
@@ -312,7 +312,7 @@ pub fn evaluate_expression(
     symbols: &HashMap<String, Scalar>,
     path: &str,
 ) -> Result<Scalar> {
-    runtime::CompiledExpression::compile(source, real_policy()?, path)?
+    CompiledExpression::compile(source, EvaluationPolicy::from_json(real_policy()?)?, path)?
         .evaluate_with(|name| symbols.get(name).copied(), path)
 }
 
@@ -328,7 +328,7 @@ pub fn resolve_parameters(parameters: &[Value], model: &Value) -> Result<HashMap
         model,
         &json!({"reservedSymbols": reserved, "realPolicy": real_policy()?}),
     )?;
-    runtime::resolve_parameters(parameters, &policy)?
+    crate::model_expression::resolve_parameters_with_policy(parameters, &policy)?
         .into_iter()
         .map(|(name, value)| {
             let scalar = serde_json::from_value(value).map_err(|error| error.to_string())?;
@@ -351,6 +351,6 @@ pub fn evaluate_quantity(
             "{path}: a geometry or mesh quantity must use a length unit, received {unit_name}."
         ));
     }
-    runtime::CompiledQuantity::compile(quantity, real_policy()?, path)?
+    CompiledQuantity::compile(quantity, EvaluationPolicy::from_json(real_policy()?)?, path)?
         .evaluate_with(|name| symbols.get(name).copied(), path)
 }

@@ -98,6 +98,17 @@ impl CompiledMaterialAssignments {
             &format!("material {} in {context}", assignment.id),
         )
     }
+
+    pub(super) fn evaluate_batch(
+        &self, tag: usize, base_symbols: &HashMap<String, Scalar>, frequency_hz: f64,
+        points: &[[f64; 3]], context: &str,
+    ) -> Result<Vec<HashMap<String, Scalar>>, String> {
+        let assignment = self.by_tag.get(&tag).ok_or_else(|| {
+            format!("{context} uses physical material tag {tag}, which has no material assignment.")
+        })?;
+        assignment.evaluator.evaluate_batch(base_symbols, frequency_hz, points,
+            &format!("material {} in {context}", assignment.id))
+    }
 }
 
 impl CompiledMaterialEvaluator {
@@ -190,6 +201,49 @@ impl CompiledMaterialEvaluator {
 
     pub(super) fn uses_position(&self) -> bool {
         self.uses_position
+    }
+
+    pub(super) fn evaluate_batch(
+        &self, base_symbols: &HashMap<String, Scalar>, frequency_hz: f64,
+        points: &[[f64; 3]], path: &str,
+    ) -> Result<Vec<HashMap<String, Scalar>>, String> {
+        if points.is_empty() { return Ok(Vec::new()); }
+        let hz_dimension=model_expression::unit("Hz")?.1;
+        let mut rows=Vec::with_capacity(points.len());
+        for point in points {
+            let mut symbols=base_symbols.clone();
+            for (axis,value) in ["x","y","z"].into_iter().zip(*point) {
+                if !value.is_finite() {return Err(format!("{path}: coordinate {axis} is not finite."));}
+                symbols.insert(axis.into(),Scalar{value,dimension:[1.,0.,0.,0.,0.]});
+            }
+            for (name,value) in [("freq",frequency_hz),("frequency",frequency_hz),("omega",std::f64::consts::TAU*frequency_hz)] {
+                symbols.insert(name.into(),Scalar{value,dimension:hz_dimension});
+            }
+            rows.push(symbols);
+        }
+        let mut output=vec![HashMap::with_capacity(self.properties.len());points.len()];
+        for property in &self.properties {
+            let property_path=format!("{path}.{}",property.symbol);
+            let values=match property.expression.evaluate_batch(&rows,&property_path) {
+                Ok(values)=>values,
+                Err(error)=>{
+                    for point in points { if let Err(first)=self.evaluate(base_symbols,frequency_hz,*point,path){return Err(first);} }
+                    return Err(error);
+                }
+            };
+            for (index,value) in values.into_iter().enumerate() {
+                let invalid_min=property.minimum.is_some_and(|(minimum,exclusive)| if exclusive {value<=minimum}else{value<minimum});
+                let invalid_set=property.implemented_values.as_ref().is_some_and(|set|!set.contains(&value));
+                if invalid_min||invalid_set {
+                    for point in points { if let Err(first)=self.evaluate(base_symbols,frequency_hz,*point,path){return Err(first);} }
+                    return Err(format!("{property_path}: invalid material value at batch row {index}."));
+                }
+                let scalar=Scalar{value,dimension:property.dimension};
+                output[index].insert(property.symbol.clone(),scalar);
+                rows[index].insert(property.symbol.clone(),scalar);
+            }
+        }
+        Ok(output)
     }
 
     pub(super) fn evaluate(
@@ -450,4 +504,30 @@ pub(super) fn fields_by_assignment_cells<const N: usize>(
         }
     }
     Ok(output)
+}
+
+#[cfg(test)]
+mod batch_tests {
+    use super::*;
+    #[test]
+    fn spatial_quantity_batches_match_scalar_dependencies_and_errors() {
+        let dimension=[1.,0.,0.,0.,0.];
+        let make=|symbol:&str, expression:&str, minimum:Option<(f64,bool)>| CompiledProperty {
+            symbol:symbol.into(), expression:model_expression::CompiledQuantity::compile(
+                &json!({"expression":expression,"unit":"m"}),"material").unwrap(),
+            dimension,minimum,implemented_values:None,unit:"m".into(),
+        };
+        let evaluator=CompiledMaterialEvaluator {properties:vec![make("a","2*x",Some((0.,false))),make("b","a+x",None)],uses_position:true};
+        let points=[[0.5,0.,0.],[1.,0.,0.],[1.5,0.,0.]];
+        let base=HashMap::new();
+        let batch=evaluator.evaluate_batch(&base,1.,&points,"material").unwrap();
+        for (i,point) in points.iter().enumerate() {
+            let scalar=evaluator.evaluate(&base,1.,*point,"material").unwrap();
+            assert_eq!(batch[i],scalar);
+        }
+        assert_eq!((batch[0]["a"].value,batch[0]["b"].value),(1.,1.5));
+        let invalid=[[0.5,0.,0.],[-1.,0.,0.]];
+        let expected=evaluator.evaluate(&base,1.,invalid[1],"material").unwrap_err();
+        assert_eq!(evaluator.evaluate_batch(&base,1.,&invalid,"material").unwrap_err(),expected);
+    }
 }

@@ -1,6 +1,7 @@
 use crate::C;
-use fullmeta_core::expression::{AstNode, node_symbols, parse_expression};
-use fullmeta_core::pointwise::{ComplexValue, evaluate_complex_call, evaluate_complex_definitions};
+use fullmeta_core::expression::{AstNode, parse_expression};
+use fullmeta_core::pointwise::{ComplexValue, DefinitionPlan};
+use crate::core_language::{Context, Number, Program};
 use serde_json::{Map, Value, json};
 use std::collections::{HashMap, HashSet};
 
@@ -29,26 +30,6 @@ fn complex_add(a: ComplexValue, b: ComplexValue) -> ComplexValue {
         im: a.im + b.im,
     }
 }
-fn complex_sub(a: ComplexValue, b: ComplexValue) -> ComplexValue {
-    ComplexValue {
-        re: a.re - b.re,
-        im: a.im - b.im,
-    }
-}
-fn complex_mul(a: ComplexValue, b: ComplexValue) -> ComplexValue {
-    ComplexValue {
-        re: a.re * b.re - a.im * b.im,
-        im: a.re * b.im + a.im * b.re,
-    }
-}
-fn complex_div(a: ComplexValue, b: ComplexValue) -> ComplexValue {
-    let d = b.re * b.re + b.im * b.im;
-    ComplexValue {
-        re: (a.re * b.re + a.im * b.im) / d,
-        im: (a.im * b.re - a.re * b.im) / d,
-    }
-}
-
 fn selection_tags(map: &Value, collection: &str) -> Result<HashMap<String, usize>, String> {
     let rows = map
         .get(collection)
@@ -306,7 +287,7 @@ struct EvalContext<'a> {
     nodes: &'a [[f64; 3]],
     domains: &'a [Simplex],
     boundaries: &'a [Simplex],
-    pointwise: &'a [(String, AstNode)],
+    pointwise: Option<&'a DefinitionPlan>,
     operators: &'a [IntegrationOperator],
     field_sampler: &'a (
             dyn Fn(&Simplex, &[f64], [f64; 3]) -> Result<HashMap<String, ComplexValue>, String> + 'a
@@ -340,84 +321,65 @@ fn with_point_values(
     }
     values.extend((context.field_sampler)(cell, barycentric, point)?);
     values.extend((context.material_sampler)(cell, model_point)?);
-    let pointwise = evaluate_complex_definitions(context.pointwise, &values)
-        .map_err(|error| format!("Pointwise field expression at integration point: {error}"))?;
-    values.extend(pointwise);
     Ok((values, point))
 }
 
-fn eval_ast(
-    node: &AstNode,
-    environment: &HashMap<String, ComplexValue>,
+fn eval_program_batch(
+    program: &Program,
+    environments: &[HashMap<String, ComplexValue>],
     context: &EvalContext<'_>,
-) -> Result<ComplexValue, String> {
-    match node {
-        AstNode::Number { value } => Ok(ComplexValue {
-            re: *value,
-            im: 0.0,
-        }),
-        AstNode::Symbol { name } => match name.as_str() {
-            "pi" => Ok(ComplexValue {
-                re: std::f64::consts::PI,
-                im: 0.0,
-            }),
-            "e" => Ok(ComplexValue {
-                re: std::f64::consts::E,
-                im: 0.0,
-            }),
-            _ => environment
-                .get(name)
-                .copied()
-                .ok_or_else(|| format!("Expression uses undefined symbol {name:?}.")),
-        },
-        AstNode::Unary { op, value } => {
-            let value = eval_ast(value, environment, context)?;
-            match op.as_str() {
-                "+" => Ok(value),
-                "-" => Ok(ComplexValue {
-                    re: -value.re,
-                    im: -value.im,
-                }),
-                _ => Err(format!("Unsupported unary expression operator {op:?}.")),
-            }
+) -> Result<Vec<ComplexValue>, String> {
+    let mut symbols = Vec::with_capacity(environments.len() * program.symbols.len());
+    let mut operators = Vec::with_capacity(environments.len() * program.operators.len());
+    for environment in environments {
+        for name in &program.symbols {
+            let value = environment.get(name)
+                .ok_or_else(|| format!("Expression uses undefined symbol {name:?}."))?;
+            symbols.push(Number { re: value.re, im: value.im });
         }
-        AstNode::Binary { op, left, right } => {
-            let a = eval_ast(left, environment, context)?;
-            let b = eval_ast(right, environment, context)?;
-            match op.as_str() {
-                "+" => Ok(complex_add(a, b)),
-                "-" => Ok(complex_sub(a, b)),
-                "*" => Ok(complex_mul(a, b)),
-                "/" => Ok(complex_div(a, b)),
-                "^" => evaluate_complex_call("pow", &[a, b]),
-                _ => Err(format!("Unsupported binary expression operator {op:?}.")),
-            }
-        }
-        AstNode::Call { name, args } => {
-            if let Some(operator) = context
-                .operators
-                .iter()
-                .find(|operator| operator.id == *name)
-            {
-                if args.len() != 1 {
-                    return Err(format!(
-                        "Integration operator {name} expects exactly one expression."
-                    ));
-                }
-                return integrate_operator(operator, &args[0], environment, context);
-            }
-            let values = args
-                .iter()
-                .map(|argument| eval_ast(argument, environment, context))
-                .collect::<Result<Vec<_>, _>>()?;
-            evaluate_complex_call(name, &values)
+        for host in &program.operators {
+            let operator = context.operators.iter().find(|operator| operator.id == host.name)
+                .ok_or_else(|| format!("Unknown integration operator {:?}.", host.name))?;
+            let value = integrate_operator(operator, &host.argument, environment, context)?;
+            operators.push(Number { re: value.re, im: value.im });
         }
     }
+    Ok(program.evaluate_batch(environments.len(), &symbols, &operators)?.into_iter()
+        .map(|value| ComplexValue { re: value.re, im: value.im }).collect())
+}
+
+fn eval_program(program: &Program, environment: &HashMap<String, ComplexValue>,
+    context: &EvalContext<'_>) -> Result<ComplexValue, String> {
+    Ok(eval_program_batch(program, std::slice::from_ref(environment), context)?[0])
+}
+
+fn flush_quadrature(program: &Program, points: &mut Vec<HashMap<String, ComplexValue>>,
+    slots: &mut Vec<Number>, weights: &mut Vec<[f64; 3]>, total: &mut ComplexValue,
+    context: &EvalContext<'_>) -> Result<(), String> {
+    if weights.is_empty() { return Ok(()); }
+    if let Some(plan) = &context.pointwise {
+        plan.evaluate_batch(points).map_err(|error| format!("Pointwise field expression at integration point: {error}"))?;
+    }
+    let values = if program.operators.is_empty() && context.pointwise.is_none() {
+        program.evaluate_batch(weights.len(), slots, &[])?.into_iter()
+            .map(|value| ComplexValue { re: value.re, im: value.im }).collect()
+    } else {
+        eval_program_batch(program, points, context)?
+    };
+    for (value, weight) in values.into_iter().zip(weights.drain(..)) {
+        *total = complex_add(*total, ComplexValue {
+            re: value.re * weight[0] * weight[1] * weight[2],
+            im: value.im * weight[0] * weight[1] * weight[2],
+        });
+    }
+    points.clear();
+    slots.clear();
+    Ok(())
 }
 
 fn integrate_operator(
     operator: &IntegrationOperator,
-    integrand: &AstNode,
+    integrand: &Program,
     environment: &HashMap<String, ComplexValue>,
     context: &EvalContext<'_>,
 ) -> Result<ComplexValue, String> {
@@ -444,7 +406,11 @@ fn integrate_operator(
                 continue;
             };
             let (values, _) = with_point_values(context, cell, &barycentric, environment)?;
-            return eval_ast(integrand, &values, context);
+            let mut rows = [values];
+            if let Some(plan) = &context.pointwise {
+                plan.evaluate_batch(&mut rows).map_err(|error| format!("Pointwise field expression at integration point: {error}"))?;
+            }
+            return eval_program(integrand, &rows[0], context);
         }
         return Err(format!(
             "Point evaluation operator {} is outside the meshed domain or its selected domain.",
@@ -458,6 +424,27 @@ fn integrate_operator(
     };
     let mut integral = ComplexValue::default();
     let mut selected = 0usize;
+    let mut points = Vec::with_capacity(128);
+    let mut slots = Vec::with_capacity(128 * integrand.symbols.len());
+    let mut weights = Vec::with_capacity(128);
+    macro_rules! sample {
+        ($cell:expr, $bary:expr, $weight:expr) => {{
+            let (values, _) = with_point_values(context, $cell, &$bary, environment)?;
+            if integrand.operators.is_empty() && context.pointwise.is_none() {
+                for name in &integrand.symbols {
+                    let value = values.get(name)
+                        .ok_or_else(|| format!("Expression uses undefined symbol {name:?}."))?;
+                    slots.push(Number { re: value.re, im: value.im });
+                }
+            } else {
+                points.push(values);
+            }
+            weights.push($weight);
+            if weights.len() == 128 {
+                flush_quadrature(integrand, &mut points, &mut slots, &mut weights, &mut integral, context)?;
+            }
+        }};
+    }
     for cell in cells.iter().filter(|cell| {
         cell.operator_id
             .as_deref()
@@ -485,15 +472,7 @@ fn integrate_operator(
                 let area = area([p[0], p[1], p[2]]);
                 for q in crate::TRI_Q {
                     let bary = [q[0], q[1], q[2]];
-                    let (values, _) = with_point_values(context, cell, &bary, environment)?;
-                    let value = eval_ast(integrand, &values, context)?;
-                    integral = complex_add(
-                        integral,
-                        ComplexValue {
-                            re: value.re * area * q[3],
-                            im: value.im * area * q[3],
-                        },
-                    );
+                    sample!(cell, bary, [area, q[3], 1.0]);
                 }
             }
             (3, "domainIntegration", 4) => {
@@ -509,15 +488,7 @@ fn integrate_operator(
                 let jacobian = 6.0 * volume([p[0], p[1], p[2], p[3]]);
                 for q in crate::TET_Q {
                     let bary = [q[0], q[1], q[2], q[3]];
-                    let (values, _) = with_point_values(context, cell, &bary, environment)?;
-                    let value = eval_ast(integrand, &values, context)?;
-                    integral = complex_add(
-                        integral,
-                        ComplexValue {
-                            re: value.re * jacobian * q[4],
-                            im: value.im * jacobian * q[4],
-                        },
-                    );
+                    sample!(cell, bary, [jacobian, q[4], 1.0]);
                 }
             }
             (2, "boundaryIntegration", 2) => {
@@ -549,15 +520,7 @@ fn integrate_operator(
                 for (position, weight) in POSITIONS.into_iter().zip(WEIGHTS) {
                     let t = (position + 1.0) * 0.5;
                     let bary = [1.0 - t, t];
-                    let (values, _) = with_point_values(context, cell, &bary, environment)?;
-                    let value = eval_ast(integrand, &values, context)?;
-                    integral = complex_add(
-                        integral,
-                        ComplexValue {
-                            re: value.re * edge_length * weight * 0.5,
-                            im: value.im * edge_length * weight * 0.5,
-                        },
-                    );
+                    sample!(cell, bary, [edge_length, weight, 0.5]);
                 }
             }
             (3, "boundaryIntegration", 3) => {
@@ -573,15 +536,7 @@ fn integrate_operator(
                 let face_area = area([p[0], p[1], p[2]]);
                 for q in crate::TRI_Q {
                     let bary = [q[0], q[1], q[2]];
-                    let (values, _) = with_point_values(context, cell, &bary, environment)?;
-                    let value = eval_ast(integrand, &values, context)?;
-                    integral = complex_add(
-                        integral,
-                        ComplexValue {
-                            re: value.re * face_area * q[3],
-                            im: value.im * face_area * q[3],
-                        },
-                    );
+                    sample!(cell, bary, [face_area, q[3], 1.0]);
                 }
             }
             (3, "edgeIntegration", 2) => {
@@ -613,15 +568,7 @@ fn integrate_operator(
                 for (position, weight) in POSITIONS.into_iter().zip(WEIGHTS) {
                     let t = (position + 1.0) * 0.5;
                     let bary = [1.0 - t, t];
-                    let (values, _) = with_point_values(context, cell, &bary, environment)?;
-                    let value = eval_ast(integrand, &values, context)?;
-                    integral = complex_add(
-                        integral,
-                        ComplexValue {
-                            re: value.re * edge_length * weight * 0.5,
-                            im: value.im * edge_length * weight * 0.5,
-                        },
-                    );
+                    sample!(cell, bary, [edge_length, weight, 0.5]);
                 }
             }
             _ => {
@@ -638,6 +585,7 @@ fn integrate_operator(
             operator.id
         ));
     }
+    flush_quadrature(integrand, &mut points, &mut slots, &mut weights, &mut integral, context)?;
     Ok(integral)
 }
 
@@ -733,62 +681,17 @@ pub(super) fn evaluate_variables_with_sampler(
     coordinate_order: [usize; 3],
     coordinate_origin: [f64; 3],
 ) -> Result<Map<String, Value>, String> {
-    let mut definitions = HashMap::<String, AstNode>::new();
-    let mut declaration_order = Vec::new();
-    for (symbol, ast) in variables {
-        if definitions.insert(symbol.clone(), ast.clone()).is_some() {
-            return Err(format!("Duplicate model variable symbol {symbol:?}."));
-        }
-        declaration_order.push(symbol.clone());
-    }
-    if declaration_order.is_empty() {
+    if variables.is_empty() {
         return Ok(Map::new());
     }
-    let mut order = Vec::new();
-    let mut done = HashSet::new();
-    let mut active = Vec::new();
-    fn visit(
-        symbol: &str,
-        definitions: &HashMap<String, AstNode>,
-        done: &mut HashSet<String>,
-        active: &mut Vec<String>,
-        order: &mut Vec<String>,
-    ) -> Result<(), String> {
-        if done.contains(symbol) {
-            return Ok(());
-        }
-        if let Some(index) = active.iter().position(|value| value == symbol) {
-            let mut cycle = active[index..].to_vec();
-            cycle.push(symbol.to_string());
-            return Err(format!(
-                "Global variable dependency cycle: {}.",
-                cycle.join(" → ")
-            ));
-        }
-        active.push(symbol.to_string());
-        let ast = definitions
-            .get(symbol)
-            .ok_or_else(|| format!("Missing global variable definition {symbol:?}."))?;
-        for dependency in node_symbols(ast) {
-            if definitions.contains_key(&dependency) {
-                visit(&dependency, definitions, done, active, order)?;
-            }
-        }
-        active.pop();
-        done.insert(symbol.to_string());
-        order.push(symbol.to_string());
-        Ok(())
-    }
-    for symbol in &declaration_order {
-        visit(symbol, &definitions, &mut done, &mut active, &mut order)?;
-    }
-
+    let operator_names = operators.iter().map(|operator| operator.id.clone()).collect::<Vec<_>>();
+    let compiled = Context::compile(variables, pointwise, &operator_names)?;
     let context = EvalContext {
         dimension,
         nodes,
         domains: domain_cells,
         boundaries: boundary_cells,
-        pointwise,
+        pointwise: compiled.pointwise.as_ref(),
         operators,
         field_sampler,
         material_sampler,
@@ -796,9 +699,8 @@ pub(super) fn evaluate_variables_with_sampler(
         coordinate_origin,
     };
     let mut output = Map::new();
-    for symbol in order {
-        let ast = definitions.get(&symbol).unwrap();
-        let value = eval_ast(ast, &environment, &context)
+    for (symbol, program) in &compiled.expressions {
+        let value = eval_program(program, &environment, &context)
             .map_err(|error| format!("Global variable {symbol}: {error}"))?;
         if !value.re.is_finite() || !value.im.is_finite() {
             return Err(format!(
@@ -806,7 +708,7 @@ pub(super) fn evaluate_variables_with_sampler(
             ));
         }
         environment.insert(symbol.clone(), value);
-        output.insert(symbol, json!({"re":value.re,"im":value.im}));
+        output.insert(symbol.clone(), json!({"re":value.re,"im":value.im}));
     }
     Ok(output)
 }
@@ -920,6 +822,7 @@ pub(super) fn evaluate_model_variables(
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
+    let material_cache = std::cell::RefCell::new(HashMap::<usize, crate::material::CompiledMaterialEvaluator>::new());
     let material_sampler = |cell: &Simplex,
                             point: [f64; 3]|
      -> Result<HashMap<String, ComplexValue>, String> {
@@ -927,14 +830,12 @@ pub(super) fn evaluate_model_variables(
         let material = assignments.get(&tag).ok_or_else(|| {
             format!("Integration entity uses material physical tag {tag}, which has no assignment.")
         })?;
-        let values = crate::material::values_for_assignment(
-            &profile_id,
-            material,
-            &resolved,
-            frequency_hz,
-            point,
-            "integration material",
-        )?;
+        let mut cache = material_cache.borrow_mut();
+        if !cache.contains_key(&tag) {
+            cache.insert(tag, crate::material::CompiledMaterialEvaluator::compile(&profile_id, material, "integration material")?);
+        }
+        let values = cache.get(&tag).expect("material evaluator inserted")
+            .evaluate(&resolved, frequency_hz, point, "integration material")?;
         Ok(values
             .into_iter()
             .map(|(symbol, value)| {
@@ -962,4 +863,112 @@ pub(super) fn evaluate_model_variables(
         [0, 1, 2],
         [0.0; 3],
     )
+}
+
+#[cfg(test)]
+mod integration_tests {
+    use super::*;
+
+    fn domain_integral(cells: usize) -> Result<Map<String, Value>, String> {
+        let nodes = [[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]];
+        let simplex = Simplex { nodes: vec![0,1,2], physical_tag: 1, material_tag: None,
+            operator_id: None, element_index: None, adjacent_element_index: None };
+        let domains = vec![simplex; cells];
+        let operator = IntegrationOperator { id: "intop".into(), kind: "domainIntegration".into(),
+            physical_tag: 1, host_material_tag: None, point_m: None };
+        let variables = vec![("result".into(), parse_expression("offset + intop(x * E)").unwrap())];
+        let environment = HashMap::from([("offset".into(), ComplexValue { re: 5., im: 0. })]);
+        let fields = |_: &Simplex, _: &[f64], _: [f64;3]| Ok(HashMap::from([
+            ("E".into(), ComplexValue { re: 2., im: 3. })]));
+        let material = |_: &Simplex, _: [f64;3]| Ok(HashMap::new());
+        evaluate_variables_with_sampler(&variables, &[], &[operator], 2, &nodes, &domains, &[],
+            environment, &fields, &material, [0,1,2], [0.;3])
+    }
+
+    #[test]
+    fn complex_integrand_on_triangle_matches_exact_integral() {
+        let result = domain_integral(1).unwrap();
+        assert!((result["result"]["re"].as_f64().unwrap() - (5. + 2./6.)).abs() < 1e-12);
+        assert!((result["result"]["im"].as_f64().unwrap() - 3./6.).abs() < 1e-12);
+    }
+
+    #[test]
+    fn point_edge_and_nested_integrals_are_evaluated() {
+        let nodes = [[0.,0.,0.], [1.,0.,0.], [0.,1.,0.]];
+        let triangle = Simplex { nodes: vec![0,1,2], physical_tag: 1, material_tag: None,
+            operator_id: None, element_index: None, adjacent_element_index: None };
+        let edge = Simplex { nodes: vec![0,1], physical_tag: 2, material_tag: None,
+            operator_id: None, element_index: None, adjacent_element_index: None };
+        let operators = [
+            IntegrationOperator { id: "domain".into(), kind: "domainIntegration".into(), physical_tag: 1, host_material_tag: None, point_m: None },
+            IntegrationOperator { id: "edge".into(), kind: "boundaryIntegration".into(), physical_tag: 2, host_material_tag: None, point_m: None },
+            IntegrationOperator { id: "point".into(), kind: "pointEvaluation".into(), physical_tag: 1, host_material_tag: None, point_m: Some([0.25,0.25,0.]) },
+        ];
+        let variables = vec![
+            ("edgeValue".into(), parse_expression("edge(x)").unwrap()),
+            ("pointValue".into(), parse_expression("point(x+y)").unwrap()),
+            ("nestedValue".into(), parse_expression("domain(domain(x))").unwrap()),
+        ];
+        let fields = |_: &Simplex, _: &[f64], _: [f64;3]| Ok(HashMap::new());
+        let material = |_: &Simplex, _: [f64;3]| Ok(HashMap::new());
+        let result = evaluate_variables_with_sampler(&variables, &[], &operators, 2, &nodes,
+            &[triangle], &[edge], HashMap::new(), &fields, &material, [0,1,2], [0.;3]).unwrap();
+        assert!((result["edgeValue"]["re"].as_f64().unwrap() - 0.5).abs() < 1e-12);
+        assert!((result["pointValue"]["re"].as_f64().unwrap() - 0.5).abs() < 1e-12);
+        assert!((result["nestedValue"]["re"].as_f64().unwrap() - 1./12.).abs() < 1e-12);
+    }
+
+    #[test]
+    fn undefined_integrand_symbols_report_an_error() {
+        let nodes = [[0.,0.,0.], [1.,0.,0.], [0.,1.,0.]];
+        let triangle = Simplex { nodes: vec![0,1,2], physical_tag: 1, material_tag: None,
+            operator_id: None, element_index: None, adjacent_element_index: None };
+        let operator = IntegrationOperator { id: "intop".into(), kind: "domainIntegration".into(),
+            physical_tag: 1, host_material_tag: None, point_m: None };
+        let variables = vec![("result".into(), parse_expression("intop(missing)").unwrap())];
+        let fields = |_: &Simplex, _: &[f64], _: [f64;3]| Ok(HashMap::new());
+        let material = |_: &Simplex, _: [f64;3]| Ok(HashMap::new());
+        let error = evaluate_variables_with_sampler(&variables, &[], &[operator], 2, &nodes, &[triangle], &[],
+            HashMap::new(), &fields, &material, [0,1,2], [0.;3]).unwrap_err();
+        assert!(error.contains("missing"), "{error}");
+    }
+
+    #[test]
+    fn three_dimensional_measures_and_pointwise_variables_work() {
+        let nodes = [[0.,0.,0.], [1.,0.,0.], [0.,1.,0.], [0.,0.,1.]];
+        let cell = |indices: Vec<usize>, tag| Simplex { nodes: indices, physical_tag: tag, material_tag: None,
+            operator_id: None, element_index: None, adjacent_element_index: None };
+        let operators = [
+            IntegrationOperator { id: "volume".into(), kind: "domainIntegration".into(), physical_tag: 1, host_material_tag: None, point_m: None },
+            IntegrationOperator { id: "face".into(), kind: "boundaryIntegration".into(), physical_tag: 2, host_material_tag: None, point_m: None },
+            IntegrationOperator { id: "line".into(), kind: "edgeIntegration".into(), physical_tag: 3, host_material_tag: None, point_m: None },
+        ];
+        let variables = [("volumeValue".into(), parse_expression("volume(1)").unwrap()),
+            ("faceValue".into(), parse_expression("face(1)").unwrap()),
+            ("lineValue".into(), parse_expression("line(p)").unwrap())];
+        let pointwise = [("p".into(), parse_expression("2*x").unwrap())];
+        let fields = |_: &Simplex, _: &[f64], _: [f64;3]| Ok(HashMap::new());
+        let material = |_: &Simplex, _: [f64;3]| Ok(HashMap::new());
+        let result = evaluate_variables_with_sampler(&variables, &pointwise, &operators, 3, &nodes,
+            &[cell(vec![0,1,2,3], 1)], &[cell(vec![0,1,2], 2), cell(vec![0,1], 3)],
+            HashMap::new(), &fields, &material, [0,1,2], [0.;3]).unwrap();
+        assert!((result["volumeValue"]["re"].as_f64().unwrap() - 1./6.).abs() < 1e-12);
+        assert!((result["faceValue"]["re"].as_f64().unwrap() - 0.5).abs() < 1e-12);
+        assert!((result["lineValue"]["re"].as_f64().unwrap() - 1.).abs() < 1e-12);
+    }
+
+    pub(crate) fn validate_synthetic_cases() {
+        complex_integrand_on_triangle_matches_exact_integral();
+        point_edge_and_nested_integrals_are_evaluated();
+        undefined_integrand_symbols_report_an_error();
+        three_dimensional_measures_and_pointwise_variables_work();
+    }
+
+    #[test]
+    #[ignore = "explicit synthetic integration timing"]
+    fn integration_timing() {
+        let start = std::time::Instant::now();
+        let result = domain_integral(30000).unwrap();
+        println!("synthetic integration seconds={:.6} result={}", start.elapsed().as_secs_f64(), result["result"]);
+    }
 }

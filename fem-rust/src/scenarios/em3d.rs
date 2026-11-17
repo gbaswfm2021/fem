@@ -1475,7 +1475,13 @@ fn solve_case(
                     return Err("An impedance boundary contains a degenerate triangle.".into());
                 }
                 let normal = boundary_face_normal(mesh, face)?;
-                for q in TRI_Q {
+                let boundary_rows = TRI_Q.iter().map(|q| {
+                    let point = add(add(scale(fp[0], q[0]), scale(fp[1], q[1])), scale(fp[2], q[2]));
+                    boundary_symbols(config, frequency_case_index, frequency, add(point, mesh.origin))
+                }).collect::<Result<Vec<_>, String>>()?;
+                let impedance = model_expression::CompiledQuantity::compile(&boundary.impedance, "impedance boundary")?;
+                let impedances = impedance.evaluate_batch(&boundary_rows, "impedance boundary")?;
+                for (sample_index, q) in TRI_Q.into_iter().enumerate() {
                     let point = add(
                         add(scale(fp[0], q[0]), scale(fp[1], q[1])),
                         scale(fp[2], q[2]),
@@ -1491,17 +1497,8 @@ fn solve_case(
                         point,
                     );
                     let weight = area * q[3];
-                    let symbols = boundary_symbols(
-                        config,
-                        frequency_case_index,
-                        frequency,
-                        add(point, mesh.origin),
-                    )?;
-                    let z = model_expression::evaluate_quantity_with_symbols(
-                        &boundary.impedance,
-                        &symbols,
-                        "impedance boundary",
-                    )?;
+                    let symbols = &boundary_rows[sample_index];
+                    let z = impedances[sample_index];
                     if !z.is_finite() || z == 0.0 {
                         return Err(format!(
                             "Impedance boundary {} must evaluate to a finite nonzero value at every quadrature point.",
@@ -1528,7 +1525,7 @@ fn solve_case(
                             .enumerate()
                             .map(|(axis, quantity)| {
                                 quantity.evaluate(
-                                    &symbols,
+                                    symbols,
                                     &format!(
                                         "impedance boundary {} polarization[{axis}]",
                                         boundary.id
@@ -2267,6 +2264,7 @@ fn evaluate_global_variables(
                 })
                 .collect())
         };
+    let integration_material_cache = std::cell::RefCell::new(HashMap::<usize, material::CompiledMaterialEvaluator>::new());
     let material_sampler =
         |cell: &crate::integration::Simplex,
          point: [f64; 3]|
@@ -2284,14 +2282,12 @@ fn evaluate_global_variables(
                 )
             })?;
             let material = assignment.get("material").unwrap_or(assignment);
-            let values = crate::material::values_for_assignment(
-                &config.scenario_profile_id,
-                material,
-                &material_parameters,
-                frequency_hz,
-                point,
-                "integration material",
-            )?;
+            let mut cache = integration_material_cache.borrow_mut();
+            if !cache.contains_key(&tag) {
+                cache.insert(tag, crate::material::CompiledMaterialEvaluator::compile(&config.scenario_profile_id, material, "integration material")?);
+            }
+            let values = cache.get(&tag).expect("material evaluator inserted")
+                .evaluate(&material_parameters, frequency_hz, point, "integration material")?;
             Ok(values
                 .into_iter()
                 .map(|(symbol, value)| {

@@ -217,13 +217,7 @@ fn validate_declaration_in_context(
         .root()
         .get(annotation)
         .ok_or_else(|| format!("The model schema must declare {annotation}."))?;
-    let errors = fullmeta_model::rules::validate_declaration(
-        input,
-        context.root(),
-        context.documents(),
-        &json!({}),
-        declaration,
-    )?;
+    let errors = context.validate_declaration(input, &json!({}), declaration)?;
     if errors.is_empty() {
         Ok(())
     } else {
@@ -744,7 +738,7 @@ fn integration_kind_for_selection_in_context(
                 .as_array()?;
             contracts.iter().find_map(|contract| {
                 let kind = contract.get("x-fullmeta-role")?.as_str()?;
-                fullmeta_model::schema::validate_with_root(selection, contract, context.root())
+                context.validate_fragment(selection, contract)
                     .is_empty()
                     .then(|| kind.to_string())
             })

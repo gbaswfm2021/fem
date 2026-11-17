@@ -37911,6 +37911,7 @@
     "version": 1
   },
   "x-fullmeta-runtime": {
+    "operationRegistry": "native-operations.json",
     "capabilityAnnotation": "x-fem-capabilities",
     "compatibility": {
       "apiContract": {

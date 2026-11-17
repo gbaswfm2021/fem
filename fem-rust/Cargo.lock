@@ -284,7 +284,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484"
 
 [[package]]
-name = "fullmeta-core"
+name = "fullmeta-core-sdk"
 version = "0.1.0"
 dependencies = [
  "serde",
@@ -293,31 +293,29 @@ dependencies = [
 
 [[package]]
 name = "fullmeta-fem"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "faer",
- "fullmeta-core",
- "fullmeta-model",
- "fullmeta-operation-contracts",
+ "fullmeta-core-sdk",
+ "fullmeta-model-sdk",
+ "fullmeta-operation-contracts-sdk",
  "rivrs-sparse",
  "serde_json",
 ]
 
 [[package]]
-name = "fullmeta-model"
+name = "fullmeta-model-sdk"
 version = "0.1.0"
 dependencies = [
- "fullmeta-core",
- "regex-automata",
+ "fullmeta-core-sdk",
  "serde",
  "serde_json",
 ]
 
 [[package]]
-name = "fullmeta-operation-contracts"
+name = "fullmeta-operation-contracts-sdk"
 version = "0.1.0"
 dependencies = [
- "fullmeta-model",
  "serde",
  "serde_json",
 ]

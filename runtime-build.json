@@ -6,6 +6,11 @@
   "buildTargets": [
     {"manifest":"applications/fem/fem-rust/Cargo.toml","binary":"fullmeta-fem","label":"FEM dispatcher and scenario solvers"}
   ],
+  "runtimeFiles": {
+    "femCoreDll": "platform/core-rust/lib/fullmeta_core.dll",
+    "femContractsDll": "platform/operation-contracts-rust/lib/fullmeta_operation_contracts.dll",
+    "femModelDll": "platform/model-rust/lib/fullmeta_model.dll"
+  },
   "artifacts": {
     "mesh":"fullmeta-fem","fem":"fullmeta-fem",
     "solverAcoustic2d":"fullmeta-fem","solverAcoustic3d":"fullmeta-fem",

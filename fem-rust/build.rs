@@ -25,6 +25,12 @@ fn rust_string(value: &str) -> String {
 
 fn main() {
     let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("manifest dir"));
+    let local_operations = manifest.join("native-operations.json");
+    let operations = if local_operations.is_file() { local_operations } else { manifest.join("..").join("native-operations.json") };
+    println!("cargo:rerun-if-changed={}", operations.display());
+    let output = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR"));
+    fs::copy(&operations, output.join("native-operations.json"))
+        .unwrap_or_else(|error| panic!("Could not copy {}: {error}", operations.display()));
     let scenario_root = manifest.join("src").join("scenarios");
     let registry_path = scenario_root.join("registry.json");
     println!("cargo:rerun-if-changed={}", registry_path.display());
@@ -132,7 +138,6 @@ fn main() {
         "        _ => Err(format!(\"Scenario runner module {module:?} is not registered in this build.\")),\n    }\n}\n",
     );
 
-    let output = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR"));
     fs::write(output.join("scenario_runners.rs"), generated)
         .expect("Could not write generated scenario runner registry");
 }

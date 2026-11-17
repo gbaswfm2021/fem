@@ -10,9 +10,11 @@ mod model_validation;
 mod mesh;
 pub(crate) mod field_output;
 pub(crate) mod integration;
+mod core_language;
 pub(crate) mod material;
 pub(crate) mod mesh2d;
 mod operation_retry;
+mod operation_contracts;
 pub(crate) mod preflight_client;
 mod result_clear;
 mod result_resolve;
@@ -27,6 +29,7 @@ include!(concat!(env!("OUT_DIR"), "/scenario_runners.rs"));
 #[path = "solver_orchestration.rs"]
 mod solver_orchestration;
 use crate::mesh::sha256;
+use crate::operation_contracts as fullmeta_operation_contracts;
 #[cfg(test)]
 mod study_lifecycle_tests;
 mod study_prepare;
@@ -316,7 +319,34 @@ fn missing_preparation_route_names_the_stage_and_selection() {
     ));
 }
 
+fn initialize_operation_registry() -> Result<()> {
+    fullmeta_operation_contracts::install_default_registry(include_bytes!(concat!(env!("OUT_DIR"), "/native-operations.json")))
+}
+fn configure_local_platform_bundle() -> Result<()> {
+    let executable=std::env::current_exe().map_err(|e|e.to_string())?;
+    let directory=executable.parent().ok_or("Missing FEM executable directory")?;
+    let names=["fullmeta_core.dll","fullmeta_model.dll","fullmeta_operation_contracts.dll"];
+    let present=names.iter().filter(|name|directory.join(name).is_file()).count();
+    if present==0 {return Ok(());}
+    if present!=names.len(){return Err(format!("Incomplete FEM DLL bundle in {}: core, model and operation-contracts DLLs must be supplied together.",directory.display()));}
+    fullmeta_core::configure_library_path(directory.join(names[0]))?;
+    fullmeta_model::configure_library_path(directory.join(names[1]))?;
+    fullmeta_operation_contracts::configure_library_path(directory.join(names[2]))?;
+    Ok(())
+}
 fn main() {
+    if let Err(error) = configure_local_platform_bundle() {
+        eprintln!("fullmeta-fem: {error}");
+        std::process::exit(1);
+    }
+    if let Err(error) = fullmeta_model::initialize() {
+        eprintln!("fullmeta-fem: could not load model DLL: {error}");
+        std::process::exit(1);
+    }
+    if let Err(error) = initialize_operation_registry() {
+        eprintln!("fullmeta-fem: could not load operation registry: {error}");
+        std::process::exit(1);
+    }
     let raw_arguments = env::args().skip(1).collect::<Vec<_>>();
     let entry = raw_arguments.first().map(String::as_str).unwrap_or_default();
     if matches!(

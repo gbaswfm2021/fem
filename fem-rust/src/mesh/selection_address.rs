@@ -127,34 +127,6 @@ pub fn selection_filter(
 ) -> Result<(Option<PlaneFilter>, Option<Value>), String> {
     // Sampling alone cannot prove an expression affine: for example x*y*z
     // vanishes on every coordinate axis. Classify the expression structurally.
-    fn degree(node: &fullmeta_core::expression::AstNode, dimension: usize) -> usize {
-        use fullmeta_core::expression::AstNode;
-        match node {
-            AstNode::Number { .. } => 0,
-            AstNode::Symbol { name } => {
-                usize::from(name == "x" || name == "y" || (name == "z" && dimension == 3))
-            }
-            AstNode::Unary { value, .. } => degree(value, dimension),
-            AstNode::Binary { op, left, right } => {
-                let a = degree(left, dimension);
-                let b = degree(right, dimension);
-                match op.as_str() {
-                    "+" | "-" => a.max(b),
-                    "*" => a.saturating_add(b).min(2),
-                    "/" if b == 0 => a,
-                    _ if a == 0 && b == 0 => 0,
-                    _ => 2,
-                }
-            }
-            AstNode::Call { args, .. } => {
-                if args.iter().all(|arg| degree(arg, dimension) == 0) {
-                    0
-                } else {
-                    2
-                }
-            }
-        }
-    }
     let Some(expression) = coordinate_expression(selection, path)? else {
         return Ok((None, None));
     };
@@ -167,7 +139,8 @@ pub fn selection_filter(
             return Err(format!("{expression_path}: unknown symbol {name:?}."));
         }
     }
-    if degree(&inspected.tree, dimension) > 1 {
+    let coordinates: &[&str] = if dimension == 3 { &["x", "y", "z"] } else { &["x", "y"] };
+    if fullmeta_core::expression::polynomial_degree_capped_2(&inspected.tree, coordinates)? > 1 {
         let values: std::collections::BTreeMap<_, _> = symbols
             .iter()
             .map(|(name, value)| {

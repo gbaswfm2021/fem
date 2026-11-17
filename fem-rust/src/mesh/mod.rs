@@ -11,6 +11,7 @@ mod selection_address;
 pub(crate) mod sha256;
 
 use serde_json::{Value, json};
+use crate::operation_contracts as fullmeta_operation_contracts;
 use std::env;
 use std::fs;
 use std::io::Read;
@@ -56,7 +57,7 @@ pub fn dispatch(mut args: Vec<String>) -> ExitCode {
 fn contracted_geometry(
     args: &[String],
 ) -> Result<Value, Vec<fullmeta_operation_contracts::Diagnostic>> {
-    use fullmeta_operation_contracts::{
+    use crate::operation_contracts::{
         Diagnostic, binding_from_environment, resolve_binding, validate_input, validate_result,
     };
     let fail = |message: String| {

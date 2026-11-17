@@ -4,13 +4,14 @@ Finite-element simulation workspace for FullMeta. The application schema defines
 
 ## Package layout
 
-- `catalog.json` identifies this application and declares package version `2.0.0`.
+- `catalog.json` identifies this application and declares package version `2.1.0`.
 - `fem.schema.json`, `schema-documents.js`, `package.js`, `js/`, and `ui/` define the application package and browser integration.
+- `native-operations.json` defines FEM's native operation contracts for the Kernel and FEM executable.
 - `examples/` contains sample FEM projects.
 - `docs/` and `specification/` contain user and developer documentation.
 - `fem-rust/src/scenarios/` contains the scenario registry, JSON contracts and Rust runners. Contract and runner filenames share a stem, such as `thermal2d.json` and `thermal2d.rs`; the model profile ID remains `thermal-2d`.
-- `fem-rust/src/mesh/` contains geometry and meshing code; `fem-rust/vendor/` contains Gmsh, its SDK and the vendored solver dependency.
-- `.build/` is a disposable Cargo cache; `.runtime/` contains the staged `fullmeta-fem` executable, including the mesher and registered scenario runners.
+- `fem-rust/src/mesh/` contains geometry and meshing code; `fem-rust/vendor/` contains Gmsh, its SDK and the vendored solver dependency. FEM builds against the public platform SDKs and three DLLs without the platform implementation sources.
+- `.build/` is a disposable Cargo cache; `.runtime/` contains the staged `fullmeta-fem` executable and its three platform DLLs.
 
 The mesher uses both parts of Gmsh 4.15.2: `fem-rust/vendor/gmsh-4.15.2/` provides the `gmsh.exe` executable, while `fem-rust/vendor/gmsh-4.15.2-sdk/` provides the matching C API library. See [the Gmsh notes](fem-rust/vendor/GMSH.md) for details.
 

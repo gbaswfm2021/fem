@@ -1,6 +1,6 @@
 [package]
 name = "fullmeta-fem"
-version = "2.0.0"
+version = "2.1.0"
 edition = "2024"
 autobins = false
 
@@ -8,9 +8,9 @@ autobins = false
 faer = { version = "0.24.4", default-features = false, features = ["std", "sparse-linalg"] }
 rivrs-sparse = { version = "0.1.1", optional = true }
 serde_json = "1.0"
-fullmeta-operation-contracts = { path = "../../../platform/operation-contracts-rust" }
-fullmeta-core = { path = "../../../platform/core-rust" }
-fullmeta-model = { path = "../../../platform/model-rust" }
+fullmeta-operation-contracts-sdk = { path = "../../../platform/sdk-rust/operation-contracts" }
+fullmeta-core = { package = "fullmeta-core-sdk", path = "../../../platform/sdk-rust/core" }
+fullmeta-model = { package = "fullmeta-model-sdk", path = "../../../platform/sdk-rust/model" }
 
 [build-dependencies]
 serde_json = "1.0"

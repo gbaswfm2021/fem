@@ -2,10 +2,10 @@ use serde_json::Value;
 
 pub(crate) fn validate_request(request: &Value, expected_solver: &str) -> Result<(), String> {
     let root_schema = crate::model_schema::root()?;
-    let request_schema = root_schema
+    let _request_schema = root_schema
         .pointer("/$defs/solverRequest")
         .ok_or_else(|| "The FEM model schema has no solver request definition.".to_string())?;
-    let errors = crate::json_schema::validate_with_root(request, request_schema, root_schema);
+    let errors = crate::model_schema::context()?.validate_at(request, "/$defs/solverRequest")?;
     if !errors.is_empty() {
         return Err(format!("Invalid solver request: {}", errors.join(" ")));
     }

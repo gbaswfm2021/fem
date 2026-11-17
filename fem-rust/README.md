@@ -2,28 +2,31 @@
 
 `fullmeta-fem.exe` is the single FEM command entry point and solver executable. It performs common model preflight, prepares projects and Studies, and dispatches numerical requests through the generated scenario-module registry. Scenario packages are discovered through `src/scenarios/registry.json` and composed with the scenario-neutral base schema; scenario additions do not require profile declarations in `fem.schema.json`. Each scenario keeps its JSON contract and numerical runner together under `src/scenarios/`, while common project and stationary Study orchestration remains in `src/coordinator.rs` and `src/study_prepare.rs`. Geometry and meshing live under `src/mesh/`. The wave solvers support harmonic sweeps and field/global-variable output; thermal solves a stationary case with a temperature field and summary CSV. See the [FEM Rust and scenario interface guide](../docs/fem-rust-and-scenario-interfaces.md), [scenario contributor guide](src/scenarios/README.md) and [mesher guide](src/mesh/GUIDE.md).
 
-The FEM application package may distribute this `fem-rust` source tree while keeping the stable shared Rust crates out of the installer. The crate uses path dependencies on `platform/core-rust`, `platform/model-rust` and `platform/operation-contracts-rust`; compiling changes therefore requires a compatible FullMeta source checkout with those crates. The bundled executable remains usable without the shared Rust source.
+FEM uses the public core, model and operation-contracts SDK adapters and their three DLLs. It embeds the application-owned `../native-operations.json`; it does not need platform implementation source or a supplied core Rust library.
 
 Validation has two scopes: **model validation** checks the supplied model's declarations, and **run-time validation** checks generated data and numerical operations when they are used. A successful model validation does not guarantee that meshing or solving will succeed.
 
 ## Build FEM on Windows
 
-From the FullMeta root, use the installed Windows GNU toolchain to build just
-the FEM executable and stage it for the application:
+### Build using the platform DLLs
 
-```powershell
-$env:CARGO_TARGET_DIR = Join-Path (Get-Location) 'applications/fem/.build'
-cargo +stable-x86_64-pc-windows-gnu build --offline --locked --release --target x86_64-pc-windows-gnu --manifest-path applications/fem/fem-rust/Cargo.toml --bin fullmeta-fem
-if ($LASTEXITCODE -ne 0) { throw 'FEM build failed' }
-New-Item -ItemType Directory -Force applications/fem/.runtime/x86_64-pc-windows-gnu/release | Out-Null
-Copy-Item applications/fem/.build/x86_64-pc-windows-gnu/release/fullmeta-fem.exe applications/fem/.runtime/x86_64-pc-windows-gnu/release/fullmeta-fem.exe -Force
-```
+Keep these paths under the same FullMeta root:
 
-This FEM-only build does not rebuild shared WASM or other applications and does
-not refresh the workspace-wide runtime fingerprint. The workspace build
-`node scripts/build-runtime.mjs` builds the registered shared and application
-targets and records that fingerprint. Run it when a current workspace-wide
-build is required and changes to those other targets are in scope.
+- `applications/fem/`, including FEM source, `Cargo.toml`, `Cargo.lock`, scenario contracts and `native-operations.json`.
+- `platform/sdk-rust/core/`, `platform/sdk-rust/model/` and `platform/sdk-rust/operation-contracts/` (the public Rust adapters).
+- `platform/core-rust/lib/fullmeta_core.dll`, `platform/model-rust/lib/fullmeta_model.dll` and `platform/operation-contracts-rust/lib/fullmeta_operation_contracts.dll`.
+
+With Node.js 20.11 or later, the Windows x64 GNU Rust toolchain, GCC, and the normal third-party Cargo dependencies available, run from `fem-rust/`:
+
+    node prebuilt-tools/build.mjs --offline --stage
+
+Omit `--offline` if Cargo should download missing third-party packages. Omit `--stage` to leave the executable and DLLs in `target/dll-build/x86_64-pc-windows-gnu/release/`. With `--stage`, they are copied together into `applications/fem/.runtime/x86_64-pc-windows-gnu/release/`. Cargo may generate temporary Rust libraries for the SDKs and third-party crates; no prebuilt platform `.rlib` bundle or procedural-macro DLL is distributed.
+
+FEM uses the three DLLs beside its executable as one set. If only part of that set is present, startup reports an error. If none is present, development builds can locate the libraries in the platform `lib/` directories. Explicit `FULLMETA_CORE_DLL`, `FULLMETA_MODEL_DLL` and `FULLMETA_CONTRACTS_DLL` overrides are intended for testing and can override this selection. Distribute the staged executable with all three matching DLLs when deploying FEM to a platform.
+
+To refresh the DLLs from a full platform source checkout, run `node prebuilt-tools/prepare.mjs --offline` and then rebuild FEM. The platform `target/` directories are rebuildable caches and are not needed by a colleague building FEM.
+
+This FEM-only build does not rebuild shared WASM or other applications and does not refresh the workspace-wide runtime fingerprint.
 
 | Location | Responsibility |
 | --- | --- |
@@ -144,7 +147,7 @@ applications/fem/.runtime/x86_64-pc-windows-gnu/release/fullmeta-fem.exe --scena
 ```
 
 Cargo's disposable incremental cache is stored in `applications/fem/.build/`.
-The runtime build stages only the registered executable under `.runtime/`;
+The runtime build stages the registered executable and required DLLs under `.runtime/`;
 delete `.build/` whenever you want to reclaim its space, with the next build
 recompiling dependencies.
 
