@@ -2,7 +2,7 @@
 
 This is the public documentation entry for people and agents creating FEM project model JSONs. It is the Help guide for a model interpreted by [fem.schema.json](../fem.schema.json). The public format and guides work independently of the application's builder specification.
 
-The development application declares the five supported Physics profiles and
+The development application declares the registered Physics profiles and
 their Model 2 fields, Settings, validation and native registrations. Package
 integration is in progress; complete editing, execution and numerical acceptance
 remain open. The published format below defines model values independently of
@@ -31,17 +31,21 @@ The application currently registers these profiles:
 
 | Profile ID | Physics | Formulations | Study type |
 | --- | --- | --- | --- |
-| `acoustic-2d` | 2D pressure acoustics | `pressure` | Frequency domain |
-| `acoustic-3d` | 3D pressure acoustics | `pressure` | Frequency domain |
-| `em-2d` | 2D electromagnetics | `Ez`, `Hz` | Frequency domain |
-| `em-3d` | 3D electromagnetics | `electric` | Frequency domain |
-| `thermal-2d` | 2D heat conduction | `T` | Stationary |
+| `acoustic-2d` | [2D pressure acoustics](../fem-rust/docs/notes_acoustic2d.md) | `pressure` | Frequency domain |
+| `acoustic-3d` | [3D pressure acoustics](../fem-rust/docs/notes_acoustic3d.md) | `pressure` | Frequency domain |
+| `em-2d` | [2D electromagnetics](../fem-rust/docs/notes_em2d.md) | `Ez`, `Hz` | Frequency domain |
+| `em-3d` | [3D electromagnetics](../fem-rust/docs/notes_em3d.md) | `electric` | Frequency domain |
+| `elastic-3d` | [3D elasticity](../fem-rust/docs/notes_elastic3d.md) | `displacement` | Frequency domain |
+| `thermal-2d` | [2D heat conduction](../fem-rust/docs/notes_thermal2d.md) | `T` | Stationary |
+| `thermal-3d` | [3D heat conduction](../fem-rust/docs/therm3d.md) | `T` | Stationary |
+
+Thermal 3D uses first-order tetrahedra, material-wise constant isotropic
+conductivity, and prescribed temperature or heat flux. Periodic conditions,
+spatially varying coefficients and volumetric heat sources are not supported.
 
 The scenario registry selects `em-3d` as the default for new projects; an
-existing model keeps its stored profile ID. Solver settings may offer additional
-discretization choices, including the experimental [first-order E–H
-formulation](first-order-eh-formulation.md) for EM3D. A declared option is not
-by itself proof of acceptance for every backend or case.
+existing model keeps its stored profile ID. A declared option is not by itself
+proof of acceptance for every backend or case.
 
 The editor, mesher and dispatcher compose the scenario contracts with
 `fem.schema.json` when they load. Geometry checking, meshing and numerical
@@ -118,6 +122,9 @@ Plot view to the selected `.svg`, `.png` or `.pdf` filename and reports the
 saved path and byte count. Table view uses the same selected samples and units.
 After editing a plot's settings, select **Apply item** to refresh its Plot and
 Table using the existing Study results; a new Study run is not needed.
+Frequencies are stored in Hz. Display labels and frequency axes choose an
+engineering unit by magnitude unless an axis unit was explicitly selected.
+Earlier GHz-based result files remain readable.
 
 The Windows mesher supports membership references to nested child features and
 nonlinear coordinate zero expressions. For a nonlinear filter, the expression
@@ -138,10 +145,10 @@ Agents authoring project JSON should use this public format and the deployed int
 
 ## Public references
 
+- Scenario manuals: [2D electromagnetics](../fem-rust/docs/notes_em2d.md), [3D electromagnetics](../fem-rust/docs/notes_em3d.md), [2D acoustics](../fem-rust/docs/notes_acoustic2d.md), [3D acoustics](../fem-rust/docs/notes_acoustic3d.md), and [2D thermal conduction](../fem-rust/docs/notes_thermal2d.md). These connect each model's equations, field spaces, material and Physics settings to the implemented solver.
 - [FEM Model 2](fullmeta-model-2.md): author and interpret project model JSON.
 - [Native mesh artifact](fullmeta-mesh-1.md): interpret the mesh data produced by the native mesher.
 - [FEM Rust and scenario interfaces](fem-rust-and-scenario-interfaces.md): understand native commands, scenario contracts and runner integration.
-- [First-order E-H formulation](first-order-eh-formulation.md): understand the experimental formulation's mathematical scope and constraints.
 - [Workspace files and layouts](../../../platform/workspace/docs/workspace-files-and-layout.md): open documents, browse project branches, use menus and resize panes.
 - [Workspace guide](../../../platform/workspace/docs/README.md): find applications and individual model files.
 

@@ -8,7 +8,6 @@ The application must implement the format's required model structure and all fiv
 
 Distinguish an editable stored representation from an executable model. Structural validity does not establish geometry support, mesh correspondence, material coverage, a valid prepared Study or numerical correctness. When an operation is outside a fixed dependency's capability, retain the representable data, report the unsupported operation and affected path, and follow the dependency boundary in [ARCHITECTURE.md](ARCHITECTURE.md). Do not reinterpret a profile, remove its data or disguise a capability failure as a format change.
 
-The experimental `firstOrderEH` token remains the public format's explicit Study choice. It does not add a built-in EM3D Physics formulation: the built-in Physics value remains `electric`, and the required Study/Physics formulation-match check rejects an incompatible choice before dispatch. Keep structural alternatives, supported application choices and executable combinations separate.
 
 ## Application envelope and file identity
 

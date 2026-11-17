@@ -643,11 +643,19 @@ pub(crate) fn prepare_validated_study(envelope: &Value, capabilities: &Value) ->
     let (variables, integration_operators, pointwise_variables) =
         variables_for_study(model, component)?;
     let mut impedance_boundaries = Vec::new();
+    let mut prescribed_boundaries = Vec::new();
     for boundary in crate::model_schema::physics_boundary_conditions(physics)
         .filter(|boundary| boundary.get("enabled").and_then(Value::as_bool) != Some(false))
     {
         let id = str_field(boundary, "id", "impedance boundary")?;
-        if boundary.get("type").and_then(Value::as_str) != Some("impedance") {
+        let kind = boundary.get("type").and_then(Value::as_str).unwrap_or("");
+        if matches!(kind, "dirichlet" | "neumann") {
+            let mut prepared = json!({"id":id,"type":kind,"selectionId":str_field(boundary, "selectionId", id)?,"value":field(boundary, "value", id)?});
+            if let Some(vector) = boundary.get("fieldValues") { prepared["fieldValues"] = vector.clone(); }
+            prescribed_boundaries.push(prepared);
+            continue;
+        }
+        if kind != "impedance" {
             return Err(format!(
                 "Profile {profile_id}, Study {study_id}, preparation: enabled boundary {id} must use impedance."
             ));
@@ -711,7 +719,7 @@ pub(crate) fn prepare_validated_study(envelope: &Value, capabilities: &Value) ->
         "modelConfiguration":{"schema":capability_study.get("requestConfigurationSchema"),"scenarioProfileId":profile_id,
             "fieldComponentCoordinateSystem":"model","physicsId":physics_id,"domainSelectionIds":domain_selection_ids,
             "periodicPairIds":periodic_request.iter().map(|entry|entry.get("id")).collect::<Vec<_>>(),"periodicPairs":periodic_request,
-            "impedanceBoundaries":impedance_boundaries,"materialAssignments":assignments,"variables":variables,"pointwiseVariables":pointwise_variables,
+            "impedanceBoundaries":impedance_boundaries,"prescribedBoundaries":prescribed_boundaries,"materialAssignments":assignments,"variables":variables,"pointwiseVariables":pointwise_variables,
             "integrationOperators":integration_operators,"fieldFiles":field_files}});
     // Configured requests need a materialized configuration for every sweep
     // case. Keep this in the shared preparer so the coordinator can prepare a
@@ -736,7 +744,7 @@ pub(crate) fn prepare_validated_study(envelope: &Value, capabilities: &Value) ->
         None
     };
     let mut prepared = json!({"request":request,"study":study,"component":component,"assignments":assignments,
-        "frequenciesGHz":frequencies_hz.iter().map(|frequency|frequency/1e9).collect::<Vec<_>>()});
+        "frequenciesHz":frequencies_hz});
     if let Some(configurations) = case_model_configurations {
         prepared["caseModelConfigurations"] = json!(configurations);
     }

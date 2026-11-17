@@ -15,6 +15,30 @@ use std::path::{Component, Path, PathBuf};
 
 type Result<T> = std::result::Result<T, String>;
 
+fn format_frequency_hz(frequency: f64) -> String {
+    const UNITS: [(&str, f64); 10] = [
+        ("pHz", 1e-12), ("nHz", 1e-9), ("µHz", 1e-6), ("mHz", 1e-3),
+        ("Hz", 1.0), ("kHz", 1e3), ("MHz", 1e6), ("GHz", 1e9),
+        ("THz", 1e12), ("PHz", 1e15),
+    ];
+    let mut index = UNITS.iter().rposition(|(_, scale)| frequency >= *scale).unwrap_or(0);
+    if index + 1 < UNITS.len() && frequency / UNITS[index].1 >= 999.9995 { index += 1; }
+    let (unit, scale) = UNITS[index];
+    let value = frequency / scale;
+    let number = if !(1e-6..1e6).contains(&value) {
+        format!("{value:.6e}")
+    } else {
+        let decimals = (5 - value.log10().floor() as i32).clamp(0, 16) as usize;
+        let raw = format!("{value:.decimals$}");
+        if decimals == 0 {
+            raw
+        } else {
+            raw.trim_end_matches('0').trim_end_matches('.').to_string()
+        }
+    };
+    format!("{number} {unit}")
+}
+
 pub(super) fn study_input_fingerprint(model: &Value, study_id: &str) -> Option<Value> {
     study_fingerprint::fingerprint(model, study_id)
 }
@@ -1451,6 +1475,15 @@ fn saved_fingerprint(record: &Value, snapshot: &Value, study_id: &str) -> Option
 mod freshness_tests {
     use super::*;
 
+    #[test]
+    fn frequency_labels_use_engineering_units() {
+        assert_eq!(format_frequency_hz(1_500.0), "1.5 kHz");
+        assert_eq!(format_frequency_hz(1_500_000.0), "1.5 MHz");
+        assert_eq!(format_frequency_hz(6_000_000_000.0), "6 GHz");
+        assert_eq!(format_frequency_hz(600_000_000_000_000.0), "600 THz");
+        assert_eq!(format_frequency_hz(100_000_000_000_000_000_000.0), "100000 PHz");
+    }
+
     struct Fixture {
         root: PathBuf,
         created: Vec<(PathBuf, bool)>,
@@ -1829,7 +1862,7 @@ fn list_field_files(
             })
             .collect::<Vec<_>>();
         let detail = if details.is_empty() {
-            format!("{:.7} GHz", frequency / 1e9)
+            format_frequency_hz(frequency)
         } else {
             details.join(", ")
         };
@@ -1997,7 +2030,7 @@ fn list_field_files(
                 .split('/')
                 .find_map(|part| part.strip_prefix("case-")?.parse::<usize>().ok())
                 .map(|index| index.saturating_sub(1));
-            files.push(json!({"name":relative_name,"frequencyHz":value*scale,"caseIndex":case_index,"label":format!("Case {} · {:.7} GHz",case_index.map(|index|index+1).unwrap_or(files.len()+1),value*scale/1e9)}));
+            files.push(json!({"name":relative_name,"frequencyHz":value*scale,"caseIndex":case_index,"label":format!("Case {} · {}",case_index.map(|index|index+1).unwrap_or(files.len()+1),format_frequency_hz(value*scale))}));
         }
         Ok(())
     }

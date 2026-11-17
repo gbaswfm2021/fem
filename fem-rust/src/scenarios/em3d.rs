@@ -215,6 +215,19 @@ struct ImpedanceBoundary {
     incident: Option<Vec<model_expression::CompiledComplexQuantity>>,
 }
 #[derive(Clone)]
+enum PrescribedValue {
+    Scalar(model_expression::CompiledComplexQuantity),
+    Vector(Vec<model_expression::CompiledComplexQuantity>),
+}
+#[derive(Clone)]
+struct PrescribedBoundary {
+    id: String,
+    tag: usize,
+    dirichlet: bool,
+    value: PrescribedValue,
+    legacy_scalar: Option<model_expression::CompiledComplexQuantity>,
+}
+#[derive(Clone)]
 struct IntegrationOperator {
     id: String,
     kind: String,
@@ -236,6 +249,7 @@ struct PointwiseDefinition {
 struct SolveConfig {
     periodic_pairs: Vec<PeriodicPair>,
     impedance_boundaries: Vec<ImpedanceBoundary>,
+    prescribed_boundaries: Vec<PrescribedBoundary>,
     global_parameter_cases: Vec<HashMap<String, f64>>,
     global_parameter_dimensions: Vec<HashMap<String, Dimension>>,
     material_assignments: Vec<Value>,
@@ -246,6 +260,32 @@ struct SolveConfig {
     field_files: bool,
     field_variables: Vec<crate::model_schema::FieldVariable>,
     field_dimension: usize,
+}
+
+fn evaluate_prescribed_field(
+    value: &PrescribedValue,
+    symbols: &HashMap<String, model_expression::Scalar>,
+    path: &str,
+) -> Result<[C; 3], String> {
+    let mut model = [C::default(); 3];
+    match value {
+        PrescribedValue::Scalar(quantity) => {
+            let evaluated = quantity.evaluate(symbols, path)?;
+            if !evaluated.re.is_finite() || !evaluated.im.is_finite() || evaluated.re != 0.0 || evaluated.im != 0.0 {
+                return Err(format!("{path}: a scalar boundary value must be zero; use three Cartesian components for a nonzero field."));
+            }
+        }
+        PrescribedValue::Vector(components) => {
+            for (axis, quantity) in components.iter().enumerate() {
+                let value = quantity.evaluate(symbols, &format!("{path}[{axis}]"))?;
+                if !value.re.is_finite() || !value.im.is_finite() {
+                    return Err(format!("{path}[{axis}] evaluated to a non-finite value."));
+                }
+                model[axis] = C { re: value.re, im: value.im };
+            }
+        }
+    }
+    Ok([model[1], model[2], model[0]])
 }
 fn boundary_symbols(
     config: &SolveConfig,
@@ -340,7 +380,7 @@ struct SolveOut {
     unknowns: usize,
 }
 struct CsvFrequencyRow {
-    frequency_ghz: f64,
+    frequency_hz: f64,
     residual: f64,
     unknowns: usize,
     variable_values: Vec<C>,
@@ -351,6 +391,163 @@ struct PeriodicDofs {
     reduced: Vec<usize>,
     weights: Vec<C>,
     count: usize,
+}
+
+fn insert_prescribed_constraint(
+    constraints: &mut HashMap<usize, C>,
+    dofs: &PeriodicDofs,
+    raw: usize,
+    value: C,
+) -> Result<(), String> {
+    let weight = *dofs.weights.get(raw).ok_or("EM3D boundary references a missing periodic weight.")?;
+    let reduced = *dofs.reduced.get(raw).ok_or("EM3D boundary references a missing periodic degree of freedom.")?;
+    if !weight.re.is_finite() || !weight.im.is_finite() || weight.re.hypot(weight.im) < 1e-150
+        || !value.re.is_finite() || !value.im.is_finite() {
+        return Err("EM3D boundary constraint has an invalid value or periodic weight.".into());
+    }
+    let prescribed = value.div(weight);
+    if let Some(previous) = constraints.get(&reduced) {
+        let difference = (previous.re - prescribed.re).hypot(previous.im - prescribed.im);
+        let magnitude = previous.re.hypot(previous.im).max(prescribed.re.hypot(prescribed.im)).max(1.0);
+        if difference > 1e-9 * magnitude {
+            return Err(format!("Conflicting EM3D Dirichlet values at periodic degree of freedom {reduced}."));
+        }
+    } else {
+        constraints.insert(reduced, prescribed);
+    }
+    Ok(())
+}
+
+fn apply_prescribed_constraints(
+    matrix: &mut [BTreeMap<usize, C>],
+    rhs_re: &mut [f64],
+    rhs_im: &mut [f64],
+    constraints: &HashMap<usize, C>,
+) -> Result<(), String> {
+    if matrix.len() != rhs_re.len() || matrix.len() != rhs_im.len()
+        || constraints.iter().any(|(&index, value)| index >= matrix.len() || !value.re.is_finite() || !value.im.is_finite()) {
+        return Err("EM3D Dirichlet constraints do not match the assembled system.".into());
+    }
+    for (row_index, row) in matrix.iter_mut().enumerate() {
+        if let Some(&value) = constraints.get(&row_index) {
+            row.clear();
+            row.insert(row_index, C { re: 1.0, im: 0.0 });
+            rhs_re[row_index] = value.re;
+            rhs_im[row_index] = value.im;
+        } else {
+            row.retain(|column, coefficient| {
+                if let Some(&value) = constraints.get(column) {
+                    let contribution = c_mul(*coefficient, value);
+                    rhs_re[row_index] -= contribution.re;
+                    rhs_im[row_index] -= contribution.im;
+                    false
+                } else { true }
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Local Nedelec moments whose tangential traces belong to a tetrahedral face.
+/// The indices follow `find_dofs` and `second_interpolation`: edge moments
+/// first, followed by the two moments for each face at order two.
+fn face_tangential_moment_indices(
+    tet: [usize; 4],
+    face: [usize; 3],
+    order: u8,
+) -> Result<Vec<usize>, String> {
+    if order != 1 && order != 2 {
+        return Err("EM3D boundary moments require element order 1 or 2.".into());
+    }
+    let face_nodes: HashSet<usize> = face.into_iter().collect();
+    if face_nodes.len() != 3 || !face_nodes.iter().all(|node| tet.contains(node)) {
+        return Err("EM3D boundary face is not a face of its adjacent tetrahedron.".into());
+    }
+    let modes = usize::from(order);
+    let mut result = Vec::with_capacity(if order == 1 { 3 } else { 8 });
+    for (edge_index, [a, b]) in EDGES.into_iter().enumerate() {
+        if face_nodes.contains(&tet[a]) && face_nodes.contains(&tet[b]) {
+            result.extend((0..modes).map(|mode| edge_index * modes + mode));
+        }
+    }
+    if order == 2 {
+        let index = FACES
+            .iter()
+            .position(|local| local.iter().all(|&vertex| face_nodes.contains(&tet[vertex])))
+            .ok_or("EM3D boundary face does not match a tetrahedral face.")?;
+        result.extend([12 + 2 * index, 13 + 2 * index]);
+    }
+    Ok(result)
+}
+
+/// Interpolate a prescribed Cartesian electric field using the same oriented
+/// edge and face functionals as the element basis construction.
+fn face_tangential_moments(
+    tet: [usize; 4],
+    face: [usize; 3],
+    nodes: &[V3],
+    order: u8,
+    mut field: impl FnMut(V3) -> Result<[C; 3], String>,
+) -> Result<Vec<(usize, C)>, String> {
+    let indices = face_tangential_moment_indices(tet, face, order)?;
+    let members: HashSet<usize> = face.into_iter().collect();
+    let mut values = Vec::with_capacity(indices.len());
+    let edge_q = [
+        (0.046910077030668, 0.118463442528095),
+        (0.230765344947158, 0.239314335249683),
+        (0.5, 0.284444444444444),
+        (0.769234655052842, 0.239314335249683),
+        (0.953089922969332, 0.118463442528095),
+    ];
+    for [a, b] in EDGES {
+        if !members.contains(&tet[a]) || !members.contains(&tet[b]) {
+            continue;
+        }
+        let canonical = canonical_points(vec![tet[a], tet[b]], nodes);
+        let start = nodes[canonical[0]];
+        let delta = sub(nodes[canonical[1]], start);
+        let length = norm(delta);
+        if !length.is_finite() || length <= 0.0 {
+            return Err("EM3D prescribed boundary has a degenerate edge.".into());
+        }
+        let tangent = if order == 1 { delta } else { scale(delta, 1.0 / length) };
+        let mut moments = [C::default(); 2];
+        for (s, weight) in edge_q {
+            let value = field(add(start, scale(delta, s)))?;
+            let component = (0..3).fold(C::default(), |sum, axis| c_add(sum, c_scale(value[axis], tangent[axis])));
+            moments[0] = c_add(moments[0], c_scale(component, weight));
+            if order == 2 {
+                moments[1] = c_add(moments[1], c_scale(component, weight * (2.0 * s - 1.0)));
+            }
+        }
+        values.extend(moments.into_iter().take(usize::from(order)));
+    }
+    if order == 2 {
+        let canonical = canonical_points(face.to_vec(), nodes);
+        let p = [nodes[canonical[0]], nodes[canonical[1]], nodes[canonical[2]]];
+        let d1 = sub(p[1], p[0]);
+        let d2 = sub(p[2], p[0]);
+        let l1 = norm(d1);
+        let l2 = norm(d2);
+        if !l1.is_finite() || !l2.is_finite() || l1 <= 0.0 || l2 <= 0.0 {
+            return Err("EM3D prescribed boundary has a degenerate face.".into());
+        }
+        let tangents = [scale(d1, 1.0 / l1), scale(d2, 1.0 / l2)];
+        let mut moments = [C::default(); 2];
+        for q in TRI_Q {
+            let point = add(add(scale(p[0], q[0]), scale(p[1], q[1])), scale(p[2], q[2]));
+            let value = field(point)?;
+            for (j, tangent) in tangents.iter().enumerate() {
+                let component = (0..3).fold(C::default(), |sum, axis| c_add(sum, c_scale(value[axis], tangent[axis])));
+                moments[j] = c_add(moments[j], c_scale(component, q[3]));
+            }
+        }
+        values.extend(moments);
+    }
+    if values.iter().any(|v| !v.re.is_finite() || !v.im.is_finite()) {
+        return Err("EM3D prescribed boundary produced a non-finite moment.".into());
+    }
+    Ok(indices.into_iter().zip(values).collect())
 }
 
 fn geometry(points: [V3; 4]) -> Result<Geo, String> {
@@ -1301,7 +1498,6 @@ fn solve_case(
     frequency_case_index: usize,
     order: u8,
     formulation: &str,
-    centroid_constitutive: bool,
     materials: &HashMap<usize, MaterialProperties>,
     config: &SolveConfig,
     solver_backend: &str,
@@ -1312,18 +1508,8 @@ fn solve_case(
     if order != 1 && order != 2 {
         return Err("elementOrder must be 1 or 2 (first- or second-order Nedelec).".into());
     }
-    if formulation != "electric" && formulation != "firstOrderEH" {
-        return Err("fieldFormulation must be 'electric' or 'firstOrderEH'.".into());
-    }
-    if formulation == "firstOrderEH" && order != 1 {
-        return Err(
-            "The experimental firstOrderEH formulation currently supports elementOrder 1 only."
-                .into(),
-        );
-    }
-    let coupled = formulation == "firstOrderEH";
-    if coupled && solver_backend != "faer" {
-        return Err("fieldFormulation 'firstOrderEH' currently requires solverBackend 'faer' because its block matrix is nonsymmetric.".into());
+    if formulation != "electric" {
+        return Err("fieldFormulation must be 'electric'.".into());
     }
     if !(frequency.is_finite() && frequency > 0.0) {
         return Err("Frequency must be positive and finite.".into());
@@ -1344,8 +1530,8 @@ fn solve_case(
     } else {
         Vec::new()
     };
-    let system_n = if coupled { 2 * reduced_n } else { reduced_n };
-    let assembly_n = if coupled { 2 * n } else { n };
+    let system_n = reduced_n;
+    let assembly_n = n;
     println!(
         "  Nedelec order {order} · formulation {formulation}; unknowns {system_n} ({} per field); {} impedance boundaries",
         reduced_n,
@@ -1398,15 +1584,12 @@ fn solve_case(
         let epsilon_tet = EPS0 * material.relative_permittivity;
         let mu_tet = MU0 * material.relative_permeability;
         let sigma = material.conductivity_s_per_m;
-        let mut mass = vec![vec![0.0f64; nd]; nd];
-        let mut curl = vec![vec![0.0f64; nd]; nd];
         let mut lr = vec![vec![0.0f64; nd]; nd];
         let mut li = vec![vec![0.0f64; nd]; nd];
-        if !coupled
-            && (!mu_tet.is_finite()
+        if !mu_tet.is_finite()
                 || mu_tet == 0.0
                 || !(omega * mu_tet).is_finite()
-                || omega * mu_tet == 0.0)
+                || omega * mu_tet == 0.0
         {
             return Err(format!(
                 "Tetrahedron {e} has an undefined magnetic-field recovery denominator omega*mu."
@@ -1427,38 +1610,10 @@ fn solve_case(
             let weight = geo.det.abs() * q[4];
             for i in 0..nd {
                 for j in 0..nd {
-                    let m = weight * dot(bas[i].value, bas[j].value);
-                    let c = weight * dot(bas[i].value, bas[j].curl);
-                    if !coupled || !centroid_constitutive {
-                        mass[i][j] += m;
-                    }
-                    curl[i][j] += c;
-                    if !coupled {
-                        lr[i][j] += weight
-                            * (dot(bas[i].curl, bas[j].curl) / mu_tet
-                                - omega * omega * epsilon_tet * dot(bas[i].value, bas[j].value));
-                        li[i][j] += weight * omega * sigma * dot(bas[i].value, bas[j].value)
-                    }
-                }
-            }
-        }
-        // Experimental one-point quadrature for constitutive mass terms only; curl coupling above retains TET_Q.
-        if coupled && centroid_constitutive {
-            let point = scale(add(add(pts[0], pts[1]), add(pts[2], pts[3])), 0.25);
-            let bas = bases_at(
-                order,
-                geo,
-                grads,
-                tet,
-                &mesh.nodes,
-                inv_m.as_ref(),
-                &candidates,
-                point,
-            );
-            let weight = geo.det.abs() / 6.0;
-            for i in 0..nd {
-                for j in 0..nd {
-                    mass[i][j] = weight * dot(bas[i].value, bas[j].value);
+                    lr[i][j] += weight
+                        * (dot(bas[i].curl, bas[j].curl) / mu_tet
+                            - omega * omega * epsilon_tet * dot(bas[i].value, bas[j].value));
+                    li[i][j] += weight * omega * sigma * dot(bas[i].value, bas[j].value)
                 }
             }
         }
@@ -1509,14 +1664,7 @@ fn solve_case(
                     for i in 0..nd {
                         for j in 0..nd {
                             let tangential = tangential_product(bas[i].value, bas[j].value, normal);
-                            if coupled {
-                                let row = n + dofs[i];
-                                let column = dofs[j];
-                                let entry = matrix[row].entry(column).or_default();
-                                entry.im += admittance * weight * tangential;
-                            } else {
-                                li[i][j] += admittance * weight * tangential;
-                            }
+                            li[i][j] += admittance * weight * tangential;
                         }
                     }
                     if let Some(incident_quantities) = &boundary.incident {
@@ -1539,7 +1687,7 @@ fn solve_case(
                         for i in 0..nd {
                             let source_re = tangential_product(bas[i].value, incident_re, normal);
                             let source_im = tangential_product(bas[i].value, incident_im, normal);
-                            let row = if coupled { n + dofs[i] } else { dofs[i] };
+                            let row = dofs[i];
                             rhs_re[row] -= source_scale * source_im;
                             rhs_im[row] += source_scale * source_re;
                         }
@@ -1551,55 +1699,70 @@ fn solve_case(
             for j in 0..nd {
                 let a = dofs[i];
                 let b = dofs[j];
-                if coupled {
-                    let m = mass[i][j];
-                    let c = curl[i][j];
-                    let old = *matrix[a].get(&(n + b)).unwrap_or(&C::default());
-                    matrix[a].insert(
-                        n + b,
-                        C {
-                            re: old.re,
-                            im: old.im + omega * mu_tet * m,
-                        },
-                    );
-                    let old = *matrix[n + a].get(&b).unwrap_or(&C::default());
-                    matrix[n + a].insert(
-                        b,
-                        C {
-                            re: old.re - omega * omega * epsilon_tet * m,
-                            im: old.im + omega * sigma * m,
-                        },
-                    );
-                    let old = *matrix[n + a].get(&(n + b)).unwrap_or(&C::default());
-                    matrix[n + a].insert(
-                        n + b,
-                        C {
-                            re: old.re,
-                            im: old.im - omega * curl[j][i],
-                        },
-                    );
-                    let old = *matrix[a].get(&b).unwrap_or(&C::default());
-                    matrix[a].insert(
-                        b,
-                        C {
-                            re: old.re + c,
-                            im: old.im,
-                        },
-                    );
-                } else {
-                    let old = *matrix[a].get(&b).unwrap_or(&C::default());
-                    matrix[a].insert(
-                        b,
-                        C {
-                            re: old.re + lr[i][j],
-                            im: old.im + li[i][j],
-                        },
-                    );
+                let old = *matrix[a].get(&b).unwrap_or(&C::default());
+                matrix[a].insert(
+                    b,
+                    C {
+                        re: old.re + lr[i][j],
+                        im: old.im + li[i][j],
+                    },
+                );
+            }
+        }
+    }
+    let mut constraints = HashMap::<usize, C>::new();
+    for boundary in &config.prescribed_boundaries {
+        let faces: Vec<&Face> = mesh.boundary.iter().filter(|face| face.tag == boundary.tag).collect();
+        if faces.is_empty() {
+            return Err(format!("Boundary {} has no exterior faces in the mesh.", boundary.id));
+        }
+        for face in faces {
+            if face.other_element.is_some() {
+                return Err(format!("Boundary {} must target exterior faces.", boundary.id));
+            }
+            let tet = mesh.tets[face.element];
+            let local = &locals[face.element];
+            let path = format!("boundary {}.value", boundary.id);
+            let evaluate = |point: V3| -> Result<[C; 3], String> {
+                let symbols = boundary_symbols(config, frequency_case_index, frequency, add(point, mesh.origin))?;
+                if let Some(quantity) = &boundary.legacy_scalar {
+                    let scalar = quantity.evaluate(&symbols, &format!("{path} (scalar)"))?;
+                    if !scalar.re.is_finite() || !scalar.im.is_finite() || scalar.re != 0.0 || scalar.im != 0.0 {
+                        return Err(format!("{path}: the scalar value must be zero when a Cartesian vector is supplied."));
+                    }
+                }
+                evaluate_prescribed_field(&boundary.value, &symbols, &path)
+            };
+            if boundary.dirichlet {
+                for (index, value) in face_tangential_moments(tet, face.nodes, &mesh.nodes, order, evaluate)? {
+                    let raw = local.dofs[index];
+                    insert_prescribed_constraint(&mut constraints, &dof_map, raw, value)?;
+                }
+            } else {
+                let points = face.nodes.map(|node| mesh.nodes[node]);
+                let area = face_area(points);
+                if !area.is_finite() || area <= 0.0 { return Err(format!("Boundary {} has a degenerate face.", boundary.id)); }
+                let normal = boundary_face_normal(mesh, face)?;
+                for q in TRI_Q {
+                    let point = add(add(scale(points[0], q[0]), scale(points[1], q[1])), scale(points[2], q[2]));
+                    let value = evaluate(point)?;
+                    let real = cross(normal, value.map(|v| v.re));
+                    let imaginary = cross(normal, value.map(|v| v.im));
+                    let basis = bases_at(order, local.geo, local.grad, tet, &mesh.nodes, local.inv_m.as_ref(), &candidates, point);
+                    // H = i curl(E)/(omega mu).  The prescribed H contributes
+                    // +i omega * integral(v_t · (n x H)) to the load.
+                    let weight = omega * area * q[3];
+                    for (i, b) in basis.iter().enumerate() {
+                        let raw = local.dofs[i];
+                        rhs_re[raw] -= weight * tangential_product(b.value, imaginary, normal);
+                        rhs_im[raw] += weight * tangential_product(b.value, real, normal);
+                    }
                 }
             }
         }
     }
-    let (matrix, rhs_re, rhs_im) = reduce_periodic_system(&matrix, &rhs_re, &rhs_im, &dof_map)?;
+    let (mut matrix, mut rhs_re, mut rhs_im) = reduce_periodic_system(&matrix, &rhs_re, &rhs_im, &dof_map)?;
+    apply_prescribed_constraints(&mut matrix, &mut rhs_re, &mut rhs_im, &constraints)?;
     let real_block_unknowns = if solver_backend == "rivrs" {
         if crate::solver_common::complex_symmetry_defect(&matrix) > 1e-10 {
             4 * system_n
@@ -1627,16 +1790,6 @@ fn solve_case(
         expand_periodic_solution(&solution_re, &solution_im, &dof_map)?;
     let edge_re = solution_re[..n].to_vec();
     let edge_im = solution_im[..n].to_vec();
-    let h_re = if coupled {
-        solution_re[n..].to_vec()
-    } else {
-        Vec::new()
-    };
-    let h_im = if coupled {
-        solution_im[n..].to_vec()
-    } else {
-        Vec::new()
-    };
     let post_started = Instant::now();
     let mut fields: HashMap<&str, (Vec<f64>, Vec<f64>)> = config
         .field_variables
@@ -1688,16 +1841,8 @@ fn solve_case(
                 let hp = fields
                     .get_mut(hk.as_str())
                     .ok_or_else(|| format!("Scenario field declarations omit {hk}."))?;
-                if coupled {
-                    for (i, b) in bas.iter().enumerate() {
-                        let d = loc.dofs[i];
-                        hp.0[node] += b.value[a] * h_re[d];
-                        hp.1[node] += b.value[a] * h_im[d];
-                    }
-                } else {
-                    hp.0[node] += -ci[a] / (omega * mu_tet);
-                    hp.1[node] += cr[a] / (omega * mu_tet);
-                }
+                hp.0[node] += -ci[a] / (omega * mu_tet);
+                hp.1[node] += cr[a] / (omega * mu_tet);
             }
             count[node] += 1.0;
         }
@@ -1715,14 +1860,11 @@ fn solve_case(
         &locals,
         &edge_re,
         &edge_im,
-        &h_re,
-        &h_im,
         frequency,
         frequency_case_index,
         omega,
         materials,
         &candidates,
-        coupled,
         config,
     )?;
     let mut declared_values = HashMap::new();
@@ -1821,7 +1963,7 @@ fn solve_case(
     )?;
     let order_name = if order == 1 { "First" } else { "Second" };
     let output = json!({
-        "frequencyGHz":frequency/1e9,"fieldFormulation":formulation,
+        "frequencyHz":frequency,"frequencyGHz":frequency/1e9,"fieldFormulation":formulation,
         "discretization":format!("{order_name}-order Nedelec edge elements on tetrahedra"),
         "geometry":mesh.geometry,"origin":mesh.origin,"coordinateOrder":INTERNAL_COORDINATE_ORDER,
         "fieldComponentCoordinateSystem":"model","fieldConvention":"exp(+i omega t)",
@@ -1829,7 +1971,7 @@ fn solve_case(
         "materialPropertiesByTag":material_output,"materialFieldsByCell":material_fields,
         "globalVariables":global_variables,
         "globalVariableSemantics":"Configured expressions and integration operators are evaluated as written; no automatic port or scattering extraction is applied.",
-        "constitutiveQuadrature":if coupled&&centroid_constitutive{"tetrahedron centroid only for E-H constitutive mass terms; curl coupling remains tetrahedral quadrature"}else{"standard 11-point tetrahedral quadrature"},
+        "constitutiveQuadrature":"standard 11-point tetrahedral quadrature",
         "solver":{"backend":solver_backend,"ordering":if solver_backend=="rivrs"{solver_ordering}else{"n/a"},"residual":residual,"unknowns":system_n,"dofsPerField":reduced_n,"realBlockUnknowns":real_block_unknowns,"iterations":system_n},
         "provenance":"FEM solver, reconstructed mesh"
     });
@@ -1849,12 +1991,9 @@ struct ExpressionContext<'a> {
     locals: &'a [Local],
     electric_re: &'a [f64],
     electric_im: &'a [f64],
-    magnetic_re: &'a [f64],
-    magnetic_im: &'a [f64],
     omega: f64,
     materials: &'a HashMap<usize, MaterialProperties>,
     candidates: &'a [Poly2],
-    coupled: bool,
     config: &'a SolveConfig,
 }
 
@@ -1862,7 +2001,6 @@ fn expression_element_field_values(
     context: &ExpressionContext<'_>,
     element: usize,
     point: V3,
-    need_curl: bool,
 ) -> Result<([C; 3], [C; 3]), String> {
     let loc = context
         .locals
@@ -1885,24 +2023,16 @@ fn expression_element_field_values(
         for axis in 0..3 {
             e[axis].re += b.value[axis] * context.electric_re[dof];
             e[axis].im += b.value[axis] * context.electric_im[dof];
-            if need_curl {
-                curl[axis].re += b.curl[axis] * context.electric_re[dof];
-                curl[axis].im += b.curl[axis] * context.electric_im[dof];
-            }
-            if context.coupled {
-                h[axis].re += b.value[axis] * context.magnetic_re[dof];
-                h[axis].im += b.value[axis] * context.magnetic_im[dof];
-            }
+            curl[axis].re += b.curl[axis] * context.electric_re[dof];
+            curl[axis].im += b.curl[axis] * context.electric_im[dof];
         }
     }
-    if !context.coupled {
-        let mu = MU0 * material_for(context.materials, element)?.relative_permeability;
-        for axis in 0..3 {
-            h[axis] = C {
-                re: -curl[axis].im / (context.omega * mu),
-                im: curl[axis].re / (context.omega * mu),
-            };
-        }
+    let mu = MU0 * material_for(context.materials, element)?.relative_permeability;
+    for axis in 0..3 {
+        h[axis] = C {
+            re: -curl[axis].im / (context.omega * mu),
+            im: curl[axis].re / (context.omega * mu),
+        };
     }
     let to_model_axes = |internal: [C; 3]| -> Result<[C; 3], String> {
         let mut model = [C::default(); 3];
@@ -2025,14 +2155,11 @@ fn evaluate_global_variables(
     locals: &[Local],
     electric_re: &[f64],
     electric_im: &[f64],
-    magnetic_re: &[f64],
-    magnetic_im: &[f64],
     frequency_hz: f64,
     frequency_case_index: usize,
     omega: f64,
     materials: &HashMap<usize, MaterialProperties>,
     candidates: &[Poly2],
-    coupled: bool,
     config: &SolveConfig,
 ) -> Result<serde_json::Map<String, Value>, String> {
     let context = ExpressionContext {
@@ -2040,12 +2167,9 @@ fn evaluate_global_variables(
         locals,
         electric_re,
         electric_im,
-        magnetic_re,
-        magnetic_im,
         omega,
         materials,
         candidates,
-        coupled,
         config,
     };
     let case_parameters = config
@@ -2234,14 +2358,12 @@ fn evaluate_global_variables(
                 .element_index
                 .ok_or("EM3D integration cell has no owning tetrahedron.")?;
             let (electric, mut magnetic) =
-                expression_element_field_values(&context, element, point, !context.coupled)?;
-            if !context.coupled {
-                if let Some(other) = cell.adjacent_element_index {
-                    let (_, other_magnetic) =
-                        expression_element_field_values(&context, other, point, true)?;
-                    for axis in 0..3 {
-                        magnetic[axis] = c_scale(c_add(magnetic[axis], other_magnetic[axis]), 0.5);
-                    }
+                expression_element_field_values(&context, element, point)?;
+            if let Some(other) = cell.adjacent_element_index {
+                let (_, other_magnetic) =
+                    expression_element_field_values(&context, other, point)?;
+                for axis in 0..3 {
+                    magnetic[axis] = c_scale(c_add(magnetic[axis], other_magnetic[axis]), 0.5);
                 }
             }
             let scalar_families = HashMap::<&str, C>::new();
@@ -2820,6 +2942,50 @@ fn parse_solve_config(
             incident,
         });
     }
+    let mut prescribed_boundaries = Vec::new();
+    let prescribed_values = match configuration.get("prescribedBoundaries") {
+        None => &[][..],
+        Some(value) => value.as_array().ok_or("modelConfiguration.prescribedBoundaries must be an array.")?.as_slice(),
+    };
+    for (index, boundary) in prescribed_values.iter().enumerate() {
+        let path = format!("modelConfiguration.prescribedBoundaries[{index}]");
+        let id = boundary.get("id").and_then(Value::as_str).ok_or_else(|| format!("{path}.id is required."))?.to_string();
+        let selection = boundary.get("selectionId").and_then(Value::as_str).ok_or_else(|| format!("{path}.selectionId is required."))?;
+        let tag = mesh_map_selection_tag(&selections, selection, &path)?;
+        if !boundary_ids.insert(id.clone()) || !boundary_tags.insert(tag) {
+            return Err(format!("Boundary {id} duplicates a boundary ID or mesh selection."));
+        }
+        let dirichlet = match boundary.get("type").and_then(Value::as_str) {
+            Some("dirichlet") => true,
+            Some("neumann") => false,
+            _ => return Err(format!("{path}.type must be dirichlet or neumann.")),
+        };
+        let scalar_or_vector = boundary.get("value").ok_or_else(|| format!("{path}.value is required."))?;
+        let value = boundary.get("fieldValues").unwrap_or(scalar_or_vector);
+        let compile = |quantity: &Value, component_path: &str, expected_unit: &str| -> Result<model_expression::CompiledComplexQuantity, String> {
+            let unit = quantity.get("unit").and_then(Value::as_str).ok_or_else(|| format!("{component_path}.unit is required."))?;
+            let actual = model_expression::unit(unit)?.1;
+            let expected = model_expression::unit(expected_unit)?.1;
+            if actual.iter().zip(expected).any(|(a,b)| (a-b).abs() > 1e-10) {
+                return Err(format!("{component_path} has incompatible units."));
+            }
+            model_expression::CompiledComplexQuantity::compile(quantity, component_path)
+        };
+        let value = if let Some(components) = value.as_array() {
+            if components.len() != 3 { return Err(format!("{path}.value requires three Cartesian components.")); }
+            PrescribedValue::Vector(
+                components.iter().enumerate()
+                    .map(|(axis, component)| compile(component, &format!("{path}.value[{axis}]"), if dirichlet { "V/m" } else { "A/m" }))
+                    .collect::<Result<Vec<_>, _>>()?,
+            )
+        } else {
+            PrescribedValue::Scalar(compile(value, &format!("{path}.value"), if dirichlet { "V/m" } else { "V/m^2" })?)
+        };
+        let legacy_scalar = if boundary.get("fieldValues").is_some() {
+            Some(compile(scalar_or_vector, &format!("{path}.value"), if dirichlet { "V/m" } else { "V/m^2" })?)
+        } else { None };
+        prescribed_boundaries.push(PrescribedBoundary { id, tag, dirichlet, value, legacy_scalar });
+    }
     let pair_values = configuration
         .get("periodicPairs")
         .and_then(Value::as_array)
@@ -2867,7 +3033,7 @@ fn parse_solve_config(
         }
         if boundary_tags.contains(&lower_tag) || boundary_tags.contains(&upper_tag) {
             return Err(format!(
-                "Periodic pair {id} also carries an impedance boundary condition."
+                "Periodic pair {id} also carries an ordinary boundary condition."
             ));
         }
         let translation = model_vector_to_internal(
@@ -3042,6 +3208,7 @@ fn parse_solve_config(
     Ok(SolveConfig {
         periodic_pairs,
         impedance_boundaries,
+        prescribed_boundaries,
         global_parameter_cases,
         global_parameter_dimensions,
         material_assignments,
@@ -3115,15 +3282,9 @@ pub(crate) fn run_request_with_cache(
     let order = order as u8;
     let constitutive_quadrature = request_string(&request, "constitutiveQuadrature")
         .map_err(|e| format!("Solver request: {e}"))?;
-    if constitutive_quadrature != "standard" && constitutive_quadrature != "centroid" {
-        return Err("request.constitutiveQuadrature must be 'standard' or 'centroid'".into());
+    if constitutive_quadrature != "standard" {
+        return Err("request.constitutiveQuadrature must be 'standard' for EM3D.".into());
     }
-    if constitutive_quadrature == "centroid" && formulation != "firstOrderEH" {
-        return Err(
-            "centroid constitutive quadrature is currently supported only for firstOrderEH".into(),
-        );
-    }
-    let centroid_constitutive = constitutive_quadrature == "centroid";
     let solver_backend =
         request_string(&request, "solverBackend").map_err(|e| format!("Solver request: {e}"))?;
     if solver_backend != "faer" && solver_backend != "rivrs" {
@@ -3141,9 +3302,9 @@ pub(crate) fn run_request_with_cache(
     if solver_threads == 0 {
         return Err("request.solverThreads must be positive".into());
     }
-    let frequencies: Vec<f64> = request["frequenciesGHz"]
+    let frequencies: Vec<f64> = request["frequenciesHz"]
         .as_array()
-        .ok_or("request.frequenciesGHz must be an array")?
+        .ok_or("request.frequenciesHz must be an array")?
         .iter()
         .map(|v| v.as_f64().ok_or("frequency must be numeric"))
         .collect::<Result<_, _>>()?;
@@ -3180,7 +3341,7 @@ pub(crate) fn run_request_with_cache(
                 &mesh,
                 &config,
                 index,
-                frequency * 1e9,
+                *frequency,
                 formulation == "electric",
             )
         })
@@ -3211,15 +3372,14 @@ pub(crate) fn run_request_with_cache(
     for (frequency_index, frequency) in frequencies.iter().copied().enumerate() {
         let t0 = Instant::now();
         let materials = &materials_by_element_frequency[frequency_index];
-        println!("Solving {frequency:0.3} GHz...");
+        println!("Solving {frequency} Hz...");
 
         let solved = solve_case(
             &mesh,
-            frequency * 1e9,
+            frequency,
             frequency_index,
             order,
             &formulation,
-            centroid_constitutive,
             materials,
             &config,
             &solver_backend,
@@ -3227,7 +3387,7 @@ pub(crate) fn run_request_with_cache(
             solver_threads,
             solver_cache,
         )
-        .map_err(|e| format!("{frequency:0.3} GHz: {e}"))?;
+        .map_err(|e| format!("{frequency} Hz: {e}"))?;
         let variables = solved.output["globalVariables"].as_object();
         let variable_values = config
             .variables
@@ -3258,14 +3418,14 @@ pub(crate) fn run_request_with_cache(
             })
             .collect::<Result<Vec<_>, String>>()?;
         csv_rows.push(CsvFrequencyRow {
-            frequency_ghz: frequency,
+            frequency_hz: frequency,
             residual: solved.residual,
             unknowns: solved.unknowns,
             variable_values,
         });
         crate::solver_common::stage_started("output");
         if config.field_files {
-            let field_name = format!("{field_prefix}_{:0.12}GHz.json", frequency);
+            let field_name = format!("{field_prefix}_{frequency:0.6}Hz.json");
             fs::write(
                 output_dir.join(field_name),
                 serde_json::to_vec(&solved.output)?,
@@ -3298,7 +3458,7 @@ pub(crate) fn run_request_with_cache(
         })
         .collect::<Vec<_>>();
     let debug_real_flags = integration::variable_real_flags(&debug_rows);
-    let mut csv = String::from("frequency_GHz");
+    let mut csv = String::from("frequency_Hz");
     integration::append_variable_csv_headers(
         &mut csv,
         &config
@@ -3310,18 +3470,18 @@ pub(crate) fn run_request_with_cache(
     );
     csv.push('\n');
     for row in &csv_rows {
-        csv.push_str(&format!("{:0.8}", row.frequency_ghz));
+        csv.push_str(&format!("{:.17e}", row.frequency_hz));
         integration::append_variable_csv_values(&mut csv, &row.variable_values, &variable_is_real);
         csv.push('\n');
     }
     let mut debug_csv =
-        String::from("frequency_GHz,residual,mesh_nodes,tetrahedra,nedelec_dofs,element_order");
+        String::from("frequency_Hz,residual,mesh_nodes,tetrahedra,nedelec_dofs,element_order");
     integration::append_variable_csv_headers(&mut debug_csv, &debug_symbols, &debug_real_flags);
     debug_csv.push('\n');
     for (row, debug_values) in csv_rows.into_iter().zip(debug_rows) {
         debug_csv.push_str(&format!(
-            "{:0.8},{:0.6e},{},{},{},{}",
-            row.frequency_ghz,
+            "{:.17e},{:0.6e},{},{},{},{}",
+            row.frequency_hz,
             row.residual,
             mesh.nodes.len(),
             mesh.tets.len(),
@@ -3362,7 +3522,7 @@ fn expand_frequency_case(request: &mut Value) -> Result<(), String> {
     if cases.is_empty() {
         return Err("request.frequencyCases must contain at least one frequency.".into());
     }
-    let mut frequencies_ghz = Vec::with_capacity(cases.len());
+    let mut frequencies_hz = Vec::with_capacity(cases.len());
     let mut parameter_cases = Vec::with_capacity(cases.len());
     let mut dimension_cases = Vec::with_capacity(cases.len());
     for (case_index, case) in cases.iter().enumerate() {
@@ -3375,7 +3535,7 @@ fn expand_frequency_case(request: &mut Value) -> Result<(), String> {
                     "request.frequencyCases[{case_index}].frequencyHz must be positive and finite."
                 )
             })?;
-        frequencies_ghz.push(frequency_hz / 1e9);
+        frequencies_hz.push(frequency_hz);
         parameter_cases.push(
             case.get("globalParameters")
                 .cloned()
@@ -3396,12 +3556,23 @@ fn expand_frequency_case(request: &mut Value) -> Result<(), String> {
         "globalParameterDimensionsByFrequency".into(),
         json!(dimension_cases),
     );
-    request["frequenciesGHz"] = json!(frequencies_ghz);
+    request["frequenciesHz"] = json!(frequencies_hz);
     Ok(())
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frequency_request_keeps_hertz_coordinates() {
+        let mut request = json!({
+            "frequencyCases":[{"frequencyHz":1_500_000.0,"globalParameters":{}}],
+            "modelConfiguration":{}
+        });
+        expand_frequency_case(&mut request).unwrap();
+        assert_eq!(request["frequenciesHz"], json!([1_500_000.0]));
+        assert!(request.get("frequenciesGHz").is_none());
+    }
 
     fn floquet_cube_mesh() -> Mesh {
         floquet_structured_mesh(1, 1)
@@ -3517,6 +3688,231 @@ mod tests {
             expected.re,
             expected.im
         );
+    }
+
+    #[test]
+    fn prescribed_moments_respect_periodic_phase_and_reject_conflicts() {
+        let phase = C { re: 0.0, im: 1.0 };
+        let dofs = PeriodicDofs { elements: vec![], reduced: vec![0, 0], weights: vec![C { re: 1.0, im: 0.0 }, phase], count: 1 };
+        let mut constraints = HashMap::new();
+        let value = C { re: 2.0, im: -3.0 };
+        insert_prescribed_constraint(&mut constraints, &dofs, 0, value).unwrap();
+        insert_prescribed_constraint(&mut constraints, &dofs, 1, c_mul(phase, value)).unwrap();
+        assert_complex_close(constraints[&0], value, 1e-12);
+        assert!(insert_prescribed_constraint(&mut constraints, &dofs, 1, value).is_err());
+    }
+
+    #[test]
+    fn sparse_prescribed_constraints_match_scalar_elimination() {
+        let make = |x: f64, y: f64| C { re: x, im: y };
+        let original = vec![
+            BTreeMap::from([(0, make(2., 1.)), (1, make(1., -2.)), (2, make(4., 0.))]),
+            BTreeMap::from([(0, make(1., -2.)), (1, make(3., 0.)), (2, make(0., 1.))]),
+            BTreeMap::from([(0, make(4., 0.)), (1, make(0., 1.)), (2, make(5., -1.))]),
+        ];
+        let constraints = HashMap::from([(0, make(2., -1.)), (2, make(-0.5, 3.))]);
+        let (mut ours, mut reference) = (original.clone(), original);
+        let (mut re, mut im) = (vec![1.,2.,3.], vec![3.,2.,1.]);
+        let (mut ref_re, mut ref_im) = (re.clone(), im.clone());
+        apply_prescribed_constraints(&mut ours, &mut re, &mut im, &constraints).unwrap();
+        crate::scalar2d::apply_complex_dirichlet(&mut reference, &mut ref_re, &mut ref_im, &constraints).unwrap();
+        for i in 0..ours.len() {
+            assert_eq!(ours[i].keys().collect::<Vec<_>>(), reference[i].keys().collect::<Vec<_>>());
+            for (j, value) in &ours[i] { assert_complex_close(*value, reference[i][j], 1e-12); }
+            assert!((re[i]-ref_re[i]).abs() < 1e-12 && (im[i]-ref_im[i]).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn dirichlet_expressions_enforce_field_dimensions() {
+        let component = |expression: &str| model_expression::CompiledComplexQuantity::compile(
+            &json!({"expression":expression,"unit":"V/m"}), "Dirichlet component").unwrap();
+        let symbols = HashMap::from([
+            ("s".to_string(), model_expression::Scalar { value: 2.0, dimension: model_expression::unit("V/m^2").unwrap().1 }),
+            ("y".to_string(), model_expression::Scalar { value: 3.0, dimension: model_expression::unit("m").unwrap().1 }),
+        ]);
+        let valid = PrescribedValue::Vector(vec![component("s*y"), component("0"), component("0")]);
+        let field = evaluate_prescribed_field(&valid, &symbols, "Dirichlet").unwrap();
+        assert_complex_close(field[2], C { re: 6.0, im: 0.0 }, 1e-12);
+        let invalid = PrescribedValue::Vector(vec![component("s*y*y"), component("0"), component("0")]);
+        assert!(evaluate_prescribed_field(&invalid, &symbols, "Dirichlet").unwrap_err().contains("dimension"));
+    }
+
+    #[test]
+    fn face_moments_select_all_and_only_tangential_basis_traces() {
+        let mesh = floquet_cube_mesh();
+        let tet = mesh.tets[0];
+        let geo = geometry(points_for(tet, &mesh.nodes)).unwrap();
+        let grads = grad_lambda(geo);
+        for order in [1, 2] {
+            let candidates = if order == 2 { quadratic_candidates() } else { Vec::new() };
+            let inverse = if order == 2 {
+                Some(second_interpolation(geo, tet, &mesh.nodes, &candidates).unwrap())
+            } else {
+                None
+            };
+            for local_face in FACES {
+                let face = local_face.map(|vertex| tet[vertex]);
+                let indices = face_tangential_moment_indices(tet, face, order).unwrap();
+                assert_eq!(indices.len(), if order == 1 { 3 } else { 8 });
+                let points = face.map(|vertex| mesh.nodes[vertex]);
+                let tangent_a = sub(points[1], points[0]);
+                let tangent_b = sub(points[2], points[0]);
+                for q in TRI_Q {
+                    let point = add(add(scale(points[0], q[0]), scale(points[1], q[1])), scale(points[2], q[2]));
+                    let basis = bases_at(order, geo, grads, tet, &mesh.nodes, inverse.as_ref(), &candidates, point);
+                    for (i, function) in basis.iter().enumerate() {
+                        if !indices.contains(&i) {
+                            assert!(dot(function.value, tangent_a).abs() < 1e-9);
+                            assert!(dot(function.value, tangent_b).abs() < 1e-9);
+                        }
+                    }
+                }
+            }
+        }
+        assert!(face_tangential_moment_indices(tet, [tet[0], tet[0], tet[1]], 1).is_err());
+    }
+
+    #[test]
+    fn prescribed_cartesian_field_reconstructs_oriented_face_traces() {
+        let mesh = floquet_cube_mesh();
+        let tet = mesh.tets[0];
+        let geo = geometry(points_for(tet, &mesh.nodes)).unwrap();
+        let grad = grad_lambda(geo);
+        for order in [1, 2] {
+            let candidates = if order == 2 { quadratic_candidates() } else { Vec::new() };
+            let inverse = if order == 2 { Some(second_interpolation(geo, tet, &mesh.nodes, &candidates).unwrap()) } else { None };
+            for local_face in FACES {
+                let face = local_face.map(|vertex| tet[vertex]);
+                let points = face.map(|node| mesh.nodes[node]);
+                let field = |point: V3| -> Result<[C; 3], String> {
+                    let linear = if order == 2 { point[0] } else { 0.0 };
+                    Ok([C { re: 2.0 + linear, im: 1.0 }, C { re: -1.0, im: 0.5 * linear }, C { re: 0.4, im: -0.3 }])
+                };
+                let moments = face_tangential_moments(tet, face, &mesh.nodes, order, field).unwrap();
+                let tangents = [sub(points[1], points[0]), sub(points[2], points[0])];
+                for q in TRI_Q {
+                    let point = add(add(scale(points[0], q[0]), scale(points[1], q[1])), scale(points[2], q[2]));
+                    let basis = bases_at(order, geo, grad, tet, &mesh.nodes, inverse.as_ref(), &candidates, point);
+                    let expected = field(point).unwrap();
+                    for tangent in tangents {
+                        let actual = moments.iter().fold(C::default(), |sum, (i, value)| c_add(sum, c_scale(*value, dot(basis[*i].value, tangent))));
+                        let target = (0..3).fold(C::default(), |sum, axis| c_add(sum, c_scale(expected[axis], tangent[axis])));
+                        assert_complex_close(actual, target, 1e-8);
+                    }
+                }
+            }
+        }
+
+    }
+
+    #[test]
+    fn electric_dirichlet_assembly_enforces_cartesian_field_on_tetrahedron() {
+        let tet = [0, 1, 2, 3];
+        let mesh = Mesh {
+            nodes: vec![[0.,0.,0.], [1.,0.,0.], [0.,1.,0.], [0.,0.,1.]],
+            tets: vec![tet], entities: vec![1], geometry: [1.;3], origin: [0.;3],
+            boundary: FACES.into_iter().enumerate().map(|(index, face)| Face {
+                nodes: face.map(|vertex| tet[vertex]), element: 0, other_element: None, tag: index + 1,
+            }).collect(),
+            integration_faces: HashMap::new(), integration_edges: HashMap::new(), integration_tets: HashMap::new(),
+        };
+        let components = ["1+i", "-2+0.5*i", "3-i"].map(|expression| {
+            model_expression::CompiledComplexQuantity::compile(&json!({"expression":expression,"unit":"V/m"}), "test boundary").unwrap()
+        });
+        let config = SolveConfig {
+            periodic_pairs: vec![], impedance_boundaries: vec![],
+            prescribed_boundaries: (1..=4).map(|tag| PrescribedBoundary {
+                id: format!("boundary{tag}"), tag, dirichlet: true,
+                value: PrescribedValue::Vector(components.to_vec()), legacy_scalar: None,
+            }).collect(),
+            global_parameter_cases: vec![HashMap::new()], global_parameter_dimensions: vec![HashMap::new()],
+            material_assignments: vec![json!({"physicalTag":1,"material":{"id":"material1","relativePermittivity":"1","relativePermeability":"1","conductivity":{"expression":"0","unit":"S/m"}}})],
+            scenario_profile_id: "em-3d".into(), variables: vec![], pointwise_variables: vec![], integration_operators: vec![], field_files: true,
+            field_variables: crate::model_schema::field_variables_for_profile("em-3d", Some("electric"), false).unwrap(), field_dimension: 3,
+        };
+        let materials = (0..mesh.tets.len()).map(|i| (i, MaterialProperties { relative_permittivity: 1.0, relative_permeability: 1.0, conductivity_s_per_m: 0.0 })).collect();
+        for order in [1, 2] {
+            let result = solve_case(&mesh, 1e8, 0, order, "electric", &materials, &config, "faer", "default", 1, &mut SolverCache::default()).unwrap();
+            for (symbol, expected_re, expected_im) in [("Ex", 1.0, 1.0), ("Ey", -2.0, 0.5), ("Ez", 3.0, -1.0)] {
+                for (part, expected) in [("real", expected_re), ("imag", expected_im)] {
+                    let values = result.output["fields"][symbol][part].as_array().unwrap();
+                    for value in values {
+                        assert!((value.as_f64().unwrap() - expected).abs() < 1e-7, "{symbol} {part} order {order}: {value}");
+                    }
+                }
+            }
+        }
+        let zero_e = model_expression::CompiledComplexQuantity::compile(&json!({"expression":"0","unit":"V/m"}), "zero E").unwrap();
+        let zero_g = model_expression::CompiledComplexQuantity::compile(&json!({"expression":"0","unit":"V/m^2"}), "zero curl").unwrap();
+        let loaded_g = ["1", "0", "0"].map(|expression| model_expression::CompiledComplexQuantity::compile(&json!({"expression":expression,"unit":"A/m"}), "magnetic field").unwrap());
+        for order in [1, 2] {
+            let mut trial = config.clone();
+            trial.prescribed_boundaries = vec![PrescribedBoundary { id: "fixed".into(), tag: 1, dirichlet: true, value: PrescribedValue::Scalar(zero_e.clone()), legacy_scalar: None }];
+            let baseline = solve_case(&mesh, 1e8, 0, order, "electric", &materials, &trial, "faer", "default", 1, &mut SolverCache::default()).unwrap();
+            trial.prescribed_boundaries.push(PrescribedBoundary { id: "flux".into(), tag: 2, dirichlet: false, value: PrescribedValue::Scalar(zero_g.clone()), legacy_scalar: None });
+            let zero = solve_case(&mesh, 1e8, 0, order, "electric", &materials, &trial, "faer", "default", 1, &mut SolverCache::default()).unwrap();
+            assert_eq!(baseline.output["fields"], zero.output["fields"]);
+            trial.prescribed_boundaries[1].value = PrescribedValue::Vector(loaded_g.to_vec());
+            let loaded = solve_case(&mesh, 1e8, 0, order, "electric", &materials, &trial, "faer", "default", 1, &mut SolverCache::default()).unwrap();
+            let maximum = ["Ex", "Ey", "Ez"].iter().flat_map(|name| ["real", "imag"].iter().flat_map(|part| loaded.output["fields"][*name][*part].as_array().unwrap())).map(|x| x.as_f64().unwrap().abs()).fold(0.0_f64, f64::max);
+            assert!(maximum > 1e-8, "nonzero Neumann load had no effect at order {order}");
+        }
+        for order in [1, 2] {
+            let mut conflicting = config.clone();
+            conflicting.prescribed_boundaries.truncate(2);
+            conflicting.prescribed_boundaries[0].value = PrescribedValue::Scalar(zero_e.clone());
+            let error = match solve_case(&mesh, 1e8, 0, order, "electric", &materials, &conflicting, "faer", "default", 1, &mut SolverCache::default()) {
+                Ok(_) => panic!("conflicting shared edge values must be rejected"),
+                Err(error) => error,
+            };
+            assert!(error.contains("Conflicting EM3D Dirichlet values"), "{error}");
+        }
+        // Manufactured exact solution in model axes: E=(-s*y,s*x,0),
+        // curl(E)=(0,0,2s) and H=(0,0,2i*s/(omega*mu)). Face 1 has
+        // outward normal -x_model. The other faces prescribe E.
+        let electric = ["-s*y", "s*x", "0"].map(|expression| model_expression::CompiledComplexQuantity::compile(&json!({"expression":expression,"unit":"V/m"}), "exact E").unwrap());
+        let magnetic = ["0", "0", "i*h"].map(|expression| model_expression::CompiledComplexQuantity::compile(&json!({"expression":expression,"unit":"A/m"}), "exact H").unwrap());
+        let mut exact = config.clone();
+        exact.global_parameter_cases[0].insert("s".into(), 1.0);
+        exact.global_parameter_dimensions[0].insert("s".into(), model_expression::unit("V/m^2").unwrap().1);
+        exact.global_parameter_cases[0].insert("h".into(), 2.0 / (std::f64::consts::TAU * 1e8 * MU0));
+        exact.global_parameter_dimensions[0].insert("h".into(), model_expression::unit("A/m").unwrap().1);
+        exact.material_assignments[0]["material"]["relativePermittivity"] = json!("0");
+        exact.prescribed_boundaries = vec![PrescribedBoundary { id: "flux".into(), tag: 1, dirichlet: false, value: PrescribedValue::Vector(magnetic.to_vec()), legacy_scalar: None }];
+        exact.prescribed_boundaries.extend((2..=4).map(|tag| PrescribedBoundary { id: format!("exact{tag}"), tag, dirichlet: true, value: PrescribedValue::Vector(electric.to_vec()), legacy_scalar: None }));
+        let zero_epsilon = (0..mesh.tets.len()).map(|i| (i, MaterialProperties { relative_permittivity: 0.0, relative_permeability: 1.0, conductivity_s_per_m: 0.0 })).collect();
+        for order in [1, 2] {
+            let result = solve_case(&mesh, 1e8, 0, order, "electric", &zero_epsilon, &exact, "faer", "default", 1, &mut SolverCache::default()).unwrap();
+            for (node, point) in mesh.nodes.iter().enumerate() {
+                for (symbol, expected) in [("Ex", -point[0]), ("Ey", point[2]), ("Ez", 0.0)] {
+                    let value = result.output["fields"][symbol]["real"][node].as_f64().unwrap();
+                    assert!((value-expected).abs() < 1e-7, "manufactured {symbol} node {node} order {order}: {value} != {expected}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn em3d_cartesian_boundary_schema_preserves_scalar_profiles() {
+        let root = crate::model_schema::root().unwrap();
+        let branch = |profile: &str, kind: &str| -> Value {
+            root.pointer(&format!("/$defs/femProfiles/{profile}/then/properties/model/properties/physics/additionalProperties/oneOf"))
+                .and_then(Value::as_array).unwrap().iter()
+                .find(|b| b.pointer("/properties/type/const").and_then(Value::as_str) == Some(kind)).unwrap().clone()
+        };
+        for (kind, unit) in [("dirichlet", "V/m"), ("neumann", "V/m^2")] {
+            let scalar = json!({"id":"b","name":"boundary","type":kind,"selectionId":"wall","value":{"expression":"0","unit":unit}});
+            let mut vector = scalar.clone();
+            vector["fieldValues"] = json!([{ "expression":"1", "unit":unit }, { "expression":"0", "unit":unit }, { "expression":"0", "unit":unit }]);
+            let em = branch("em-3d", kind);
+            assert!(crate::model_schema::validate_with_root(&scalar, &em, root).is_empty());
+            assert!(crate::model_schema::validate_with_root(&vector, &em, root).is_empty());
+            let acoustic = branch("acoustic-2d", kind);
+            assert!(!crate::model_schema::validate_with_root(&vector, &acoustic, root).is_empty());
+            vector["fieldValues"] = json!([{ "expression":"1", "unit":unit }]);
+            assert!(!crate::model_schema::validate_with_root(&vector, &em, root).is_empty());
+        }
     }
 
     #[test]

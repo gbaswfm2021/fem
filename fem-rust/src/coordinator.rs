@@ -32,6 +32,32 @@ fn maximum_sweep_points() -> Result<usize> {
         })
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum StudyRoute {
+    Stationary,
+    FrequencyPlan,
+    ConfiguredFrequency,
+}
+
+fn study_route(study_type: &str, preparation: &str) -> Result<StudyRoute> {
+    match (study_type, preparation) {
+        ("stationary", "stationaryPlan") => Ok(StudyRoute::Stationary),
+        ("frequencyDomain", "frequencyPlan") => Ok(StudyRoute::FrequencyPlan),
+        ("frequencyDomain", "configuredFrequencyRequest") => Ok(StudyRoute::ConfiguredFrequency),
+        _ => Err(format!("No execution route supports Study type {study_type:?} with preparation contract {preparation:?}.").into()),
+    }
+}
+
+fn study_route_for_profile(profile_id: &str, study_type: &str) -> Result<StudyRoute> {
+    let capabilities = crate::json_schema::engine_capabilities()?;
+    let preparation = capabilities.pointer("/study/preparationByProfile")
+        .and_then(|profiles| profiles.get(profile_id))
+        .and_then(|entry| entry.get("kind"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| Failure(format!("Scenario {profile_id:?} must declare a Study preparation contract.")))?;
+    study_route(study_type, preparation)
+}
+
 fn mesh_resource_limits(profile_id: &str) -> Result<(Option<u64>, Option<u64>)> {
     let capabilities = crate::json_schema::engine_capabilities()?;
     let Some(profiles) = capabilities.pointer("/study/solverResourceLimitsByProfile") else {
@@ -668,11 +694,6 @@ fn run_request(input: ProjectInput, sink: &EventSink, cli: bool) -> Result<()> {
             "Study type {study_type:?} is not supported by scenario {profile_id:?} (declared {declared_study_type:?})."
         ).into());
     }
-    if study_type == "stationary"
-        && scenario.get("supportsStationary").and_then(Value::as_bool) != Some(true)
-    {
-        return Err(format!("Scenario {profile_id:?} does not support stationary studies.").into());
-    }
     let component_id = "model";
 
     let mesh_name = crate::json_schema::external_program_executable("mesh")?;
@@ -684,7 +705,8 @@ fn run_request(input: ProjectInput, sink: &EventSink, cli: bool) -> Result<()> {
                 error.0
             ))
         })?;
-    if study_type == "stationary" {
+    let route = study_route_for_profile(profile_id, study_type)?;
+    if route == StudyRoute::Stationary {
         return run_stationary_study(
             &root,
             &model_folder,
@@ -702,8 +724,8 @@ fn run_request(input: ProjectInput, sink: &EventSink, cli: bool) -> Result<()> {
             sink,
         );
     }
-    if study_type == "frequencyDomain" && profile_id != "em-3d" {
-        return run_model2(
+    if route == StudyRoute::FrequencyPlan {
+        return run_frequency_plan_study(
             &root,
             &model_folder,
             &project,
@@ -721,15 +743,7 @@ fn run_request(input: ProjectInput, sink: &EventSink, cli: bool) -> Result<()> {
             cli,
         );
     }
-    // Retain the existing configured frequency request path for the 3D EM
-    // backend until that request shape is normalized into the common sweep path.
-    if study_type != "frequencyDomain" || profile_id != "em-3d" {
-        return Err(format!(
-            "No shared execution route is registered for Study type {study_type:?}."
-        )
-        .into());
-    }
-    run_model_em3d(
+    run_configured_frequency_study(
         &root,
         &model_folder,
         &project,
@@ -739,6 +753,7 @@ fn run_request(input: ProjectInput, sink: &EventSink, cli: bool) -> Result<()> {
         input.model_hash.as_deref(),
         &study_id,
         component_id,
+        profile_id,
         &normalized,
         &mesh_exe,
         sink,
@@ -1132,7 +1147,7 @@ fn model_for_sweep_case(model: &Value, study_id: &str, case: &Value) -> Result<V
     Ok(case_model)
 }
 
-fn run_model2(
+fn run_frequency_plan_study(
     root: &Path,
     model_folder: &str,
     project: &Path,
@@ -1149,24 +1164,16 @@ fn run_model2(
     sink: &EventSink,
     cli: bool,
 ) -> Result<()> {
-    let (dimension, element_family, cell_key, boundary_key, field_prefix) = match profile_id {
-        "acoustic-2d" => (
-            2usize,
-            "triangle",
-            "triangles",
-            "boundaryEdges",
-            "pressure_",
-        ),
-        "acoustic-3d" => (
-            3usize,
-            "tetrahedron",
-            "tetrahedra",
-            "boundaryTriangles",
-            "pressure_",
-        ),
-        "em-2d" => (2usize, "triangle", "triangles", "boundaryEdges", "emfield_"),
-        _ => return Err(format!("Unsupported Model 2 solver profile {profile_id:?}.").into()),
+    // Frequency-plan scenarios declare their geometry and result filenames.
+    let scenario = crate::model_schema::scenario_metadata_for_profile(profile_id)?;
+    let (dimension, element_family, cell_key, boundary_key) = match scenario.pointer("/profile/dimension").and_then(Value::as_u64) {
+        Some(2) => (2usize, "triangle", "triangles", "boundaryEdges"),
+        Some(3) => (3usize, "tetrahedron", "tetrahedra", "boundaryTriangles"),
+        _ => return Err(format!("Scenario {profile_id:?} must declare a supported mesh dimension.").into()),
     };
+    let field_prefix = scenario.pointer("/resultDefaults/frequencyFieldPrefix").and_then(Value::as_str)
+        .filter(|prefix| !prefix.is_empty() && prefix.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-'))
+        .ok_or_else(|| Failure(format!("Scenario {profile_id:?} must declare a safe resultDefaults.frequencyFieldPrefix.")))?;
     if study.get("type").and_then(Value::as_str) != Some("frequencyDomain") {
         return Err(
             format!("The {profile_id} runner executes frequency-domain studies only.").into(),
@@ -1343,7 +1350,7 @@ fn run_model2(
         .first()
         .ok_or("The prepared Study has no cases")?;
     let mesh_name = run_relative_reference(&run_dir, &primary_case.paths.mesh)?;
-    let geo_stem = primary_case
+    let _geo_stem = primary_case
         .paths
         .source
         .file_stem()
@@ -1396,7 +1403,7 @@ fn run_model2(
 
     let mut completed = 0usize;
     let execute = (|| -> Result<()> {
-        sink.emit(json!({"type":"progress","state":"running","message":format!("Model validated; preparing {dimension}D {} geometry and mesh…", if profile_id.starts_with("acoustic-") { "acoustic" } else { "electromagnetic" }),"totalPoints":total_points,"completedPoints":0,"runId":run_id}));
+        sink.emit(json!({"type":"progress","state":"running","message":format!("Model validated; preparing {dimension}D geometry and mesh for {profile_id}…"),"totalPoints":total_points,"completedPoints":0,"runId":run_id}));
         let resource_limits = mesh_resource_limits(profile_id)?;
         for (index, case_mesh) in case_meshes.iter().enumerate() {
             let node_count = case_mesh
@@ -1428,7 +1435,7 @@ fn run_model2(
         }
         record["geometry"]["files"] = describe_artifacts(&primary_case.paths, &run_dir)?;
         write_json_replace(&run_path, &record)?;
-        sink.emit(json!({"type":"progress","state":"running","message":format!("{dimension}D {} solver is starting…", if profile_id.starts_with("acoustic-") { "acoustic pressure" } else { "electromagnetic scalar field" }),"totalPoints":total_points,"completedPoints":0,"runId":run_id}));
+        sink.emit(json!({"type":"progress","state":"running","message":format!("{dimension}D {profile_id} solver is starting…"),"totalPoints":total_points,"completedPoints":0,"runId":run_id}));
         let solver_runtime = solver_runtime(root, profile_id, solver_backend)?;
         let stdout_path = logs_dir.join("solver.stdout.log");
         let stderr_path = logs_dir.join("solver.stderr.log");
@@ -1532,7 +1539,7 @@ fn run_model2(
     Ok(())
 }
 
-fn run_model_em3d(
+fn run_configured_frequency_study(
     root: &Path,
     model_folder: &str,
     project: &Path,
@@ -1542,11 +1549,21 @@ fn run_model_em3d(
     supplied_model_hash: Option<&str>,
     study_id: &str,
     component_id: &str,
+    profile_id: &str,
     normalized: &Value,
     mesh_exe: &Path,
     sink: &EventSink,
     cli: bool,
 ) -> Result<()> {
+    let scenario = crate::model_schema::scenario_metadata_for_profile(profile_id)?;
+    let solver_module = scenario.get("solverModule").and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| Failure(format!("Scenario {profile_id:?} must declare its solver module.")))?;
+    let cell_key = match scenario.pointer("/profile/dimension").and_then(Value::as_u64) {
+        Some(2) => "triangles",
+        Some(3) => "tetrahedra",
+        _ => return Err(format!("Scenario {profile_id:?} must declare a supported mesh dimension.").into()),
+    };
     let base_request = normalized
         .get("request")
         .cloned()
@@ -1554,12 +1571,12 @@ fn run_model_em3d(
     let solver_backend = base_request
         .get("solverBackend")
         .and_then(Value::as_str)
-        .ok_or("Prepared EM3D request omits its solver backend.")?
+        .ok_or("Prepared configured request omits its solver backend.")?
         .to_owned();
     let base_cases = base_request
         .get("frequencyCases")
         .and_then(Value::as_array)
-        .ok_or("Prepared EM3D request has no frequencyCases")?;
+        .ok_or("Prepared configured request has no frequencyCases")?;
     let total_points = base_cases.len();
     let announced_run_id = run_artifacts::coordinated_run_id();
     if let Some(id) = &announced_run_id {
@@ -1574,7 +1591,7 @@ fn run_model_em3d(
     let maximum_points = maximum_sweep_points()?;
     if total_points == 0 || total_points > maximum_points {
         return Err(format!(
-            "The EM3D Study must contain between 1 and {maximum_points} sweep cases."
+            "The Study must contain between 1 and {maximum_points} sweep cases."
         )
         .into());
     }
@@ -1583,7 +1600,7 @@ fn run_model_em3d(
         .and_then(Value::as_array)
         .ok_or("Shared Study preparation did not return caseModelConfigurations")?;
     if case_model_configurations.len() != total_points {
-        return Err("Prepared EM3D configurations and sweep cases have different lengths.".into());
+        return Err("Prepared configurations and sweep cases have different lengths.".into());
     }
     let study_snapshot = normalized
         .get("study")
@@ -1619,13 +1636,12 @@ fn run_model_em3d(
         .and_then(Value::as_str)
         .ok_or("Prepared Study is missing debugCsv")?
         .to_string();
-    let cases_ghz = base_cases
+    let cases_hz = base_cases
         .iter()
         .map(|case| {
             case.get("frequencyHz")
                 .and_then(Value::as_f64)
-                .map(|value| value / 1e9)
-                .ok_or_else(|| Failure("Prepared EM3D case is missing frequencyHz".into()))
+                .ok_or_else(|| Failure("Prepared case is missing frequencyHz".into()))
         })
         .collect::<Result<Vec<_>>>()?;
     let case_models = base_cases
@@ -1668,7 +1684,7 @@ fn run_model_em3d(
     )?;
     let primary_case = case_meshes
         .first()
-        .ok_or("The prepared EM3D Study has no cases")?;
+        .ok_or("The prepared Study has no cases")?;
     let primary_mesh = run_relative_reference(&run_dir, &primary_case.paths.mesh)?;
     let primary_map = run_relative_reference(&run_dir, &primary_case.paths.map)?;
     let mut frequency_cases = Vec::with_capacity(total_points);
@@ -1706,22 +1722,24 @@ fn run_model_em3d(
         .and_then(Value::as_str)
         .unwrap_or("");
     let geometry_case_records = case_meshes.iter().enumerate().map(|(index, case_mesh)| -> Result<Value> {
-        Ok(json!({"caseIndex":index,"geometryHash":case_mesh.compiled.geometry_hash,"mesh":run_relative_reference(&run_dir,&case_mesh.paths.mesh)?,"map":run_relative_reference(&run_dir,&case_mesh.paths.map)?,"reused":case_mesh.reused,"meshSummary":{"nodes":case_mesh.report.get("nodes"),"tetrahedra":case_mesh.report.get("tetrahedra")}}))
+        let mut summary = json!({"nodes":case_mesh.report.get("nodes")});
+        summary[cell_key] = case_mesh.report.get(cell_key).cloned().unwrap_or(Value::Null);
+        Ok(json!({"caseIndex":index,"geometryHash":case_mesh.compiled.geometry_hash,"mesh":run_relative_reference(&run_dir,&case_mesh.paths.mesh)?,"map":run_relative_reference(&run_dir,&case_mesh.paths.map)?,"reused":case_mesh.reused,"meshSummary":summary}))
     }).collect::<Result<Vec<_>>>()?;
     let mut record = json!({
         "schema":"fullmeta-run/1","kind":"study","runId":run_id,"state":"running","startedAt":timestamp(),"completedAt":null,
         "model":{"file":relative_model_path(model_folder, model_filename),"id":model_id,"modelFormat":model.get("modelFormat").and_then(Value::as_str).unwrap_or(MODEL_FORMAT_V2),"sha256":model_hash,"snapshot":model},
         "study":{"id":study_id,"name":study_snapshot.get("name").and_then(Value::as_str).unwrap_or("Study"),"snapshot":study_snapshot},
-        "solver":{"executable":"em3d","formulation":formulation,"requestFile":"request.json","fieldFilePrefix":field_prefix,"fieldFiles":field_files,
+        "solver":{"executable":solver_module,"formulation":formulation,"requestFile":"request.json","fieldFilePrefix":field_prefix,"fieldFiles":field_files,
             "backend":solver_backend,"ordering":request["solverOrdering"],"threads":request["solverThreads"],
             "elementOrder":request["elementOrder"],"constitutiveQuadrature":request["constitutiveQuadrature"]},
         "geometry":{"geometryHash":primary_case.compiled.geometry_hash,"source":run_relative_reference(&run_dir,&primary_case.paths.source)?,"msh":run_relative_reference(&run_dir,&primary_case.paths.msh)?,"mesh":run_relative_reference(&run_dir,&primary_case.paths.mesh)?,"report":run_relative_reference(&run_dir,&primary_case.paths.report)?,"map":run_relative_reference(&run_dir,&primary_case.paths.map)?,"cache":run_relative_reference(&run_dir,&primary_case.paths.cache)?,"files":null,"cases":geometry_case_records},
         "artifacts":{"csv":format!("output/{sweep_csv}"),"debugCsv":format!("output/{debug_csv}"),"stdout":"logs/solver.stdout.log","stderr":"logs/solver.stderr.log","meshLog":run_relative_reference(&run_dir, &primary_case.paths.gmsh_log)?},
-        "progress":{"totalPoints":total_points,"completedPoints":0,"currentFrequencyGHz":null},"error":null
+        "progress":{"totalPoints":total_points,"completedPoints":0,"currentFrequencyHz":null},"error":null
     });
     if field_files {
         record["artifacts"]["fields"] =
-            json!("output/<field-prefix>_<frequency-GHz-to-12-decimals>GHz.json");
+            json!("output/<field-prefix>_<frequency-Hz-to-6-decimals>Hz.json");
     }
     if run_artifacts::adopt_server_record(&run_path, &mut record)? {
         write_json_replace(&run_path, &record)?;
@@ -1732,7 +1750,7 @@ fn run_model_em3d(
     let mut completed = 0usize;
     let execute = (|| -> Result<()> {
         sink.emit(json!({"type":"progress","state":"running","message":"Model validated; preparing geometry and mesh…","totalPoints":total_points,"completedPoints":0,"runId":run_id}));
-        let resource_limits = mesh_resource_limits("em-3d")?;
+        let resource_limits = mesh_resource_limits(profile_id)?;
         for (index, case_mesh) in case_meshes.iter().enumerate() {
             let nodes = case_mesh
                 .report
@@ -1741,18 +1759,20 @@ fn run_model_em3d(
                 .unwrap_or(0);
             let cells = case_mesh
                 .report
-                .get("tetrahedra")
+                .get(cell_key)
                 .and_then(Value::as_u64)
                 .unwrap_or(0);
-            check_mesh_resources("em-3d", resource_limits, nodes, cells, "tetrahedra", index)?;
-            sink.emit(json!({"type":"mesh","state":"success","message":if case_mesh.reused {format!("Sweep case {} mesh ready (reused)",index+1)} else {format!("Sweep case {} mesh generated",index+1)},"runId":run_id,"mesh":{"nodes":nodes,"tetrahedra":cells,"caseIndex":index,"geometryHash":case_mesh.compiled.geometry_hash,"reused":case_mesh.reused,"materialDiagnostics":case_mesh.report.get("materialDiagnostics").cloned().unwrap_or_else(||json!([]))}}));
+            check_mesh_resources(profile_id, resource_limits, nodes, cells, cell_key, index)?;
+            let mut mesh_summary = json!({"nodes":nodes,"caseIndex":index,"geometryHash":case_mesh.compiled.geometry_hash,"reused":case_mesh.reused,"materialDiagnostics":case_mesh.report.get("materialDiagnostics").cloned().unwrap_or_else(||json!([]))});
+            mesh_summary[cell_key] = json!(cells);
+            sink.emit(json!({"type":"mesh","state":"success","message":if case_mesh.reused {format!("Sweep case {} mesh ready (reused)",index+1)} else {format!("Sweep case {} mesh generated",index+1)},"runId":run_id,"mesh":mesh_summary}));
         }
         record["geometry"]["files"] = describe_artifacts(&primary_case.paths, &run_dir)?;
         write_json_replace(&run_path, &record)?;
         sink.emit(json!({"type":"progress","state":"running","message":"Rust solver is starting…","totalPoints":total_points,"completedPoints":0,"runId":run_id}));
         let stdout_log = logs_dir.join("solver.stdout.log");
         let stderr_log = logs_dir.join("solver.stderr.log");
-        let solver_runtime = solver_runtime(root, "em-3d", &solver_backend)?;
+        let solver_runtime = solver_runtime(root, profile_id, &solver_backend)?;
         let solver = run_solver(
             solver_runtime,
             &request_path,
@@ -1775,14 +1795,14 @@ fn run_model_em3d(
             "totalPoints":total_points,"completedPoints":completed,"runId":run_id}));
         let mut field_artifacts = Vec::new();
         if field_files {
-            for (index, frequency_ghz) in cases_ghz.iter().copied().enumerate() {
+            for (index, frequency_hz) in cases_hz.iter().copied().enumerate() {
                 let case_directory = case_work_root.join(format!("case-{:04}", index + 1));
                 field_artifacts.extend(run_artifacts::collect_case_field_files(
                     &case_directory,
                     &output_dir,
                     index,
-                    &json!({"frequencyHz":frequency_ghz * 1e9}),
-                    |name| name.starts_with(field_prefix.as_str()) && name.ends_with("GHz.json"),
+                    &json!({"frequencyHz":frequency_hz}),
+                    |name| name.starts_with(field_prefix.as_str()) && name.ends_with("Hz.json"),
                 )?);
             }
         }
@@ -1816,7 +1836,7 @@ fn run_model_em3d(
         record["state"] = json!("completed");
         record["completedAt"] = json!(timestamp());
         record["progress"]["completedPoints"] = json!(total_points);
-        record["progress"]["currentFrequencyGHz"] = Value::Null;
+        record["progress"]["currentFrequencyHz"] = Value::Null;
         record["artifacts"]["csvBytes"] = json!(csv_meta.len());
         record["artifacts"]["debugCsvBytes"] = json!(debug_meta.len());
         record["artifacts"]["fieldFileCount"] = json!(output_fields.len());
@@ -1840,7 +1860,7 @@ fn run_model_em3d(
                     .map(|name| format!("{run_relative}/output/{name}")),
             )
             .collect::<Vec<_>>();
-        sink.emit(json!({"type":"complete","state":"success","message":format!("Completed {total_points} of {total_points} frequencies"),"totalPoints":total_points,"completedPoints":total_points,"runId":run_id,"runDirectory":run_relative,"csv":format!("output/{sweep_csv}"),"debugCsv":format!("output/{debug_csv}"),"fields":output_fields,"outputFiles":output_files,"frequenciesGHz":cases_ghz}));
+        sink.emit(json!({"type":"complete","state":"success","message":format!("Completed {total_points} of {total_points} frequencies"),"totalPoints":total_points,"completedPoints":total_points,"runId":run_id,"runDirectory":run_relative,"csv":format!("output/{sweep_csv}"),"debugCsv":format!("output/{debug_csv}"),"fields":output_fields,"outputFiles":output_files,"frequenciesHz":cases_hz}));
         Ok(())
     })();
     if let Err(error) = execute {
@@ -1848,7 +1868,7 @@ fn run_model_em3d(
         record["completedAt"] = json!(timestamp());
         record["error"] = json!(error.0);
         record["progress"]["completedPoints"] = json!(completed);
-        record["progress"]["currentFrequencyGHz"] = Value::Null;
+        record["progress"]["currentFrequencyHz"] = Value::Null;
         let _ = write_json_replace(&run_path, &record);
         if cli {
             return Err(error);
@@ -2993,7 +3013,6 @@ fn report_solver_line(
     let message = match progress.get("event").and_then(Value::as_str) {
         Some("case-start") => {
             record["progress"]["currentFrequencyHz"] = json!(frequency_hz);
-            record["progress"]["currentFrequencyGHz"] = json!(frequency_hz / 1e9);
             format!(
                 "Solving case {} of {total}: {frequency_hz} Hz",
                 case_index + 1
@@ -3004,7 +3023,6 @@ fn report_solver_line(
             *completed += 1;
             record["progress"]["completedPoints"] = json!(*completed);
             record["progress"]["currentFrequencyHz"] = Value::Null;
-            record["progress"]["currentFrequencyGHz"] = Value::Null;
             format!("Completed {} of {total} cases", *completed)
         }
         _ => return Err("Solver progress event has an unknown event type.".into()),
@@ -3122,6 +3140,21 @@ fn make_run_id(study: &str) -> String {
         format!("{}-{}-{}", now.as_nanos(), std::process::id(), study).as_bytes(),
     );
     format!("{stamp}-{}-{study}", &nonce[..12])
+}
+
+#[cfg(test)]
+mod study_route_tests {
+    use super::*;
+
+    #[test]
+    fn routes_by_study_and_declared_preparation() {
+        assert_eq!(study_route("stationary", "stationaryPlan").unwrap(), StudyRoute::Stationary);
+        assert_eq!(study_route("frequencyDomain", "frequencyPlan").unwrap(), StudyRoute::FrequencyPlan);
+        assert_eq!(study_route("frequencyDomain", "configuredFrequencyRequest").unwrap(), StudyRoute::ConfiguredFrequency);
+        assert!(study_route("stationary", "frequencyPlan").is_err());
+        assert!(study_route("frequencyDomain", "stationaryPlan").is_err());
+        assert!(study_route("frequencyDomain", "unknown").is_err());
+    }
 }
 
 #[cfg(test)]

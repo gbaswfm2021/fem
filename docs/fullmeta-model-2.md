@@ -154,6 +154,16 @@ Each material requires `id`, `name`, and `selectionId`. `selectionId` refers to 
 
 Each additional Physics member is a condition object keyed by its own `id`. It requires `id`, `name`, `type`, and the fields below. Optional `enabled` is a boolean with effective default `true`. Disable a condition by saving `false`. Conditions are named object members, so their stable keys remain separate from the user-editable `name`.
 
+The shared boundary schema permits an optional flat `fieldValues` array of quantity expressions for scenarios that declare a field layout. The scenario declares whether the field is primary or derived, its shape, and the component labels; multidimensional layouts use row-major component order. Only declared scenario layouts enable the property. A future tensor layout is a format capability, not a claim that a tensor solver is implemented.
+
+For EM3D `electric`, Dirichlet and Neumann conditions keep the shared scalar `value` as zero and may also contain `fieldValues`, exactly three x/y/z quantity expressions. Dirichlet components describe E in `V/m`; Neumann components describe H in `A/m`. The legacy scalar Neumann zero retains its `V/m^2` unit. With no `fieldValues`, scalar zero means the zero vector. Nonzero scalar values have no direction and are rejected by the solver. See [EM3D boundary equations](../fem-rust/docs/notes_em3d.md) for projection and signs.
+
+For EM2D, Dirichlet `value` is the scalar primary field. Neumann may supply `fieldValues` with two x/y components: H in `A/m` for `Ez`, or E in `V/m` for `Hz`. With `fieldValues`, the accompanying scalar `value` must be zero. Without it, the scalar remains the previously supported normalized conormal, including nonzero expressions. See [EM2D boundary equations](../fem-rust/docs/notes_em2d.md).
+
+For acoustic2D and acoustic3D, Dirichlet `value` is pressure in `Pa`. Neumann may supply `fieldValues` with velocity components `(vx, vy)` or `(vx, vy, vz)`, respectively, in `m/s`, with scalar `value` zero. Without the array, `value` retains its existing meaning as outward normal velocity, including nonzero expressions. See the [acoustic2D](../fem-rust/docs/notes_acoustic2d.md) and [acoustic3D](../fem-rust/docs/notes_acoustic3d.md) boundary equations.
+
+For thermal2D, Dirichlet `value` is temperature in `K`. Neumann may supply two heat-flux components `(qx, qy)` in `W/m^2`, with scalar `value` zero. Without the array, the scalar continues to prescribe outward normal heat flux, including nonzero values. Thermal boundary expressions are real and parameter-based, constant on each selected boundary. See [thermal2D boundary equations](../fem-rust/docs/notes_thermal2d.md).
+
 | `type` | Required additional fields | Optional fields and rules |
 | --- | --- | --- |
 | `dirichlet` | `selectionId`, `value` quantity | Value is a prescribed field in the profile/formulation unit. |
@@ -164,8 +174,8 @@ Each additional Physics member is a condition object keyed by its own `id`. It r
 | Formulation | Dirichlet creation value | Neumann creation value | Impedance creation value | Incident polarization when enabled |
 | --- | --- | --- | --- | --- |
 | `pressure` | `0 Pa` | `0 m/s` | `411.6 Pa*s/m` | One component `1 Pa` |
-| `Ez` | `0 V/m` | `0 V/m^2` | `376.730313668 ohm` | One component `1 V/m` |
-| `Hz` | `0 A/m` | `0 A/m^2` | `376.730313668 ohm` | One component `1 A/m` |
+| `Ez` | `0 V/m` | scalar `0 V/m^2`, field `0, 0 A/m` | `376.730313668 ohm` | One component `1 V/m` |
+| `Hz` | `0 A/m` | scalar `0 A/m^2`, field `0, 0 V/m` | `376.730313668 ohm` | One component `1 A/m` |
 | `electric` | `0 V/m` | `0 V/m^2` | `376.730313668 ohm` | `1, 0, 0` in `V/m` |
 | `T` | `293.15 K` | `0 W/m^2` | Unavailable | Unavailable |
 
@@ -178,12 +188,11 @@ Each Study requires `id`, `name`, `type`, and `physicsId`. The Physics reference
 | `acoustic-2d`, `acoustic-3d` | `pressure` | `1` | `pressure`, order `1` |
 | `em-2d` | `Ez` or `Hz`, restricted in Settings to the linked Physics formulation | `1` | Linked Physics formulation, order `1` |
 | `em-3d` | `electric` (**Electric field**) | `1`, `2` | `electric`, order `2` |
-| `em-3d` | `firstOrderEH` (**First-order E-H**, experimental Study choice) | `1` | Explicit experimental choice only |
 | `thermal-2d` | `T` | `1` | `T`, order `1` |
 
-Use the explicit Study formulation, then the linked Physics formulation, then the profile and shared defaults. Validate that the effective value matches the linked Physics and the order is in the selected formulation's order choices. Built-in EM3D Physics uses `electric`, so a Study with `firstOrderEH` fails the formulation-match rule before dispatch.
+Use the explicit Study formulation, then the linked Physics formulation, then the profile and shared defaults. Validate that the effective value matches the linked Physics and the order is in the selected formulation's order choices.
 
-Optional `solver` requires `backend` (`rivrs` or `faer`) and `threads` (one of `1`, `2`, `3`, `4`, `6`, `8`, `12`, `16`). Optional `ordering` is `metis`, `amd`, or `default`. Optional `constitutiveQuadrature` is `standard` or `centroid`. The resolved `faer` choices are `default` ordering and one thread. The `rivrs` choices are `metis` or `amd` and the declared thread list. Electric formulation uses `standard` quadrature. The experimental `firstOrderEH` capability restricts the backend to `faer`. Resolve explicit values, profile defaults, order-dependent common defaults, then common defaults. Common defaults are `rivrs`, `metis`, `standard`, and 12 threads at order 1 or 3 at order 2. Optional `output` has `csvFilename` matching `^[A-Za-z0-9][A-Za-z0-9._-]{0,98}\.csv$` and boolean `fieldFiles` with effective default `true`. A stationary Study supports optional `meanTemperature` with unit `K` and effective default `0 K`, and uses first-order temperature discretization.
+Optional `solver` requires `backend` (`rivrs` or `faer`) and `threads` (one of `1`, `2`, `3`, `4`, `6`, `8`, `12`, `16`). Optional `ordering` is `metis`, `amd`, or `default`. Optional `constitutiveQuadrature` is `standard` or `centroid`. The resolved `faer` choices are `default` ordering and one thread. The `rivrs` choices are `metis` or `amd` and the declared thread list. Electric formulation uses `standard` quadrature. Resolve explicit values, profile defaults, order-dependent common defaults, then common defaults. Common defaults are `rivrs`, `metis`, `standard`, and 12 threads at order 1 or 3 at order 2. Optional `output` has `csvFilename` matching `^[A-Za-z0-9][A-Za-z0-9._-]{0,98}\.csv$` and boolean `fieldFiles` with effective default `true`. A stationary Study supports optional `meanTemperature` with unit `K` and effective default `0 K`, and uses first-order temperature discretization.
 
 An optional harmonic Study `parameterSweep` is an object with required `id`, `name`, `type: "parameterSweep"`, and a nonempty `parameters` array. Each row requires `parameter` (a model parameter symbol) and `values` (one of the following objects). A symbol appears at most once. Evaluate values in the parameter's dimension. Combine independent axes as a Cartesian product with a maximum of 10,000 cases.
 

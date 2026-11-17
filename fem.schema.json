@@ -2961,6 +2961,98 @@
                   "type": {
                     "const": "dirichlet"
                   },
+                  "fieldValues": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "expression": {
+                          "maxLength": 512,
+                          "minLength": 1,
+                          "type": "string",
+                          "x-fullmeta-edit": {
+                            "expression": {
+                              "namespaces": [
+                                "parameters"
+                              ]
+                            }
+                          }
+                        },
+                        "unit": {
+                          "enum": [
+                            "1",
+                            "m",
+                            "mm",
+                            "um",
+                            "nm",
+                            "s",
+                            "ms",
+                            "Hz",
+                            "kHz",
+                            "MHz",
+                            "GHz",
+                            "Pa",
+                            "kPa",
+                            "kg",
+                            "kg/m^3",
+                            "m/s",
+                            "m/s^2",
+                            "Pa*s/m",
+                            "ohm",
+                            "S/m",
+                            "V/m",
+                            "A/m",
+                            "V/m^2",
+                            "A/m^2",
+                            "rad/m",
+                            "K",
+                            "W/(m*K)",
+                            "W/m^2"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "expression",
+                        "unit"
+                      ],
+                      "type": "object",
+                      "x-fullmeta-ui-behavior": {
+                        "context": "projectEditing",
+                        "format": "fullmeta-ui-behavior/1",
+                        "payload": {
+                          "widget": {
+                            "settings": {},
+                            "type": "quantity"
+                          }
+                        },
+                        "target": {
+                          "kind": "field"
+                        }
+                      }
+                    },
+                    "title": "field components",
+                    "x-fullmeta-ui-behavior": {
+                      "context": "projectEditing",
+                      "format": "fullmeta-ui-behavior/1",
+                      "payload": {
+                        "widget": {
+                          "settings": {
+                            "componentLabels": [
+                              "x-component",
+                              "y-component",
+                              "z-component"
+                            ]
+                          },
+                          "type": "quantityVector"
+                        }
+                      },
+                      "target": {
+                        "kind": "field"
+                      }
+                    }
+                  },
                   "value": {
                     "additionalProperties": false,
                     "properties": {
@@ -3119,6 +3211,98 @@
                   },
                   "type": {
                     "const": "neumann"
+                  },
+                  "fieldValues": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "expression": {
+                          "maxLength": 512,
+                          "minLength": 1,
+                          "type": "string",
+                          "x-fullmeta-edit": {
+                            "expression": {
+                              "namespaces": [
+                                "parameters"
+                              ]
+                            }
+                          }
+                        },
+                        "unit": {
+                          "enum": [
+                            "1",
+                            "m",
+                            "mm",
+                            "um",
+                            "nm",
+                            "s",
+                            "ms",
+                            "Hz",
+                            "kHz",
+                            "MHz",
+                            "GHz",
+                            "Pa",
+                            "kPa",
+                            "kg",
+                            "kg/m^3",
+                            "m/s",
+                            "m/s^2",
+                            "Pa*s/m",
+                            "ohm",
+                            "S/m",
+                            "V/m",
+                            "A/m",
+                            "V/m^2",
+                            "A/m^2",
+                            "rad/m",
+                            "K",
+                            "W/(m*K)",
+                            "W/m^2"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "expression",
+                        "unit"
+                      ],
+                      "type": "object",
+                      "x-fullmeta-ui-behavior": {
+                        "context": "projectEditing",
+                        "format": "fullmeta-ui-behavior/1",
+                        "payload": {
+                          "widget": {
+                            "settings": {},
+                            "type": "quantity"
+                          }
+                        },
+                        "target": {
+                          "kind": "field"
+                        }
+                      }
+                    },
+                    "title": "field components",
+                    "x-fullmeta-ui-behavior": {
+                      "context": "projectEditing",
+                      "format": "fullmeta-ui-behavior/1",
+                      "payload": {
+                        "widget": {
+                          "settings": {
+                            "componentLabels": [
+                              "x-component",
+                              "y-component",
+                              "z-component"
+                            ]
+                          },
+                          "type": "quantityVector"
+                        }
+                      },
+                      "target": {
+                        "kind": "field"
+                      }
+                    }
                   },
                   "value": {
                     "additionalProperties": false,

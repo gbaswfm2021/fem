@@ -107,7 +107,21 @@
             "value": {
               "expression": "0",
               "unit": "V/m"
-            }
+            },
+            "fieldValues": [
+              {
+                "expression": "0",
+                "unit": "V/m"
+              },
+              {
+                "expression": "0",
+                "unit": "V/m"
+              },
+              {
+                "expression": "0",
+                "unit": "V/m"
+              }
+            ]
           },
           "impedance": {
             "impedance": {
@@ -119,7 +133,21 @@
             "value": {
               "expression": "0",
               "unit": "V/m^2"
-            }
+            },
+            "fieldValues": [
+              {
+                "expression": "0",
+                "unit": "A/m"
+              },
+              {
+                "expression": "0",
+                "unit": "A/m"
+              },
+              {
+                "expression": "0",
+                "unit": "A/m"
+              }
+            ]
           }
         }
       },
@@ -159,6 +187,32 @@
       ],
       "featureHandlingByType": {
         "periodicCondition": "periodicPair"
+      },
+      "boundaryFieldLayouts": {
+        "dirichlet": {
+          "role": "primary",
+          "shape": [
+            3
+          ],
+          "componentLabels": [
+            "Ex",
+            "Ey",
+            "Ez"
+          ],
+          "zeroScalarOnly": true
+        },
+        "neumann": {
+          "role": "derived",
+          "shape": [
+            3
+          ],
+          "componentLabels": [
+            "Hx",
+            "Hy",
+            "Hz"
+          ],
+          "zeroScalarOnly": true
+        }
       }
     },
     "x-fem-scenario": {
@@ -387,7 +441,7 @@
         }
       },
       "resultDefaults": {
-        "frequencyColumn": "frequency_GHz"
+        "frequencyColumn": "frequency_Hz"
       },
       "studyType": "frequencyDomain",
       "supportsStationary": false,
@@ -424,6 +478,8 @@
       },
       "solverBoundaryTypesByProfile": {
         "em-3d": [
+          "dirichlet",
+          "neumann",
           "impedance"
         ]
       }
@@ -434,10 +490,6 @@
           {
             "label": "Electric field",
             "value": "electric"
-          },
-          {
-            "label": "First-order E-H",
-            "value": "firstOrderEH"
           }
         ]
       },
@@ -4972,6 +5024,288 @@
                       "field": "/enabled"
                     },
                     "type": "notEquals"
+                  }
+                ]
+              }
+            },
+            "stage": "model"
+          },
+          {
+            "constraint": {
+              "check": "quantity",
+              "inputs": [
+                {
+                  "name": "evaluationPolicy",
+                  "operand": {
+                    "path": "/x-fullmeta-expressionRuntime/real/literal",
+                    "source": "schema"
+                  }
+                },
+                {
+                  "name": "allowedFunctions",
+                  "operand": {
+                    "path": "/x-fullmeta-expressionRuntime/real/literal/allowedFunctions",
+                    "source": "schema"
+                  }
+                },
+                {
+                  "name": "dimensionTolerance",
+                  "operand": {
+                    "literal": 1e-10
+                  }
+                },
+                {
+                  "name": "complex",
+                  "operand": {
+                    "literal": true
+                  }
+                },
+                {
+                  "name": "imaginarySymbol",
+                  "operand": {
+                    "literal": "i"
+                  }
+                },
+                {
+                  "name": "complexFunctions",
+                  "operand": {
+                    "path": "/x-fullmeta-expressionRuntime/real/literal/allowedFunctions",
+                    "source": "schema"
+                  }
+                },
+                {
+                  "name": "symbols",
+                  "operand": {
+                    "binding": "boundaryWaveSymbols",
+                    "path": "/symbols"
+                  }
+                },
+                {
+                  "name": "runtimeSymbols",
+                  "operand": {
+                    "literal": [
+                      {
+                        "requiresRuntimeSample": true,
+                        "symbol": "x"
+                      },
+                      {
+                        "requiresRuntimeSample": true,
+                        "symbol": "y"
+                      },
+                      {
+                        "requiresRuntimeSample": true,
+                        "symbol": "z"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "name": "expectedUnit",
+                  "operand": {
+                    "literal": "V/m"
+                  }
+                }
+              ],
+              "subject": {
+                "field": ""
+              },
+              "subjectInput": "value",
+              "type": "semanticCheck"
+            },
+            "diagnostic": {
+              "message": "EM3D dirichlet vector component must have unit V/m and a valid expression.",
+              "path": ""
+            },
+            "id": "em3d_dirichlet_vector_value",
+            "name": "EM3D dirichlet Cartesian boundary values",
+            "scope": {
+              "nested": [
+                {
+                  "path": "/fieldValues/*"
+                }
+              ],
+              "path": "/model/physics/*",
+              "source": "root",
+              "when": {
+                "all": [
+                  {
+                    "other": {
+                      "literal": "thermal"
+                    },
+                    "subject": {
+                      "path": "/scenario/physics",
+                      "source": "root"
+                    },
+                    "type": "notEquals"
+                  },
+                  {
+                    "subject": {
+                      "field": "/type"
+                    },
+                    "type": "equals",
+                    "other": {
+                      "literal": "dirichlet"
+                    }
+                  },
+                  {
+                    "other": {
+                      "literal": false
+                    },
+                    "subject": {
+                      "field": "/enabled"
+                    },
+                    "type": "notEquals"
+                  },
+                  {
+                    "subject": {
+                      "path": "/scenario/profileId",
+                      "source": "root"
+                    },
+                    "type": "equals",
+                    "other": {
+                      "literal": "em-3d"
+                    }
+                  }
+                ]
+              }
+            },
+            "stage": "model"
+          },
+          {
+            "constraint": {
+              "check": "quantity",
+              "inputs": [
+                {
+                  "name": "evaluationPolicy",
+                  "operand": {
+                    "path": "/x-fullmeta-expressionRuntime/real/literal",
+                    "source": "schema"
+                  }
+                },
+                {
+                  "name": "allowedFunctions",
+                  "operand": {
+                    "path": "/x-fullmeta-expressionRuntime/real/literal/allowedFunctions",
+                    "source": "schema"
+                  }
+                },
+                {
+                  "name": "dimensionTolerance",
+                  "operand": {
+                    "literal": 1e-10
+                  }
+                },
+                {
+                  "name": "complex",
+                  "operand": {
+                    "literal": true
+                  }
+                },
+                {
+                  "name": "imaginarySymbol",
+                  "operand": {
+                    "literal": "i"
+                  }
+                },
+                {
+                  "name": "complexFunctions",
+                  "operand": {
+                    "path": "/x-fullmeta-expressionRuntime/real/literal/allowedFunctions",
+                    "source": "schema"
+                  }
+                },
+                {
+                  "name": "symbols",
+                  "operand": {
+                    "binding": "boundaryWaveSymbols",
+                    "path": "/symbols"
+                  }
+                },
+                {
+                  "name": "runtimeSymbols",
+                  "operand": {
+                    "literal": [
+                      {
+                        "requiresRuntimeSample": true,
+                        "symbol": "x"
+                      },
+                      {
+                        "requiresRuntimeSample": true,
+                        "symbol": "y"
+                      },
+                      {
+                        "requiresRuntimeSample": true,
+                        "symbol": "z"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "name": "expectedUnit",
+                  "operand": {
+                    "literal": "A/m"
+                  }
+                }
+              ],
+              "subject": {
+                "field": ""
+              },
+              "subjectInput": "value",
+              "type": "semanticCheck"
+            },
+            "diagnostic": {
+              "message": "EM3D neumann vector component must have unit A/m and a valid expression.",
+              "path": ""
+            },
+            "id": "em3d_neumann_vector_value",
+            "name": "EM3D neumann Cartesian boundary values",
+            "scope": {
+              "nested": [
+                {
+                  "path": "/fieldValues/*"
+                }
+              ],
+              "path": "/model/physics/*",
+              "source": "root",
+              "when": {
+                "all": [
+                  {
+                    "other": {
+                      "literal": "thermal"
+                    },
+                    "subject": {
+                      "path": "/scenario/physics",
+                      "source": "root"
+                    },
+                    "type": "notEquals"
+                  },
+                  {
+                    "subject": {
+                      "field": "/type"
+                    },
+                    "type": "equals",
+                    "other": {
+                      "literal": "neumann"
+                    }
+                  },
+                  {
+                    "other": {
+                      "literal": false
+                    },
+                    "subject": {
+                      "field": "/enabled"
+                    },
+                    "type": "notEquals"
+                  },
+                  {
+                    "subject": {
+                      "path": "/scenario/profileId",
+                      "source": "root"
+                    },
+                    "type": "equals",
+                    "other": {
+                      "literal": "em-3d"
+                    }
                   }
                 ]
               }
@@ -14128,6 +14462,388 @@
               ]
             }
           ]
+        },
+        {
+          "forEach": {
+            "from": "root",
+            "path": "/model/physics/*"
+          },
+          "as": "__obligationItem0",
+          "pathAs": "__obligationPath0",
+          "rules": [
+            {
+              "if": {
+                "op": "all",
+                "args": [
+                  {
+                    "op": "ne",
+                    "args": [
+                      {
+                        "var": "root",
+                        "path": "/scenario/physics"
+                      },
+                      {
+                        "literal": "thermal"
+                      }
+                    ]
+                  },
+                  {
+                    "op": "eq",
+                    "args": [
+                      {
+                        "var": "__obligationItem0",
+                        "path": "/type"
+                      },
+                      {
+                        "literal": "dirichlet"
+                      }
+                    ]
+                  },
+                  {
+                    "op": "ne",
+                    "args": [
+                      {
+                        "var": "__obligationItem0",
+                        "path": "/enabled"
+                      },
+                      {
+                        "literal": false
+                      }
+                    ]
+                  },
+                  {
+                    "op": "eq",
+                    "args": [
+                      {
+                        "var": "root",
+                        "path": "/scenario/profileId"
+                      },
+                      {
+                        "literal": "em-3d"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "then": [
+                {
+                  "forEach": {
+                    "from": "__obligationItem0",
+                    "path": "/fieldValues/*",
+                    "basePath": {
+                      "var": "__obligationPath0"
+                    }
+                  },
+                  "as": "__obligationItem1",
+                  "pathAs": "__obligationPath1",
+                  "rules": [
+                    {
+                      "let": "path",
+                      "value": {
+                        "op": "text",
+                        "args": [
+                          {
+                            "op": "pathString",
+                            "args": [
+                              {
+                                "var": "__obligationPath1"
+                              }
+                            ]
+                          },
+                          ": ",
+                          "EM3D dirichlet vector component must have unit V/m and a valid expression."
+                        ]
+                      }
+                    },
+                    {
+                      "check": "quantity",
+                      "input": {
+                        "object": {
+                          "value": {
+                            "var": "__obligationItem1",
+                            "path": ""
+                          },
+                          "evaluationPolicy": {
+                            "var": "schema",
+                            "path": "/x-fullmeta-expressionRuntime/real/literal"
+                          },
+                          "allowedFunctions": {
+                            "var": "schema",
+                            "path": "/x-fullmeta-expressionRuntime/real/literal/allowedFunctions"
+                          },
+                          "dimensionTolerance": {
+                            "literal": 1e-10
+                          },
+                          "complex": {
+                            "literal": true
+                          },
+                          "imaginarySymbol": {
+                            "literal": "i"
+                          },
+                          "complexFunctions": {
+                            "var": "schema",
+                            "path": "/x-fullmeta-expressionRuntime/real/literal/allowedFunctions"
+                          },
+                          "symbols": {
+                            "var": "__derived_boundaryWaveSymbols",
+                            "path": "/symbols"
+                          },
+                          "runtimeSymbols": {
+                            "literal": [
+                              {
+                                "requiresRuntimeSample": true,
+                                "symbol": "x"
+                              },
+                              {
+                                "requiresRuntimeSample": true,
+                                "symbol": "y"
+                              },
+                              {
+                                "requiresRuntimeSample": true,
+                                "symbol": "z"
+                              }
+                            ]
+                          },
+                          "expectedUnit": {
+                            "literal": "V/m"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "when": {
+            "op": "all",
+            "args": [
+              {
+                "op": "all",
+                "args": [
+                  {
+                    "op": "not",
+                    "args": [
+                      {
+                        "op": "isNull",
+                        "args": [
+                          {
+                            "var": "__derived_boundaryWaveSymbols"
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "op": "eq",
+                    "args": [
+                      {
+                        "op": "length",
+                        "args": [
+                          {
+                            "var": "__derived_boundaryWaveSymbols",
+                            "path": "/errors"
+                          }
+                        ]
+                      },
+                      0
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "forEach": {
+            "from": "root",
+            "path": "/model/physics/*"
+          },
+          "as": "__obligationItem0",
+          "pathAs": "__obligationPath0",
+          "rules": [
+            {
+              "if": {
+                "op": "all",
+                "args": [
+                  {
+                    "op": "ne",
+                    "args": [
+                      {
+                        "var": "root",
+                        "path": "/scenario/physics"
+                      },
+                      {
+                        "literal": "thermal"
+                      }
+                    ]
+                  },
+                  {
+                    "op": "eq",
+                    "args": [
+                      {
+                        "var": "__obligationItem0",
+                        "path": "/type"
+                      },
+                      {
+                        "literal": "neumann"
+                      }
+                    ]
+                  },
+                  {
+                    "op": "ne",
+                    "args": [
+                      {
+                        "var": "__obligationItem0",
+                        "path": "/enabled"
+                      },
+                      {
+                        "literal": false
+                      }
+                    ]
+                  },
+                  {
+                    "op": "eq",
+                    "args": [
+                      {
+                        "var": "root",
+                        "path": "/scenario/profileId"
+                      },
+                      {
+                        "literal": "em-3d"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "then": [
+                {
+                  "forEach": {
+                    "from": "__obligationItem0",
+                    "path": "/fieldValues/*",
+                    "basePath": {
+                      "var": "__obligationPath0"
+                    }
+                  },
+                  "as": "__obligationItem1",
+                  "pathAs": "__obligationPath1",
+                  "rules": [
+                    {
+                      "let": "path",
+                      "value": {
+                        "op": "text",
+                        "args": [
+                          {
+                            "op": "pathString",
+                            "args": [
+                              {
+                                "var": "__obligationPath1"
+                              }
+                            ]
+                          },
+                          ": ",
+                          "EM3D neumann vector component must have unit A/m and a valid expression."
+                        ]
+                      }
+                    },
+                    {
+                      "check": "quantity",
+                      "input": {
+                        "object": {
+                          "value": {
+                            "var": "__obligationItem1",
+                            "path": ""
+                          },
+                          "evaluationPolicy": {
+                            "var": "schema",
+                            "path": "/x-fullmeta-expressionRuntime/real/literal"
+                          },
+                          "allowedFunctions": {
+                            "var": "schema",
+                            "path": "/x-fullmeta-expressionRuntime/real/literal/allowedFunctions"
+                          },
+                          "dimensionTolerance": {
+                            "literal": 1e-10
+                          },
+                          "complex": {
+                            "literal": true
+                          },
+                          "imaginarySymbol": {
+                            "literal": "i"
+                          },
+                          "complexFunctions": {
+                            "var": "schema",
+                            "path": "/x-fullmeta-expressionRuntime/real/literal/allowedFunctions"
+                          },
+                          "symbols": {
+                            "var": "__derived_boundaryWaveSymbols",
+                            "path": "/symbols"
+                          },
+                          "runtimeSymbols": {
+                            "literal": [
+                              {
+                                "requiresRuntimeSample": true,
+                                "symbol": "x"
+                              },
+                              {
+                                "requiresRuntimeSample": true,
+                                "symbol": "y"
+                              },
+                              {
+                                "requiresRuntimeSample": true,
+                                "symbol": "z"
+                              }
+                            ]
+                          },
+                          "expectedUnit": {
+                            "literal": "A/m"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "when": {
+            "op": "all",
+            "args": [
+              {
+                "op": "all",
+                "args": [
+                  {
+                    "op": "not",
+                    "args": [
+                      {
+                        "op": "isNull",
+                        "args": [
+                          {
+                            "var": "__derived_boundaryWaveSymbols"
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "op": "eq",
+                    "args": [
+                      {
+                        "op": "length",
+                        "args": [
+                          {
+                            "var": "__derived_boundaryWaveSymbols",
+                            "path": "/errors"
+                          }
+                        ]
+                      },
+                      0
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
         }
       ]
     },

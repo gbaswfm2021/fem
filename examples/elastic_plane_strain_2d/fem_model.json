@@ -1,0 +1,227 @@
+{
+  "application": "fem",
+  "metadata": {
+    "id": "elastic_sheet_planeStrain",
+    "name": "Free in-plane body: planeStrain"
+  },
+  "modelFormat": "fem-model/2",
+  "scenario": {
+    "dimension": 2,
+    "physics": "elasticity",
+    "profileId": "elastic-2d"
+  },
+  "x-fullmeta-schema": "../../applications/fem/fem.schema.json",
+  "model": {
+    "units": "m",
+    "parameters": [
+      {
+        "id": "frequency",
+        "name": "Frequency",
+        "symbol": "fscan",
+        "expression": "2000",
+        "unit": "Hz"
+      }
+    ],
+    "variables": [],
+    "pointwiseVariables": [],
+    "integrationOperators": [],
+    "geometry": {
+      "tolerance": {
+        "expression": "1e-9",
+        "unit": "m"
+      },
+      "features": [
+        {
+          "id": "body",
+          "name": "Rectangle",
+          "type": "rectangle",
+          "position": [
+            {
+              "expression": "0",
+              "unit": "m"
+            },
+            {
+              "expression": "0",
+              "unit": "m"
+            }
+          ],
+          "size": [
+            {
+              "expression": "0.2",
+              "unit": "m"
+            },
+            {
+              "expression": "0.1",
+              "unit": "m"
+            }
+          ]
+        }
+      ]
+    },
+    "selections": [
+      {
+        "id": "domain",
+        "name": "Body",
+        "entity": "domain",
+        "addresses": [
+          {
+            "membership": {
+              "body": "inside"
+            }
+          }
+        ]
+      },
+      {
+        "id": "drive",
+        "name": "Edge at x = 0",
+        "entity": "boundary",
+        "addresses": [
+          {
+            "membership": {
+              "body": "boundary"
+            }
+          }
+        ],
+        "coordinateExpression": "x"
+      }
+    ],
+    "materials": [
+      {
+        "id": "material",
+        "name": "Illustrative elastic material",
+        "selectionId": "domain",
+        "density": {
+          "expression": "2700",
+          "unit": "kg/m^3"
+        },
+        "youngModulus": {
+          "expression": "70000000000",
+          "unit": "Pa"
+        },
+        "poissonRatio": "0.33",
+        "densityLossFactor": "0.01"
+      }
+    ],
+    "mesh": {
+      "elementFamily": "triangle",
+      "gmsh": {
+        "algorithm3D": 1,
+        "elementOrder": 1,
+        "optimize": true,
+        "optimizeNetgen": true,
+        "optimizeThreshold": 0.25,
+        "smoothing": 10,
+        "threads": 1
+      },
+      "minSize": {
+        "expression": "0.005",
+        "unit": "m"
+      },
+      "maxSize": {
+        "expression": "0.01",
+        "unit": "m"
+      },
+      "meshSizeControls": [],
+      "periodicPairs": []
+    },
+    "physics": {
+      "id": "physics",
+      "name": "In-plane elasticity",
+      "type": "elasticity",
+      "formulation": "planeStrain",
+      "domainSelectionIds": [
+        "domain"
+      ],
+      "frequency": {
+        "expression": "fscan",
+        "unit": "Hz"
+      },
+      "load": {
+        "id": "load",
+        "name": "Transverse edge traction",
+        "type": "neumann",
+        "selectionId": "drive",
+        "value": {
+          "expression": "0",
+          "unit": "Pa"
+        },
+        "fieldValues": [
+          {
+            "expression": "0",
+            "unit": "Pa"
+          },
+          {
+            "expression": "2500",
+            "unit": "Pa"
+          }
+        ]
+      }
+    },
+    "study": [
+      {
+        "id": "sweep",
+        "name": "Driven response",
+        "type": "frequencyDomain",
+        "physicsId": "physics",
+        "discretization": {
+          "elementOrder": 1,
+          "fieldFormulation": "planeStrain"
+        },
+        "solver": {
+          "backend": "faer",
+          "ordering": "default",
+          "threads": 1,
+          "constitutiveQuadrature": "standard"
+        },
+        "parameterSweep": {
+          "id": "axis",
+          "name": "Frequency",
+          "type": "parameterSweep",
+          "parameters": [
+            {
+              "parameter": "fscan",
+              "values": {
+                "type": "linear",
+                "start": {
+                  "expression": "2000",
+                  "unit": "Hz"
+                },
+                "end": {
+                  "expression": "20000",
+                  "unit": "Hz"
+                },
+                "count": 73
+              }
+            }
+          ]
+        },
+        "output": {
+          "csvFilename": "response.csv",
+          "fieldFiles": true
+        }
+      }
+    ],
+    "results": [
+      {
+        "id": "response",
+        "name": "Maximum transverse displacement",
+        "type": "sweep",
+        "quantity": "max_uy_magnitude_m"
+      },
+      {
+        "id": "field",
+        "name": "In-plane transverse displacement near first peak",
+        "type": "field",
+        "frequency": {
+          "expression": "8750",
+          "unit": "Hz"
+        },
+        "quantity": {
+          "type": "fieldComponent",
+          "component": "uy",
+          "part": "magnitude"
+        }
+      }
+    ]
+  }
+}

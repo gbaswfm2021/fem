@@ -1,0 +1,303 @@
+{
+  "application": "fem",
+  "metadata": {
+    "id": "elastic_plate_3d",
+    "name": "Free elastic plate: driven side"
+  },
+  "model": {
+    "geometry": {
+      "features": [
+        {
+          "id": "plate",
+          "name": "Plate",
+          "position": [
+            {
+              "expression": "0",
+              "unit": "m"
+            },
+            {
+              "expression": "0",
+              "unit": "m"
+            },
+            {
+              "expression": "0",
+              "unit": "m"
+            }
+          ],
+          "size": [
+            {
+              "expression": "a",
+              "unit": "m"
+            },
+            {
+              "expression": "b",
+              "unit": "m"
+            },
+            {
+              "expression": "h",
+              "unit": "m"
+            }
+          ],
+          "type": "box"
+        }
+      ],
+      "tolerance": {
+        "expression": "1e-9",
+        "unit": "m"
+      }
+    },
+    "integrationOperators": [],
+    "materials": [
+      {
+        "density": {
+          "expression": "2700",
+          "unit": "kg/m^3"
+        },
+        "densityLossFactor": "0.01",
+        "id": "plate_material",
+        "name": "Illustrative aluminium-like material",
+        "poissonRatio": "0.33",
+        "selectionId": "plate_domain",
+        "youngModulus": {
+          "expression": "70000000000",
+          "unit": "Pa"
+        }
+      }
+    ],
+    "mesh": {
+      "elementFamily": "tetrahedron",
+      "gmsh": {
+        "algorithm3D": 1,
+        "elementOrder": 1,
+        "optimize": true,
+        "optimizeNetgen": true,
+        "optimizeThreshold": 0.25,
+        "smoothing": 10,
+        "threads": 1
+      },
+      "maxSize": {
+        "expression": "0.004",
+        "unit": "m"
+      },
+      "meshSizeControls": [],
+      "minSize": {
+        "expression": "0.002",
+        "unit": "m"
+      },
+      "periodicPairs": []
+    },
+    "parameters": [
+      {
+        "expression": "60",
+        "id": "scan_parameter",
+        "name": "Sweep frequency",
+        "symbol": "fscan",
+        "unit": "Hz"
+      },
+      {
+        "description": "",
+        "expression": "0.15",
+        "id": "parameter",
+        "name": "p1",
+        "symbol": "a",
+        "unit": "m"
+      },
+      {
+        "description": "",
+        "expression": "0.15",
+        "id": "parameter_2",
+        "name": "p1",
+        "symbol": "b",
+        "unit": "m"
+      },
+      {
+        "description": "",
+        "expression": "0.004",
+        "id": "parameter_3",
+        "name": "p1",
+        "symbol": "h",
+        "unit": "m"
+      }
+    ],
+    "physics": {
+      "domainSelectionIds": [
+        "plate_domain"
+      ],
+      "formulation": "displacement",
+      "frequency": {
+        "expression": "fscan",
+        "unit": "Hz"
+      },
+      "id": "physics",
+      "name": "Linear elasticity",
+      "neumann": {
+        "fieldValues": [
+          {
+            "expression": "0",
+            "unit": "Pa"
+          },
+          {
+            "expression": "0",
+            "unit": "Pa"
+          },
+          {
+            "expression": "3700",
+            "unit": "Pa"
+          }
+        ],
+        "id": "neumann",
+        "name": "Neumann condition",
+        "selectionId": "driven_side_copy",
+        "type": "neumann",
+        "value": {
+          "expression": "0",
+          "unit": "Pa"
+        }
+      },
+      "side_load": {
+        "fieldValues": [
+          {
+            "expression": "0",
+            "unit": "Pa"
+          },
+          {
+            "expression": "0",
+            "unit": "Pa"
+          },
+          {
+            "expression": "2500",
+            "unit": "Pa"
+          }
+        ],
+        "id": "side_load",
+        "name": "Transverse side traction",
+        "selectionId": "driven_side",
+        "type": "neumann",
+        "value": {
+          "expression": "0",
+          "unit": "Pa"
+        }
+      },
+      "type": "elasticity"
+    },
+    "pointwiseVariables": [],
+    "results": [
+      {
+        "id": "response_spectrum",
+        "name": "Maximum transverse displacement",
+        "quantity": "max_uz_magnitude_m",
+        "type": "sweep"
+      },
+      {
+        "filters": {
+          "fscan": 1750
+        },
+        "frequency": {
+          "expression": "1095",
+          "unit": "Hz"
+        },
+        "id": "transverse_field",
+        "name": "Transverse displacement near the coarse-mesh peak",
+        "quantity": {
+          "component": "uz",
+          "part": "magnitude",
+          "type": "fieldComponent"
+        },
+        "type": "field"
+      }
+    ],
+    "selections": [
+      {
+        "addresses": [
+          {
+            "membership": {
+              "plate": "inside"
+            }
+          }
+        ],
+        "entity": "domain",
+        "id": "plate_domain",
+        "name": "Plate domain"
+      },
+      {
+        "addresses": [
+          {
+            "membership": {
+              "plate": "boundary"
+            }
+          }
+        ],
+        "coordinateExpression": "x",
+        "entity": "boundary",
+        "id": "driven_side",
+        "name": "Side at x = 0"
+      },
+      {
+        "addresses": [
+          {
+            "membership": {
+              "plate": "boundary"
+            }
+          }
+        ],
+        "coordinateExpression": "y",
+        "entity": "boundary",
+        "id": "driven_side_copy",
+        "name": "Side at y = 0"
+      }
+    ],
+    "study": [
+      {
+        "discretization": {
+          "elementOrder": 1,
+          "fieldFormulation": "displacement"
+        },
+        "id": "frequency_sweep",
+        "name": "Driven response",
+        "output": {
+          "csvFilename": "plate_response.csv",
+          "fieldFiles": true
+        },
+        "parameterSweep": {
+          "id": "frequency_axis",
+          "name": "Frequency",
+          "parameters": [
+            {
+              "parameter": "fscan",
+              "values": {
+                "count": 181,
+                "end": {
+                  "expression": "2000",
+                  "unit": "Hz"
+                },
+                "start": {
+                  "expression": "200",
+                  "unit": "Hz"
+                },
+                "type": "linear"
+              }
+            }
+          ],
+          "type": "parameterSweep"
+        },
+        "physicsId": "physics",
+        "solver": {
+          "backend": "faer",
+          "constitutiveQuadrature": "standard",
+          "ordering": "default",
+          "threads": 1
+        },
+        "type": "frequencyDomain"
+      }
+    ],
+    "units": "m",
+    "variables": []
+  },
+  "modelFormat": "fem-model/2",
+  "scenario": {
+    "dimension": 3,
+    "physics": "elasticity",
+    "profileId": "elastic-3d"
+  },
+  "x-fullmeta-schema": "../../applications/fem/fem.schema.json"
+}

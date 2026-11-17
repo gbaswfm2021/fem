@@ -29,11 +29,17 @@ supported solver backends, and results in JSON. The shared `stationaryPlan`
 preparation route supplies stationary solvers with a prepared request; the
 scenario module does not need a separate project adapter. Frequency-domain
 preparation is also shared where its declared request kind is supported.
+The coordinator selects the workflow from `studyType` and the scenario's
+`study.preparationByProfile` declaration, rather than from the scenario ID.
+The frequency routes currently accept `frequencyPlan` and
+`configuredFrequencyRequest` preparation contracts.
 
 Scenario result and Study metadata belong in the package contract. Declare
 solver-consumed Study fields/defaults through
 `x-fem-scenario.studyFingerprint`; use `x-fem-scenario.resultDefaults` for
 result filenames, field schemas, labels, and nonstandard frequency columns.
+Scenarios using `frequencyPlan` must declare a safe
+`resultDefaults.frequencyFieldPrefix` for their field output files.
 This keeps generic editor, preparation, and result code independent of
 scenario IDs.
 

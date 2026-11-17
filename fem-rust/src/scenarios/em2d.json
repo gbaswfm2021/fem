@@ -121,7 +121,17 @@
             "value": {
               "expression": "0",
               "unit": "V/m^2"
-            }
+            },
+            "fieldValues": [
+              {
+                "expression": "0",
+                "unit": "A/m"
+              },
+              {
+                "expression": "0",
+                "unit": "A/m"
+              }
+            ]
           }
         },
         "Hz": {
@@ -141,7 +151,17 @@
             "value": {
               "expression": "0",
               "unit": "A/m^2"
-            }
+            },
+            "fieldValues": [
+              {
+                "expression": "0",
+                "unit": "V/m"
+              },
+              {
+                "expression": "0",
+                "unit": "V/m"
+              }
+            ]
           }
         }
       },
@@ -181,6 +201,18 @@
       ],
       "featureHandlingByType": {
         "periodicCondition": "periodicPair"
+      },
+      "boundaryFieldLayouts": {
+        "neumann": {
+          "role": "derived",
+          "shape": [
+            2
+          ],
+          "componentLabels": [
+            "x",
+            "y"
+          ]
+        }
       }
     },
     "x-fem-scenario": {
@@ -469,6 +501,9 @@
           "phasorConvention": "exp(+i omega t)"
         }
       },
+      "resultDefaults": {
+        "frequencyFieldPrefix": "emfield_"
+      },
       "studyType": "frequencyDomain",
       "supportsStationary": false,
       "solverModule": "em2d"
@@ -490,11 +525,6 @@
           ]
         },
         "Hz": {
-          "elementOrders": [
-            1
-          ]
-        },
-        "firstOrderEH": {
           "elementOrders": [
             1
           ]
@@ -562,18 +592,7 @@
           "fieldFormulationsFromPhysics": true
         }
       },
-      "solverOptionRules": [
-        {
-          "options": {
-            "backend": [
-              "faer"
-            ]
-          },
-          "when": {
-            "fieldFormulation": "firstOrderEH"
-          }
-        }
-      ]
+      "solverOptionRules": []
     }
   },
   "schemaContributions": {
@@ -916,31 +935,6 @@
               },
               "type": "equals"
             }
-          },
-          {
-            "constraint": {
-              "other": {
-                "literal": [
-                  1
-                ]
-              },
-              "subject": {
-                "field": "/capabilities/mesh/fieldFormulations/firstOrderEH/elementOrders"
-              },
-              "type": "setEqual"
-            },
-            "diagnostic": {
-              "message": "The firstOrderEH formulation must declare element orders 1.",
-              "path": "/capabilities/mesh/fieldFormulations/firstOrderEH/elementOrders"
-            },
-            "id": "metadata_formulation_orders_firstOrderEH",
-            "name": "firstOrderEH declares supported element orders",
-            "scope": {
-              "nested": [],
-              "path": "",
-              "source": "root"
-            },
-            "stage": "metadata"
           }
         ]
       },
@@ -1878,94 +1872,6 @@
                 "op": "all"
               },
               "message": "The Hz formulation must declare element orders 1."
-            }
-          ]
-        },
-        {
-          "as": "__obligationItem0",
-          "forEach": {
-            "from": "root",
-            "path": ""
-          },
-          "pathAs": "__obligationPath0",
-          "rules": [
-            {
-              "let": "path",
-              "value": {
-                "args": [
-                  {
-                    "args": [
-                      {
-                        "var": "__obligationPath0"
-                      },
-                      {
-                        "literal": [
-                          "capabilities",
-                          "mesh",
-                          "fieldFormulations",
-                          "firstOrderEH",
-                          "elementOrders"
-                        ]
-                      }
-                    ],
-                    "op": "concat"
-                  }
-                ],
-                "op": "pathString"
-              }
-            },
-            {
-              "assert": {
-                "args": [
-                  {
-                    "op": "matches",
-                    "schema": {
-                      "literal": {
-                        "type": [
-                          "array",
-                          "null"
-                        ]
-                      }
-                    },
-                    "value": {
-                      "path": "/capabilities/mesh/fieldFormulations/firstOrderEH/elementOrders",
-                      "var": "__obligationItem0"
-                    }
-                  },
-                  {
-                    "op": "matches",
-                    "schema": {
-                      "literal": {
-                        "type": [
-                          "array",
-                          "null"
-                        ]
-                      }
-                    },
-                    "value": {
-                      "literal": [
-                        1
-                      ]
-                    }
-                  },
-                  {
-                    "args": [
-                      {
-                        "path": "/capabilities/mesh/fieldFormulations/firstOrderEH/elementOrders",
-                        "var": "__obligationItem0"
-                      },
-                      {
-                        "literal": [
-                          1
-                        ]
-                      }
-                    ],
-                    "op": "setEqual"
-                  }
-                ],
-                "op": "all"
-              },
-              "message": "The firstOrderEH formulation must declare element orders 1."
             }
           ]
         }
@@ -5051,77 +4957,305 @@
           },
           {
             "constraint": {
-              "other": {
-                "literal": 1
-              },
+              "check": "quantity",
+              "inputs": [
+                {
+                  "name": "evaluationPolicy",
+                  "operand": {
+                    "path": "/x-fullmeta-expressionRuntime/real/literal",
+                    "source": "schema"
+                  }
+                },
+                {
+                  "name": "allowedFunctions",
+                  "operand": {
+                    "path": "/x-fullmeta-expressionRuntime/real/literal/allowedFunctions",
+                    "source": "schema"
+                  }
+                },
+                {
+                  "name": "dimensionTolerance",
+                  "operand": {
+                    "literal": 1e-10
+                  }
+                },
+                {
+                  "name": "complex",
+                  "operand": {
+                    "literal": true
+                  }
+                },
+                {
+                  "name": "imaginarySymbol",
+                  "operand": {
+                    "literal": "i"
+                  }
+                },
+                {
+                  "name": "complexFunctions",
+                  "operand": {
+                    "path": "/x-fullmeta-expressionRuntime/real/literal/allowedFunctions",
+                    "source": "schema"
+                  }
+                },
+                {
+                  "name": "symbols",
+                  "operand": {
+                    "binding": "boundaryWaveSymbols",
+                    "path": "/symbols"
+                  }
+                },
+                {
+                  "name": "runtimeSymbols",
+                  "operand": {
+                    "literal": [
+                      {
+                        "requiresRuntimeSample": true,
+                        "symbol": "x"
+                      },
+                      {
+                        "requiresRuntimeSample": true,
+                        "symbol": "y"
+                      },
+                      {
+                        "requiresRuntimeSample": true,
+                        "symbol": "z"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "name": "expectedUnit",
+                  "operand": {
+                    "literal": "A/m"
+                  }
+                }
+              ],
               "subject": {
-                "field": "/discretization/elementOrder"
+                "field": ""
               },
-              "type": "equals"
+              "subjectInput": "value",
+              "type": "semanticCheck"
             },
             "diagnostic": {
-              "message": "First-order E-H supports first-order elements only.",
-              "path": "/discretization/elementOrder"
+              "message": "EM2D Ez Neumann field component must have unit A/m and a valid expression.",
+              "path": ""
             },
-            "id": "study_first_order_eh",
-            "name": "First-order E-H uses first-order elements",
+            "id": "em2d_Ez_neumann_field_value",
+            "name": "EM2D Ez derived boundary field components",
             "scope": {
-              "nested": [],
-              "path": "/model/study/*",
-              "source": "root"
+              "nested": [
+                {
+                  "path": "/fieldValues/*"
+                }
+              ],
+              "path": "/model/physics/*",
+              "source": "root",
+              "when": {
+                "all": [
+                  {
+                    "other": {
+                      "literal": "thermal"
+                    },
+                    "subject": {
+                      "path": "/scenario/physics",
+                      "source": "root"
+                    },
+                    "type": "notEquals"
+                  },
+                  {
+                    "subject": {
+                      "field": "/type"
+                    },
+                    "type": "equals",
+                    "other": {
+                      "literal": "neumann"
+                    }
+                  },
+                  {
+                    "other": {
+                      "literal": false
+                    },
+                    "subject": {
+                      "field": "/enabled"
+                    },
+                    "type": "notEquals"
+                  },
+                  {
+                    "subject": {
+                      "path": "/scenario/profileId",
+                      "source": "root"
+                    },
+                    "type": "equals",
+                    "other": {
+                      "literal": "em-2d"
+                    }
+                  },
+                  {
+                    "type": "equals",
+                    "subject": {
+                      "source": "root",
+                      "path": "/model/physics/formulation"
+                    },
+                    "other": {
+                      "literal": "Ez"
+                    }
+                  }
+                ]
+              }
             },
-            "stage": "model",
-            "when": {
-              "other": {
-                "literal": "firstOrderEH"
-              },
-              "subject": {
-                "field": "/discretization/fieldFormulation"
-              },
-              "type": "equals"
-            }
+            "stage": "model"
           },
           {
             "constraint": {
-              "other": {
-                "literal": "faer"
-              },
-              "subject": {
-                "field": "/solver/backend"
-              },
-              "type": "equals"
-            },
-            "diagnostic": {
-              "message": "First-order E-H requires the faer backend.",
-              "path": "/solver/backend"
-            },
-            "id": "solver_first_order_eh_backend",
-            "name": "First-order E-H uses faer",
-            "scope": {
-              "nested": [],
-              "path": "/model/study/*",
-              "source": "root"
-            },
-            "stage": "model",
-            "when": {
-              "all": [
+              "check": "quantity",
+              "inputs": [
                 {
-                  "other": {
-                    "literal": "firstOrderEH"
-                  },
-                  "subject": {
-                    "field": "/discretization/fieldFormulation"
-                  },
-                  "type": "equals"
+                  "name": "evaluationPolicy",
+                  "operand": {
+                    "path": "/x-fullmeta-expressionRuntime/real/literal",
+                    "source": "schema"
+                  }
                 },
                 {
-                  "subject": {
-                    "field": "/solver/backend"
-                  },
-                  "type": "required"
+                  "name": "allowedFunctions",
+                  "operand": {
+                    "path": "/x-fullmeta-expressionRuntime/real/literal/allowedFunctions",
+                    "source": "schema"
+                  }
+                },
+                {
+                  "name": "dimensionTolerance",
+                  "operand": {
+                    "literal": 1e-10
+                  }
+                },
+                {
+                  "name": "complex",
+                  "operand": {
+                    "literal": true
+                  }
+                },
+                {
+                  "name": "imaginarySymbol",
+                  "operand": {
+                    "literal": "i"
+                  }
+                },
+                {
+                  "name": "complexFunctions",
+                  "operand": {
+                    "path": "/x-fullmeta-expressionRuntime/real/literal/allowedFunctions",
+                    "source": "schema"
+                  }
+                },
+                {
+                  "name": "symbols",
+                  "operand": {
+                    "binding": "boundaryWaveSymbols",
+                    "path": "/symbols"
+                  }
+                },
+                {
+                  "name": "runtimeSymbols",
+                  "operand": {
+                    "literal": [
+                      {
+                        "requiresRuntimeSample": true,
+                        "symbol": "x"
+                      },
+                      {
+                        "requiresRuntimeSample": true,
+                        "symbol": "y"
+                      },
+                      {
+                        "requiresRuntimeSample": true,
+                        "symbol": "z"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "name": "expectedUnit",
+                  "operand": {
+                    "literal": "V/m"
+                  }
                 }
-              ]
-            }
+              ],
+              "subject": {
+                "field": ""
+              },
+              "subjectInput": "value",
+              "type": "semanticCheck"
+            },
+            "diagnostic": {
+              "message": "EM2D Hz Neumann field component must have unit V/m and a valid expression.",
+              "path": ""
+            },
+            "id": "em2d_Hz_neumann_field_value",
+            "name": "EM2D Hz derived boundary field components",
+            "scope": {
+              "nested": [
+                {
+                  "path": "/fieldValues/*"
+                }
+              ],
+              "path": "/model/physics/*",
+              "source": "root",
+              "when": {
+                "all": [
+                  {
+                    "other": {
+                      "literal": "thermal"
+                    },
+                    "subject": {
+                      "path": "/scenario/physics",
+                      "source": "root"
+                    },
+                    "type": "notEquals"
+                  },
+                  {
+                    "subject": {
+                      "field": "/type"
+                    },
+                    "type": "equals",
+                    "other": {
+                      "literal": "neumann"
+                    }
+                  },
+                  {
+                    "other": {
+                      "literal": false
+                    },
+                    "subject": {
+                      "field": "/enabled"
+                    },
+                    "type": "notEquals"
+                  },
+                  {
+                    "subject": {
+                      "path": "/scenario/profileId",
+                      "source": "root"
+                    },
+                    "type": "equals",
+                    "other": {
+                      "literal": "em-2d"
+                    }
+                  },
+                  {
+                    "type": "equals",
+                    "subject": {
+                      "source": "root",
+                      "path": "/model/physics/formulation"
+                    },
+                    "other": {
+                      "literal": "Hz"
+                    }
+                  }
+                ]
+              }
+            },
+            "stage": "model"
           }
         ]
       },
@@ -13751,121 +13885,173 @@
         {
           "forEach": {
             "from": "root",
-            "path": "/model/study/*"
+            "path": "/model/physics/*"
           },
           "as": "__obligationItem0",
           "pathAs": "__obligationPath0",
           "rules": [
             {
-              "let": "path",
-              "value": {
-                "op": "pathString",
-                "args": [
-                  {
-                    "op": "concat",
-                    "args": [
-                      {
-                        "var": "__obligationPath0"
-                      },
-                      {
-                        "literal": [
-                          "discretization",
-                          "elementOrder"
-                        ]
-                      }
-                    ]
-                  }
-                ]
-              }
-            },
-            {
-              "assert": {
-                "op": "eq",
-                "args": [
-                  {
-                    "var": "__obligationItem0",
-                    "path": "/discretization/elementOrder"
-                  },
-                  {
-                    "literal": 1
-                  }
-                ]
-              },
-              "message": "First-order E-H supports first-order elements only.",
-              "when": {
-                "op": "eq",
-                "args": [
-                  {
-                    "var": "__obligationItem0",
-                    "path": "/discretization/fieldFormulation"
-                  },
-                  {
-                    "literal": "firstOrderEH"
-                  }
-                ]
-              }
-            }
-          ]
-        },
-        {
-          "forEach": {
-            "from": "root",
-            "path": "/model/study/*"
-          },
-          "as": "__obligationItem0",
-          "pathAs": "__obligationPath0",
-          "rules": [
-            {
-              "let": "path",
-              "value": {
-                "op": "pathString",
-                "args": [
-                  {
-                    "op": "concat",
-                    "args": [
-                      {
-                        "var": "__obligationPath0"
-                      },
-                      {
-                        "literal": [
-                          "solver",
-                          "backend"
-                        ]
-                      }
-                    ]
-                  }
-                ]
-              }
-            },
-            {
-              "assert": {
-                "op": "eq",
-                "args": [
-                  {
-                    "var": "__obligationItem0",
-                    "path": "/solver/backend"
-                  },
-                  {
-                    "literal": "faer"
-                  }
-                ]
-              },
-              "message": "First-order E-H requires the faer backend.",
-              "when": {
+              "if": {
                 "op": "all",
                 "args": [
+                  {
+                    "op": "ne",
+                    "args": [
+                      {
+                        "var": "root",
+                        "path": "/scenario/physics"
+                      },
+                      {
+                        "literal": "thermal"
+                      }
+                    ]
+                  },
                   {
                     "op": "eq",
                     "args": [
                       {
                         "var": "__obligationItem0",
-                        "path": "/discretization/fieldFormulation"
+                        "path": "/type"
                       },
                       {
-                        "literal": "firstOrderEH"
+                        "literal": "neumann"
                       }
                     ]
                   },
+                  {
+                    "op": "ne",
+                    "args": [
+                      {
+                        "var": "__obligationItem0",
+                        "path": "/enabled"
+                      },
+                      {
+                        "literal": false
+                      }
+                    ]
+                  },
+                  {
+                    "op": "eq",
+                    "args": [
+                      {
+                        "var": "root",
+                        "path": "/scenario/profileId"
+                      },
+                      {
+                        "literal": "em-2d"
+                      }
+                    ]
+                  },
+                  {
+                    "op": "eq",
+                    "args": [
+                      {
+                        "var": "root",
+                        "path": "/model/physics/formulation"
+                      },
+                      {
+                        "literal": "Ez"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "then": [
+                {
+                  "forEach": {
+                    "from": "__obligationItem0",
+                    "path": "/fieldValues/*",
+                    "basePath": {
+                      "var": "__obligationPath0"
+                    }
+                  },
+                  "as": "__obligationItem1",
+                  "pathAs": "__obligationPath1",
+                  "rules": [
+                    {
+                      "let": "path",
+                      "value": {
+                        "op": "text",
+                        "args": [
+                          {
+                            "op": "pathString",
+                            "args": [
+                              {
+                                "var": "__obligationPath1"
+                              }
+                            ]
+                          },
+                          ": ",
+                          "EM2D Ez Neumann field component must have unit A/m and a valid expression."
+                        ]
+                      }
+                    },
+                    {
+                      "check": "quantity",
+                      "input": {
+                        "object": {
+                          "value": {
+                            "var": "__obligationItem1",
+                            "path": ""
+                          },
+                          "evaluationPolicy": {
+                            "var": "schema",
+                            "path": "/x-fullmeta-expressionRuntime/real/literal"
+                          },
+                          "allowedFunctions": {
+                            "var": "schema",
+                            "path": "/x-fullmeta-expressionRuntime/real/literal/allowedFunctions"
+                          },
+                          "dimensionTolerance": {
+                            "literal": 1e-10
+                          },
+                          "complex": {
+                            "literal": true
+                          },
+                          "imaginarySymbol": {
+                            "literal": "i"
+                          },
+                          "complexFunctions": {
+                            "var": "schema",
+                            "path": "/x-fullmeta-expressionRuntime/real/literal/allowedFunctions"
+                          },
+                          "symbols": {
+                            "var": "__derived_boundaryWaveSymbols",
+                            "path": "/symbols"
+                          },
+                          "runtimeSymbols": {
+                            "literal": [
+                              {
+                                "requiresRuntimeSample": true,
+                                "symbol": "x"
+                              },
+                              {
+                                "requiresRuntimeSample": true,
+                                "symbol": "y"
+                              },
+                              {
+                                "requiresRuntimeSample": true,
+                                "symbol": "z"
+                              }
+                            ]
+                          },
+                          "expectedUnit": {
+                            "literal": "A/m"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "when": {
+            "op": "all",
+            "args": [
+              {
+                "op": "all",
+                "args": [
                   {
                     "op": "not",
                     "args": [
@@ -13873,17 +14059,234 @@
                         "op": "isNull",
                         "args": [
                           {
-                            "var": "__obligationItem0",
-                            "path": "/solver/backend"
+                            "var": "__derived_boundaryWaveSymbols"
                           }
                         ]
                       }
                     ]
+                  },
+                  {
+                    "op": "eq",
+                    "args": [
+                      {
+                        "op": "length",
+                        "args": [
+                          {
+                            "var": "__derived_boundaryWaveSymbols",
+                            "path": "/errors"
+                          }
+                        ]
+                      },
+                      0
+                    ]
                   }
                 ]
               }
+            ]
+          }
+        },
+        {
+          "forEach": {
+            "from": "root",
+            "path": "/model/physics/*"
+          },
+          "as": "__obligationItem0",
+          "pathAs": "__obligationPath0",
+          "rules": [
+            {
+              "if": {
+                "op": "all",
+                "args": [
+                  {
+                    "op": "ne",
+                    "args": [
+                      {
+                        "var": "root",
+                        "path": "/scenario/physics"
+                      },
+                      {
+                        "literal": "thermal"
+                      }
+                    ]
+                  },
+                  {
+                    "op": "eq",
+                    "args": [
+                      {
+                        "var": "__obligationItem0",
+                        "path": "/type"
+                      },
+                      {
+                        "literal": "neumann"
+                      }
+                    ]
+                  },
+                  {
+                    "op": "ne",
+                    "args": [
+                      {
+                        "var": "__obligationItem0",
+                        "path": "/enabled"
+                      },
+                      {
+                        "literal": false
+                      }
+                    ]
+                  },
+                  {
+                    "op": "eq",
+                    "args": [
+                      {
+                        "var": "root",
+                        "path": "/scenario/profileId"
+                      },
+                      {
+                        "literal": "em-2d"
+                      }
+                    ]
+                  },
+                  {
+                    "op": "eq",
+                    "args": [
+                      {
+                        "var": "root",
+                        "path": "/model/physics/formulation"
+                      },
+                      {
+                        "literal": "Hz"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "then": [
+                {
+                  "forEach": {
+                    "from": "__obligationItem0",
+                    "path": "/fieldValues/*",
+                    "basePath": {
+                      "var": "__obligationPath0"
+                    }
+                  },
+                  "as": "__obligationItem1",
+                  "pathAs": "__obligationPath1",
+                  "rules": [
+                    {
+                      "let": "path",
+                      "value": {
+                        "op": "text",
+                        "args": [
+                          {
+                            "op": "pathString",
+                            "args": [
+                              {
+                                "var": "__obligationPath1"
+                              }
+                            ]
+                          },
+                          ": ",
+                          "EM2D Hz Neumann field component must have unit V/m and a valid expression."
+                        ]
+                      }
+                    },
+                    {
+                      "check": "quantity",
+                      "input": {
+                        "object": {
+                          "value": {
+                            "var": "__obligationItem1",
+                            "path": ""
+                          },
+                          "evaluationPolicy": {
+                            "var": "schema",
+                            "path": "/x-fullmeta-expressionRuntime/real/literal"
+                          },
+                          "allowedFunctions": {
+                            "var": "schema",
+                            "path": "/x-fullmeta-expressionRuntime/real/literal/allowedFunctions"
+                          },
+                          "dimensionTolerance": {
+                            "literal": 1e-10
+                          },
+                          "complex": {
+                            "literal": true
+                          },
+                          "imaginarySymbol": {
+                            "literal": "i"
+                          },
+                          "complexFunctions": {
+                            "var": "schema",
+                            "path": "/x-fullmeta-expressionRuntime/real/literal/allowedFunctions"
+                          },
+                          "symbols": {
+                            "var": "__derived_boundaryWaveSymbols",
+                            "path": "/symbols"
+                          },
+                          "runtimeSymbols": {
+                            "literal": [
+                              {
+                                "requiresRuntimeSample": true,
+                                "symbol": "x"
+                              },
+                              {
+                                "requiresRuntimeSample": true,
+                                "symbol": "y"
+                              },
+                              {
+                                "requiresRuntimeSample": true,
+                                "symbol": "z"
+                              }
+                            ]
+                          },
+                          "expectedUnit": {
+                            "literal": "V/m"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
             }
-          ]
+          ],
+          "when": {
+            "op": "all",
+            "args": [
+              {
+                "op": "all",
+                "args": [
+                  {
+                    "op": "not",
+                    "args": [
+                      {
+                        "op": "isNull",
+                        "args": [
+                          {
+                            "var": "__derived_boundaryWaveSymbols"
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "op": "eq",
+                    "args": [
+                      {
+                        "op": "length",
+                        "args": [
+                          {
+                            "var": "__derived_boundaryWaveSymbols",
+                            "path": "/errors"
+                          }
+                        ]
+                      },
+                      0
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
         }
       ]
     },

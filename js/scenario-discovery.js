@@ -302,7 +302,23 @@ function configureScenarioSchema(root, document, id) {
   const branches = supported.map(type => {
     const branch = fixedSchemas.find(candidate => candidate?.properties?.type?.const === type);
     if (!branch) throw new Error(`FEM base schema has no fixed Physics condition variant for ${type}.`);
-    return structuredClone(branch);
+    const effective = structuredClone(branch);
+    const layout = physics?.boundaryFieldLayouts?.[type];
+    if (!layout) delete effective.properties?.fieldValues;
+    else {
+      if (!['primary', 'derived'].includes(layout.role) || !Array.isArray(layout.shape) || !layout.shape.length
+        || layout.shape.some(size => !Number.isSafeInteger(size) || size < 1))
+        throw new Error(`FEM scenario ${id} must declare a field role and positive shape for ${type}.`);
+      const count = layout.shape.reduce((total, size) => total * size, 1);
+      if (!Number.isSafeInteger(count) || count > 1024 || !Array.isArray(layout.componentLabels)
+        || layout.componentLabels.length !== count || layout.componentLabels.some(label => typeof label !== 'string' || !label.trim()))
+        throw new Error(`FEM scenario ${id} must label every field component for ${type}.`);
+      effective.properties.fieldValues.minItems = count;
+      effective.properties.fieldValues.maxItems = count;
+      effective.properties.fieldValues['x-fullmeta-ui-behavior'].payload.widget.settings.componentLabels = [...layout.componentLabels];
+      if (layout.zeroScalarOnly && effective.properties?.value) effective.properties.value.title = 'scalar value (zero only)';
+    }
+    return effective;
   });
   const basePhysicsProperties = root.properties?.model?.properties?.physics?.properties;
   if (!isRecord(basePhysicsProperties)) throw new Error('FEM base schema must declare its fixed Physics properties.');

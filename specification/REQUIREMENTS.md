@@ -33,6 +33,7 @@ Implement the profile/formulation, preparation, backend, element-order and outpu
 | `em-2d` | `Ez` or `Hz` | Harmonic studies following the linked Physics interface. |
 | `em-3d` | Electric field | Harmonic studies with the specified Nédélec orders and backends. |
 | `thermal-2d` | Temperature | Stationary thermal solve with the specified field and summary outputs. |
+| `thermal-3d` | Temperature | Stationary heat conduction on 3D tetrahedral meshes, with nodal temperature and per-cell heat flux. |
 
 A structurally permitted option is not automatically an implemented numerical capability. Preserve the exact experimental-option rules, formulation matching and rejection behavior specified by the format, validation and solver contracts. An unsupported valid input needs an explicit unsupported-capability result; it must not be silently reinterpreted.
 

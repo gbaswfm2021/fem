@@ -22,6 +22,16 @@
       "default": true
     },
     {
+      "id": "elastic-2d",
+      "file": "elastic2d.json",
+      "default": false
+    },
+    {
+      "id": "elastic-3d",
+      "file": "elastic3d.json",
+      "default": false
+    },
+    {
       "id": "thermal-2d",
       "file": "thermal2d.json",
       "default": false

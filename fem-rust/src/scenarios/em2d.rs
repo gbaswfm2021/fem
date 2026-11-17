@@ -65,12 +65,90 @@ fn triangle_quadrature(rule: &str) -> Result<Vec<[f64; 4]>, String> {
 
 #[derive(Clone)]
 enum BoundaryCondition {
-    Dirichlet(Value),
-    Neumann(Value),
+    Dirichlet(model_expression::CompiledComplexQuantity),
+    Neumann {
+        scalar: model_expression::CompiledComplexQuantity,
+        field: Option<[model_expression::CompiledComplexQuantity; 2]>,
+    },
     Impedance {
         impedance: Value,
         incident: Option<model_expression::CompiledComplexQuantity>,
     },
+}
+
+fn compile_boundary_quantity(
+    value: &Value,
+    unit: &str,
+    path: &str,
+) -> Result<model_expression::CompiledComplexQuantity, String> {
+    let actual = value
+        .get("unit")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("{path}.unit is required."))?;
+    let actual_dimension = model_expression::unit(actual)?.1;
+    let expected_dimension = model_expression::unit(unit)?.1;
+    if actual_dimension
+        .iter()
+        .zip(expected_dimension)
+        .any(|(a, b)| (a - b).abs() > 1e-10)
+    {
+        return Err(format!("{path} must have units compatible with {unit}."));
+    }
+    model_expression::CompiledComplexQuantity::compile(value, path)
+}
+
+fn compile_boundary(
+    boundary: &Value,
+    formulation: &str,
+    path: &str,
+) -> Result<BoundaryCondition, String> {
+    let value = boundary
+        .get("value")
+        .ok_or_else(|| format!("{path}.value is required"))?;
+    match boundary.get("type").and_then(Value::as_str) {
+        Some("dirichlet") => Ok(BoundaryCondition::Dirichlet(compile_boundary_quantity(
+            value,
+            if formulation == "Ez" { "V/m" } else { "A/m" },
+            &format!("{path}.value"),
+        )?)),
+        Some("neumann") => {
+            let scalar = compile_boundary_quantity(
+                value,
+                if formulation == "Ez" {
+                    "V/m^2"
+                } else {
+                    "A/m^2"
+                },
+                &format!("{path}.value"),
+            )?;
+            let field = boundary
+                .get("fieldValues")
+                .map(|values| {
+                    let values = values
+                        .as_array()
+                        .filter(|values| values.len() == 2)
+                        .ok_or_else(|| {
+                            format!("{path}.fieldValues requires two Cartesian components.")
+                        })?;
+                    let unit = if formulation == "Ez" { "A/m" } else { "V/m" };
+                    Ok::<_, String>([
+                        compile_boundary_quantity(
+                            &values[0],
+                            unit,
+                            &format!("{path}.fieldValues[0]"),
+                        )?,
+                        compile_boundary_quantity(
+                            &values[1],
+                            unit,
+                            &format!("{path}.fieldValues[1]"),
+                        )?,
+                    ])
+                })
+                .transpose()?;
+            Ok(BoundaryCondition::Neumann { scalar, field })
+        }
+        _ => Err(format!("{path} must be a Dirichlet or Neumann condition.")),
+    }
 }
 
 pub(super) fn resolve_from(base: &Path, value: &str) -> PathBuf {
@@ -214,12 +292,9 @@ fn assemble(
                 for node in edge {
                     let point = mesh.nodes[*node];
                     let symbols = scalar2d::symbols_at_point(parameters, frequency_hz, point);
-                    let value = scalar2d::quantity(
-                        expression,
-                        &symbols,
-                        &format!("boundary tag {tag}.value"),
-                    )?;
-                    if !value.is_finite() {
+                    let value =
+                        expression.evaluate(&symbols, &format!("boundary tag {tag}.value"))?;
+                    if !value.re.is_finite() || !value.im.is_finite() {
                         return Err(format!(
                             "Dirichlet boundary tag {tag} evaluated to a non-finite field value."
                         ));
@@ -228,11 +303,14 @@ fn assemble(
                         &mut dirichlet_nodes,
                         periodic,
                         *node,
-                        C { re: value, im: 0.0 },
+                        C {
+                            re: value.re,
+                            im: value.im,
+                        },
                     )?;
                 }
             }
-            BoundaryCondition::Neumann(expression) => {
+            BoundaryCondition::Neumann { scalar, field } => {
                 if adjacent.len() != 1 {
                     return Err(format!(
                         "Neumann boundary selection tag {tag} must target an exterior edge."
@@ -252,6 +330,31 @@ fn assemble(
                     0.478628670499366,
                     0.236926885056189,
                 ];
+                // Orient the outward normal using the triangle, independent of mesh edge order.
+                let triangle = mesh.triangles[adjacent[0].0].0;
+                let midpoint = [
+                    (edge_points[0][0] + edge_points[1][0]) * 0.5,
+                    (edge_points[0][1] + edge_points[1][1]) * 0.5,
+                ];
+                let centroid = [
+                    triangle
+                        .iter()
+                        .map(|node| mesh.nodes[*node][0])
+                        .sum::<f64>()
+                        / 3.0,
+                    triangle
+                        .iter()
+                        .map(|node| mesh.nodes[*node][1])
+                        .sum::<f64>()
+                        / 3.0,
+                ];
+                let mut normal = [delta[1] / length, -delta[0] / length];
+                if normal[0] * (centroid[0] - midpoint[0]) + normal[1] * (centroid[1] - midpoint[1])
+                    > 0.0
+                {
+                    normal = [-normal[0], -normal[1]];
+                }
+                let tangent = [-normal[1], normal[0]];
                 for (position, weight) in POSITIONS.into_iter().zip(WEIGHTS) {
                     let t = (position + 1.0) * 0.5;
                     let point = [
@@ -260,19 +363,51 @@ fn assemble(
                         0.0,
                     ];
                     let symbols = scalar2d::symbols_at_point(parameters, frequency_hz, point);
-                    let value = scalar2d::quantity(
-                        expression,
-                        &symbols,
-                        &format!("boundary tag {tag}.value"),
-                    )?;
-                    if !value.is_finite() {
+                    let scalar_value =
+                        scalar.evaluate(&symbols, &format!("boundary tag {tag}.value"))?;
+                    if !scalar_value.re.is_finite() || !scalar_value.im.is_finite() {
                         return Err(format!(
                             "Neumann boundary tag {tag} evaluated to non-finite conormal boundary data."
                         ));
                     }
+                    let value = if let Some(field) = field {
+                        if scalar_value.re != 0.0 || scalar_value.im != 0.0 {
+                            return Err(format!(
+                                "Neumann boundary tag {tag} must have zero scalar value when fieldValues is supplied."
+                            ));
+                        }
+                        let x = field[0]
+                            .evaluate(&symbols, &format!("boundary tag {tag}.fieldValues[0]"))?;
+                        let y = field[1]
+                            .evaluate(&symbols, &format!("boundary tag {tag}.fieldValues[1]"))?;
+                        let trace = C {
+                            re: tangent[0] * x.re + tangent[1] * y.re,
+                            im: tangent[0] * x.im + tangent[1] * y.im,
+                        };
+                        let factor = if formulation == "Ez" {
+                            omega * MU0
+                        } else {
+                            -omega * EPS0
+                        };
+                        C {
+                            re: -factor * trace.im,
+                            im: factor * trace.re,
+                        }
+                    } else {
+                        C {
+                            re: scalar_value.re,
+                            im: scalar_value.im,
+                        }
+                    };
+                    if !value.re.is_finite() || !value.im.is_finite() {
+                        return Err(format!(
+                            "Neumann boundary tag {tag} evaluated to non-finite field data."
+                        ));
+                    }
                     let weighted_length = length * weight * 0.5;
                     for (local, shape) in [(0, 1.0 - t), (1, t)] {
-                        rhs_re[edge[local]] += weighted_length * shape * value;
+                        rhs_re[edge[local]] += weighted_length * shape * value.re;
+                        rhs_im[edge[local]] += weighted_length * shape * value.im;
                     }
                 }
             }
@@ -507,16 +642,24 @@ fn run_model(
             if let Some(&material) = constant_materials.get(tag) {
                 samples.resize(quadrature.len(), material);
             } else {
-                let sample_points = quadrature.iter().map(|q| {
-                    (0..3).fold([0.0; 3], |mut point, local| {
-                        for axis in 0..3 {
-                            point[axis] += q[local] * points[local][axis];
-                        }
-                        point
+                let sample_points = quadrature
+                    .iter()
+                    .map(|q| {
+                        (0..3).fold([0.0; 3], |mut point, local| {
+                            for axis in 0..3 {
+                                point[axis] += q[local] * points[local][axis];
+                            }
+                            point
+                        })
                     })
-                }).collect::<Vec<_>>();
-                let rows = compiled_materials.evaluate_batch(*tag, &parameter_symbols, frequency,
-                    &sample_points, &format!("triangle {element} quadrature point"))?;
+                    .collect::<Vec<_>>();
+                let rows = compiled_materials.evaluate_batch(
+                    *tag,
+                    &parameter_symbols,
+                    frequency,
+                    &sample_points,
+                    &format!("triangle {element} quadrature point"),
+                )?;
                 for values in rows {
                     samples.push(em_material_from_values(&values, frequency, formulation)?);
                 }
@@ -534,18 +677,7 @@ fn run_model(
             );
             let kind = boundary.get("type").and_then(Value::as_str).unwrap_or("");
             let condition = match kind {
-                "dirichlet" => BoundaryCondition::Dirichlet(
-                    boundary
-                        .get("value")
-                        .cloned()
-                        .ok_or_else(|| format!("{path}.value is required"))?,
-                ),
-                "neumann" => BoundaryCondition::Neumann(
-                    boundary
-                        .get("value")
-                        .cloned()
-                        .ok_or_else(|| format!("{path}.value is required"))?,
-                ),
+                "dirichlet" | "neumann" => compile_boundary(boundary, formulation, &path)?,
                 "impedance" => BoundaryCondition::Impedance {
                     impedance: boundary
                         .get("impedance")
@@ -945,4 +1077,239 @@ pub(crate) fn run(arguments: &[String]) -> Result<i32, String> {
         |request, _cache| run_request(request),
         crate::run_shared_operation,
     )
+}
+
+#[cfg(test)]
+mod boundary_tests {
+    use super::*;
+
+    fn quantity(expression: &str, unit: &str) -> Value {
+        json!({"expression":expression,"unit":unit})
+    }
+
+    fn mesh(edge: [usize; 2]) -> Mesh2D {
+        Mesh2D {
+            nodes: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            triangles: vec![([0, 1, 2], 1)],
+            boundary_edges: vec![(edge, 2)],
+            integration_edges: vec![],
+        }
+    }
+
+    fn periodic() -> scalar2d::PeriodicDofMap {
+        scalar2d::PeriodicDofMap {
+            node_to_dof: vec![0, 1, 2],
+            node_weights: vec![C { re: 1.0, im: 0.0 }; 3],
+            dof_count: 3,
+            boundary_tags: HashSet::new(),
+            boundary_edges: HashSet::new(),
+        }
+    }
+
+    #[test]
+    fn field_neumann_uses_outward_tangent_for_both_formulations_and_edge_orientations() {
+        let frequency = 1e8;
+        let materials = vec![vec![
+            Material {
+                mu: 1.0,
+                epsilon: C { re: 1.0, im: 0.0 }
+            };
+            triangle_quadrature("standard").unwrap().len()
+        ]];
+        for formulation in ["Ez", "Hz"] {
+            let (scalar_unit, field_unit, factor) = if formulation == "Ez" {
+                ("V/m^2", "A/m", std::f64::consts::TAU * frequency * MU0)
+            } else {
+                ("A/m^2", "V/m", -std::f64::consts::TAU * frequency * EPS0)
+            };
+            for (edge, tangent) in [
+                ([0, 1], [1.0, 0.0]),
+                (
+                    [1, 2],
+                    [
+                        -std::f64::consts::FRAC_1_SQRT_2,
+                        std::f64::consts::FRAC_1_SQRT_2,
+                    ],
+                ),
+                ([2, 0], [0.0, -1.0]),
+            ] {
+                for oriented_edge in [edge, [edge[1], edge[0]]] {
+                    let boundary = json!({"type":"neumann","value":quantity("0",scalar_unit),"fieldValues":[quantity("1+2*i",field_unit),quantity("3-4*i",field_unit)]});
+                    let conditions = HashMap::from([(
+                        2,
+                        compile_boundary(&boundary, formulation, "bc").unwrap(),
+                    )]);
+                    let mesh = mesh(oriented_edge);
+                    let (_, re, im, _) = assemble(
+                        &mesh,
+                        &materials,
+                        "standard",
+                        &conditions,
+                        frequency,
+                        formulation,
+                        &periodic(),
+                        &HashMap::new(),
+                    )
+                    .unwrap();
+                    let length = (mesh.nodes[edge[1]][0] - mesh.nodes[edge[0]][0])
+                        .hypot(mesh.nodes[edge[1]][1] - mesh.nodes[edge[0]][1]);
+                    let expected_re =
+                        -factor * (2.0 * tangent[0] - 4.0 * tangent[1]) * length / 2.0;
+                    let expected_im = factor * (tangent[0] + 3.0 * tangent[1]) * length / 2.0;
+                    for node in edge {
+                        assert!(
+                            (re[node] - expected_re).abs() < 1e-10,
+                            "{formulation} {oriented_edge:?} real"
+                        );
+                        assert!(
+                            (im[node] - expected_im).abs() < 1e-10,
+                            "{formulation} {oriented_edge:?} imaginary"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn complex_primary_and_legacy_neumann_and_invalid_field_units() {
+        let materials = vec![vec![
+            Material {
+                mu: 1.0,
+                epsilon: C { re: 1.0, im: 0.0 }
+            };
+            triangle_quadrature("standard").unwrap().len()
+        ]];
+        let mesh = mesh([0, 1]);
+        let d = json!({"type":"dirichlet","value":quantity("2+3*i","V/m")});
+        let (_, _, _, constraints) = assemble(
+            &mesh,
+            &materials,
+            "standard",
+            &HashMap::from([(2, compile_boundary(&d, "Ez", "bc").unwrap())]),
+            1e8,
+            "Ez",
+            &periodic(),
+            &HashMap::new(),
+        )
+        .unwrap();
+        for node in [0, 1] {
+            assert_eq!((constraints[&node].re, constraints[&node].im), (2.0, 3.0));
+        }
+        let n = json!({"type":"neumann","value":quantity("2+3*i","V/m^2")});
+        let (_, re, im, _) = assemble(
+            &mesh,
+            &materials,
+            "standard",
+            &HashMap::from([(2, compile_boundary(&n, "Ez", "bc").unwrap())]),
+            1e8,
+            "Ez",
+            &periodic(),
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert!((re[0] - 1.0).abs() < 1e-12 && (im[0] - 1.5).abs() < 1e-12);
+        let invalid = json!({"type":"neumann","value":quantity("0","V/m^2"),"fieldValues":[quantity("1","V/m"),quantity("0","V/m")]});
+        assert!(compile_boundary(&invalid, "Ez", "bc").is_err());
+        let conflict = json!({"type":"neumann","value":quantity("1","V/m^2"),"fieldValues":[quantity("0","A/m"),quantity("0","A/m")]});
+        assert!(
+            assemble(
+                &mesh,
+                &materials,
+                "standard",
+                &HashMap::from([(2, compile_boundary(&conflict, "Ez", "bc").unwrap())]),
+                1e8,
+                "Ez",
+                &periodic(),
+                &HashMap::new()
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn manufactured_linear_fields_solve_with_derived_neumann_data() {
+        let frequency = 1e8;
+        let omega = std::f64::consts::TAU * frequency;
+        for formulation in ["Ez", "Hz"] {
+            // The zero reaction coefficient isolates an exact linear solution.
+            let (primary_unit, scalar_unit, field_unit, material, scale, sign) =
+                if formulation == "Ez" {
+                    (
+                        "V/m",
+                        "V/m^2",
+                        "A/m",
+                        Material {
+                            mu: 1.0,
+                            epsilon: C { re: 0.0, im: 0.0 },
+                        },
+                        1.0 / (omega * MU0),
+                        1.0,
+                    )
+                } else {
+                    (
+                        "A/m",
+                        "A/m^2",
+                        "V/m",
+                        Material {
+                            mu: 0.0,
+                            epsilon: C { re: 1.0, im: 0.0 },
+                        },
+                        1.0 / (omega * EPS0),
+                        -1.0,
+                    )
+                };
+            let mut mesh = mesh([0, 1]);
+            mesh.boundary_edges = vec![([0, 1], 1), ([1, 2], 2), ([2, 0], 2)];
+            let dirichlet = json!({"type":"dirichlet","value":quantity("s*(x+2*y)",primary_unit)});
+            let neumann = json!({"type":"neumann","value":quantity("0",scalar_unit),"fieldValues":[quantity(&format!("{}*i",2.0*sign*scale),field_unit),quantity(&format!("{}*i",-sign*scale),field_unit)]});
+            let boundaries = HashMap::from([
+                (1, compile_boundary(&dirichlet, formulation, "d").unwrap()),
+                (2, compile_boundary(&neumann, formulation, "n").unwrap()),
+            ]);
+            let parameters = HashMap::from([(
+                "s".to_string(),
+                model_expression::Scalar {
+                    value: 1.0,
+                    dimension: model_expression::unit(scalar_unit).unwrap().1,
+                },
+            )]);
+            let materials = vec![vec![
+                material;
+                triangle_quadrature("standard").unwrap().len()
+            ]];
+            let (matrix, re, im, constraints) = assemble(
+                &mesh,
+                &materials,
+                "standard",
+                &boundaries,
+                frequency,
+                formulation,
+                &periodic(),
+                &parameters,
+            )
+            .unwrap();
+            let (mut matrix, mut re, mut im) =
+                scalar2d::reduce_system(&matrix, &re, &im, &periodic()).unwrap();
+            scalar2d::apply_complex_dirichlet(&mut matrix, &mut re, &mut im, &constraints).unwrap();
+            let (solution, imag, _) = solve_linear_system(
+                &matrix,
+                &re,
+                &im,
+                1e-7,
+                "faer",
+                "default",
+                1,
+                &mut SolverCache::default(),
+            )
+            .unwrap();
+            for (actual, expected) in solution.iter().zip([0.0, 1.0, 2.0]) {
+                assert!(
+                    (actual - expected).abs() < 1e-8,
+                    "{formulation}: {solution:?}"
+                );
+            }
+            assert!(imag.iter().all(|v| v.abs() < 1e-8));
+        }
+    }
 }

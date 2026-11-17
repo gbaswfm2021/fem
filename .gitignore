@@ -2,3 +2,4 @@
 /.build/
 /implementation/
 /tests/
+*.zip

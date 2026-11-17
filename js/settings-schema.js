@@ -87,6 +87,25 @@ function bindChoices(field,source,key){
 export function projectSettingsSchema({model,path,schema,getSchema,scenario}){
   const profileId=model?.scenario?.profileId,catalog=schema['x-fem-capabilities'];
   if(path?.[0]!=='model')return getSchema(path);
+  if(path[1]==='physics'&&typeof path[2]==='string'){
+    const rootPath=path.slice(0,3),condition=at(model,rootPath);
+    const physics=schema.$defs?.femProfiles?.[profileId]?.['x-fem-physics'];
+    const layout=physics?.boundaryFieldLayouts?.[condition?.type];
+    if(layout){
+      const root=structuredClone(getSchema(rootPath)),fields=root?.properties;
+      if(fields?.fieldValues){
+        const ui=presentation(fields.fieldValues);
+        ui.payload.widget||={type:'quantityVector',settings:{}};
+        ui.payload.widget.settings||={};
+        ui.payload.widget.settings.componentLabels=[...layout.componentLabels];
+        (ui.payload.presentation||={}).optionalToggleLabel='Specify field components';
+        const defaults=physics.boundaryDefaultsByFormulation?.[model.model.physics.formulation]?.[condition.type]?.fieldValues;
+        if(defaults)fields.fieldValues.default=structuredClone(defaults);
+      }
+      if(layout.zeroScalarOnly&&fields?.value)fields.value.title='scalar value (zero only)';
+      return path.length===3?root:getSchema(path);
+    }
+  }
   if(path[1]==='materials'&&Number.isInteger(path[2])){
     const root=structuredClone(getSchema(path.slice(0,3)));
     for(const field of materialPropertyDescriptors(scenario,root)){

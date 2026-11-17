@@ -26,6 +26,8 @@ pub(crate) enum BoundaryCondition {
     Temperature(f64),
     /// q dot n in W/m^2. Positive values remove heat; zero is insulation.
     OutwardHeatFlux(f64),
+    /// Model x/y components of q in W/m^2; each exterior edge takes its normal trace.
+    HeatFluxVector([f64; 2]),
 }
 
 #[derive(Clone, Debug)]
@@ -181,6 +183,9 @@ fn solve_with_mean(
         let valid = match condition {
             BoundaryCondition::Temperature(value) => value.is_finite(),
             BoundaryCondition::OutwardHeatFlux(value) => value.is_finite(),
+            BoundaryCondition::HeatFluxVector(values) => {
+                values.iter().all(|value| value.is_finite())
+            }
         };
         if tag == 0 || !valid {
             return Err(format!(
@@ -198,6 +203,7 @@ fn solve_with_mean(
     let mut used_nodes = vec![false; count];
     let mut cells = HashSet::new();
     let mut edge_cells = HashMap::<[usize; 2], usize>::new();
+    let mut edge_opposites = HashMap::<[usize; 2], usize>::new();
     let mut cell_gradients = Vec::with_capacity(mesh.triangles.len());
     let mut conductivity_by_cell = Vec::with_capacity(mesh.triangles.len());
     let mut node_areas = vec![0.0; count];
@@ -221,6 +227,9 @@ fn solve_with_mean(
             used_nodes[triangle[local]] = true;
             node_areas[triangle[local]] += area / 3.0;
             let edge = edge_key([triangle[local], triangle[(local + 1) % 3]]);
+            edge_opposites
+                .entry(edge)
+                .or_insert(triangle[(local + 2) % 3]);
             let adjacent = edge_cells.entry(edge).or_default();
             *adjacent += 1;
             if *adjacent > 2 {
@@ -326,7 +335,25 @@ fn solve_with_mean(
                     }
                 }
             }
-            BoundaryCondition::OutwardHeatFlux(value) => {
+            BoundaryCondition::OutwardHeatFlux(_) | BoundaryCondition::HeatFluxVector(_) => {
+                let value = match *condition {
+                    BoundaryCondition::OutwardHeatFlux(value) => value,
+                    BoundaryCondition::HeatFluxVector(vector) => {
+                        let mut normal = [
+                            (second[1] - first[1]) / length,
+                            -(second[0] - first[0]) / length,
+                        ];
+                        let opposite = mesh.nodes[edge_opposites[&key]];
+                        if normal[0] * (opposite[0] - first[0])
+                            + normal[1] * (opposite[1] - first[1])
+                            > 0.0
+                        {
+                            normal = [-normal[0], -normal[1]];
+                        }
+                        normal[0] * vector[0] + normal[1] * vector[1]
+                    }
+                    BoundaryCondition::Temperature(_) => unreachable!(),
+                };
                 // Integrating -div(k grad(T))=0 by parts gives
                 // K*T = -integral(q dot n * N). Each linear edge basis
                 // integrates to half the edge length for constant flux.
@@ -585,11 +612,28 @@ fn boundary_condition(
             "K",
             &format!("{path}.value"),
         )?)),
-        "neumann" => Ok(BoundaryCondition::OutwardHeatFlux(expressions.quantity(
-            value,
-            "W/m^2",
-            &format!("{path}.value"),
-        )?)),
+        "neumann" => {
+            let scalar = expressions.quantity(value, "W/m^2", &format!("{path}.value"))?;
+            if let Some(field) = boundary.get("fieldValues") {
+                if scalar != 0.0 {
+                    return Err(format!(
+                        "{path}.value must evaluate to zero when fieldValues is supplied."
+                    ));
+                }
+                let field = field
+                    .as_array()
+                    .filter(|values| values.len() == 2)
+                    .ok_or_else(|| {
+                        format!("{path}.fieldValues requires two Cartesian components.")
+                    })?;
+                Ok(BoundaryCondition::HeatFluxVector([
+                    expressions.quantity(&field[0], "W/m^2", &format!("{path}.fieldValues[0]"))?,
+                    expressions.quantity(&field[1], "W/m^2", &format!("{path}.fieldValues[1]"))?,
+                ]))
+            } else {
+                Ok(BoundaryCondition::OutwardHeatFlux(scalar))
+            }
+        }
         other => Err(format!(
             "{path}.type {other:?} is unsupported; use 'dirichlet' or 'neumann'."
         )),
@@ -981,8 +1025,10 @@ pub(crate) fn run_request(request_path: &Path) -> Result<(), Box<dyn Error>> {
     }
     fs::write(
         output_directory.join(csv_filename),
-        format!("case,unknowns,residual,minimum_temperature_K,maximum_temperature_K\n0,{},{:.12e},{minimum:.12e},{maximum:.12e}\n",
-            solution.unknowns, solution.residual),
+        format!(
+            "case,unknowns,residual,minimum_temperature_K,maximum_temperature_K\n0,{},{:.12e},{minimum:.12e},{maximum:.12e}\n",
+            solution.unknowns, solution.residual
+        ),
     )?;
     println!(
         "Thermal 2D · {} unknowns · {} triangles · residual {:.2e} · T [{minimum:.6e}, {maximum:.6e}] K",
@@ -1009,4 +1055,137 @@ pub(crate) fn run(arguments: &[String]) -> Result<i32, String> {
         |request, _cache| run_request(request),
         crate::run_shared_operation,
     )
+}
+
+#[cfg(test)]
+mod boundary_tests {
+    use super::*;
+
+    fn mesh(reversed: bool) -> Mesh2D {
+        let edges = [([0, 2], 1), ([1, 3], 2), ([0, 1], 3), ([2, 3], 4)];
+        Mesh2D {
+            nodes: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [1.0, 1.0, 0.0],
+            ],
+            triangles: vec![([0, 1, 2], 1), ([1, 3, 2], 1)],
+            boundary_edges: edges
+                .into_iter()
+                .map(|(edge, tag)| (if reversed { [edge[1], edge[0]] } else { edge }, tag))
+                .collect(),
+            integration_edges: vec![],
+        }
+    }
+    fn periodic() -> PeriodicDofMap {
+        PeriodicDofMap {
+            node_to_dof: vec![0, 1, 2, 3],
+            node_weights: vec![C { re: 1.0, im: 0.0 }; 4],
+            dof_count: 4,
+            boundary_tags: HashSet::new(),
+            boundary_edges: HashSet::new(),
+        }
+    }
+    fn settings() -> SolverSettings {
+        SolverSettings {
+            backend: "faer".into(),
+            ordering: "default".into(),
+            threads: 1,
+            constitutive_quadrature: "standard".into(),
+        }
+    }
+    #[test]
+    fn prescribed_vector_matches_scalar_and_linear_slab_for_reversed_edges() {
+        for reversed in [false, true] {
+            let mesh = mesh(reversed);
+            let k = HashMap::from([(1, 1.0)]);
+            let base = HashMap::from([
+                (1, BoundaryCondition::Temperature(300.0)),
+                (2, BoundaryCondition::OutwardHeatFlux(2.0)),
+            ]);
+            let expected = solve(&mesh, &k, &base, &settings(), &periodic()).unwrap();
+            for flux in [[2.0, 0.0], [2.0, 99.0]] {
+                let conditions = HashMap::from([
+                    (1, BoundaryCondition::Temperature(300.0)),
+                    (2, BoundaryCondition::HeatFluxVector(flux)),
+                ]);
+                let actual = solve(&mesh, &k, &conditions, &settings(), &periodic()).unwrap();
+                for (node, value) in [300.0, 298.0, 300.0, 298.0].into_iter().enumerate() {
+                    assert!((actual.temperature_kelvin[node] - value).abs() < 1e-8);
+                    assert!(
+                        (actual.temperature_kelvin[node] - expected.temperature_kelvin[node]).abs()
+                            < 1e-8
+                    );
+                }
+                for cell in actual.heat_flux_by_cell {
+                    assert!((cell[0] - 2.0).abs() < 1e-8 && cell[1].abs() < 1e-8);
+                }
+            }
+            let no_flux = HashMap::from([(1, BoundaryCondition::Temperature(300.0))]);
+            let explicit_zero = HashMap::from([
+                (1, BoundaryCondition::Temperature(300.0)),
+                (2, BoundaryCondition::HeatFluxVector([0.0, 0.0])),
+            ]);
+            let natural = solve(&mesh, &k, &no_flux, &settings(), &periodic()).unwrap();
+            let zero = solve(&mesh, &k, &explicit_zero, &settings(), &periodic()).unwrap();
+            for i in 0..4 {
+                assert!((natural.temperature_kelvin[i] - zero.temperature_kelvin[i]).abs() < 1e-8);
+            }
+        }
+    }
+    #[test]
+    fn vector_flux_preserves_heat_balance_and_mean_temperature() {
+        let mesh = mesh(false);
+        let k = HashMap::from([(1, 1.0)]);
+        let vector = BoundaryCondition::HeatFluxVector([2.0, 1.0]);
+        let boundaries = HashMap::from([(1, vector), (2, vector), (3, vector), (4, vector)]);
+        let solution =
+            solve_with_mean(&mesh, &k, &boundaries, &settings(), &periodic(), 300.0).unwrap();
+        for (actual, expected) in solution
+            .temperature_kelvin
+            .iter()
+            .zip([301.5, 299.5, 300.5, 298.5])
+        {
+            assert!(
+                (actual - expected).abs() < 1e-8,
+                "{:?}",
+                solution.temperature_kelvin
+            );
+        }
+        let unbalanced = HashMap::from([(2, vector)]);
+        let error = match solve_with_mean(&mesh, &k, &unbalanced, &settings(), &periodic(), 300.0) {
+            Ok(_) => panic!("unbalanced flux must fail"),
+            Err(e) => e,
+        };
+        assert!(error.contains("incompatible net heat load"), "{error}");
+    }
+    #[test]
+    fn field_values_validate_units_shape_and_real_constant_scope() {
+        let context = ExpressionContext {
+            symbols: Map::new(),
+            allowed_functions: vec![],
+        };
+        let q = |expression, unit| json!({"expression":expression,"unit":unit});
+        let field = json!({"type":"neumann","value":q("0","W/m^2"),"fieldValues":[q("2","W/m^2"),q("3","W/m^2")]});
+        assert!(matches!(
+            boundary_condition(&field, "bc", &context).unwrap(),
+            BoundaryCondition::HeatFluxVector([2.0, 3.0])
+        ));
+        let mut invalid = field.clone();
+        invalid["fieldValues"][0] = q("2", "K");
+        assert!(boundary_condition(&invalid, "bc", &context).is_err());
+        invalid = field.clone();
+        invalid["fieldValues"] = json!([q("1", "W/m^2")]);
+        assert!(boundary_condition(&invalid, "bc", &context).is_err());
+        invalid = field.clone();
+        invalid["fieldValues"][0] = q("x", "W/m^2");
+        assert!(boundary_condition(&invalid, "bc", &context).is_err());
+        invalid = field.clone();
+        invalid["fieldValues"][0] = q("i", "W/m^2");
+        assert!(boundary_condition(&invalid, "bc", &context).is_err());
+        invalid = field.clone();
+        invalid["value"] = q("1", "W/m^2");
+        assert!(boundary_condition(&invalid, "bc", &context).is_err());
+    }
 }

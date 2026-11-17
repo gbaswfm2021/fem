@@ -600,7 +600,39 @@ fn configure_profile_schema(
                 .ok_or_else(|| {
                     format!("FEM base schema has no fixed Physics {kind} variant for {condition_type:?}.")
                 })?;
-            profile_branches.push(branch.clone());
+            let mut branch = branch.clone();
+            let layout = physics.get("boundaryFieldLayouts").and_then(|layouts| layouts.get(condition_type));
+            if layout.is_none() {
+                if let Some(properties) = branch.get_mut("properties").and_then(Value::as_object_mut) {
+                    properties.remove("fieldValues");
+                }
+            } else {
+                let layout = layout.unwrap();
+                if !matches!(layout.get("role").and_then(Value::as_str), Some("primary" | "derived")) {
+                    return Err(format!("Scenario {id:?} must declare a field role for {condition_type}."));
+                }
+                let shape = layout.get("shape").and_then(Value::as_array).filter(|shape| !shape.is_empty())
+                    .ok_or_else(|| format!("Scenario {id:?} must declare a field shape for {condition_type}."))?;
+                let count = shape.iter().try_fold(1_u64, |total, size| {
+                    size.as_u64().filter(|size| *size > 0).and_then(|size| total.checked_mul(size))
+                }).filter(|count| *count <= 1024).ok_or_else(|| format!("Scenario {id:?} has an invalid field shape for {condition_type}."))?;
+                let labels = layout.get("componentLabels").and_then(Value::as_array)
+                    .filter(|labels| labels.len() == count as usize && labels.iter().all(|label| label.as_str().is_some_and(|label| !label.trim().is_empty())))
+                    .ok_or_else(|| format!("Scenario {id:?} must label every field component for {condition_type}."))?;
+                let vector = branch.pointer_mut("/properties/fieldValues").and_then(Value::as_object_mut)
+                    .ok_or("FEM base boundary schema must declare fieldValues.")?;
+                vector.insert("minItems".into(), json!(count));
+                vector.insert("maxItems".into(), json!(count));
+                let settings = vector.get_mut("x-fullmeta-ui-behavior").and_then(|ui| ui.pointer_mut("/payload/widget/settings"))
+                    .and_then(Value::as_object_mut).ok_or("Boundary fieldValues must declare widget settings.")?;
+                settings.insert("componentLabels".into(), Value::Array(labels.clone()));
+                if layout.get("zeroScalarOnly").and_then(Value::as_bool) == Some(true) {
+                    if let Some(value) = branch.pointer_mut("/properties/value").and_then(Value::as_object_mut) {
+                        value.insert("title".into(), json!("scalar value (zero only)"));
+                    }
+                }
+            }
+            profile_branches.push(branch);
         }
     }
     let profile_physics = document

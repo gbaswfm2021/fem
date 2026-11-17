@@ -1,10 +1,10 @@
-import { evaluateQuantity, getCoreUnit, resolveParameterTable } from '../../../platform/core-rust/js/api.js';
+import { evaluateQuantity, resolveParameterTable } from '../../../platform/core-rust/js/api.js';
 import { bindRuntimePolicy } from '../../../platform/model-rust/js/api.js';
 import { drawPlot1d } from '../../../platform/ui/widgets/plot-1d/widget.js';
 import { plot1dColor } from '../../../platform/ui/widgets/graphics-console/widget.js';
 import { createTableData } from '../../../platform/ui/widgets/shared/tables/data.js';
 import { checkedFieldArtifactUrl, normalizeFieldArtifact } from '../js/result-adapters.js';
-import { prepareResultDataset } from '../js/result-tables.js';
+import { prepareResultDataset, resultUnit } from '../js/result-tables.js';
 import { fieldParameterSymbols, prepareFieldSurfaces, resolveCutPlanes } from './field-surfaces.js';
 
 const clone=value=>structuredClone(value);
@@ -67,16 +67,16 @@ export function createResultPresentation({modelSchema,readArtifact}={}) {
     tableSectionTitle(entry){return `${entry.name} · ${entry.view.rows.length} of ${entry.table.rows.length} samples`;},
     renderPlot({canvas,ready,action,parameters=[],renderer}){
       if(!ready.length)fail('No checked result samples are available.');
-      const first=ready[0].view.columns.find(column=>column.key===ready[0].view.xColumn),xUnit=getCoreUnit(first.unit);
+      const first=ready[0].view.columns.find(column=>column.key===ready[0].view.xColumn),xUnit=resultUnit(first.unit);
       const entries=ready.map(entry=>{
-        const column=entry.view.columns.find(column=>column.key===entry.view.xColumn),other=getCoreUnit(column.unit);
+        const column=entry.view.columns.find(column=>column.key===entry.view.xColumn),other=resultUnit(column.unit);
         if(other.dimension.some((value,index)=>value!==xUnit.dimension[index]))fail(`${entry.name}: X units are incompatible across datasets.`);
         return {...entry,xDisplayScale:first.displayScale};
       });
       const axes={...action.axes},symbols=resolveParameterTable(parameters,parameterPolicy?.reservedSymbols||[],parameterPolicy?.allowedFunctions||[],parameterPolicy?.path||'parameters',evaluationPolicy);
-      for(const key of ['xMin','xMax'])if(axes[key]!==undefined){const declared=getCoreUnit(axes[key].unit);if(declared.dimension.some((value,index)=>value!==xUnit.dimension[index]))fail(`Plot ${key} unit differs from the X axis.`);axes[key]=evaluateQuantity(axes[key],symbols,`Plot ${key}`,evaluationPolicy?.allowedFunctions||[],evaluationPolicy)/first.displayScale;}
+      for(const key of ['xMin','xMax'])if(axes[key]!==undefined){const declared=resultUnit(axes[key].unit);if(declared.dimension.some((value,index)=>value!==xUnit.dimension[index]))fail(`Plot ${key} unit differs from the X axis.`);axes[key]=evaluateQuantity(axes[key],symbols,`Plot ${key}`,evaluationPolicy?.allowedFunctions||[],evaluationPolicy)/first.displayScale;}
       const series=entries.flatMap(entry=>entry.series.map((item,index)=>{
-        const column=entry.view.columns.find(column=>column.key===item.column),unit=item.unit||column.unit||'1',scale=getCoreUnit(unit).scale;
+        const column=entry.view.columns.find(column=>column.key===item.column),unit=item.unit||column.unit||'1',scale=resultUnit(unit).scale;
         return {label:`${entry.name} · ${item.label}${unit==='1'?'':` (${unit})`}`,axis:item.axis==='right'?'right':'left',color:plot1dColor(index),style:entry.style,
           points:entry.view.rows.map(row=>[row[entry.view.xColumn]/first.displayScale,row[item.column]/scale])};
       }));

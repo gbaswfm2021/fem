@@ -154,12 +154,77 @@ fn triangle_quadrature(rule: &str) -> Result<Vec<[f64; 4]>, String> {
 
 #[derive(Clone)]
 pub(super) enum BoundaryCondition {
-    Dirichlet(Value),
-    Neumann(Value),
+    Dirichlet(model_expression::CompiledComplexQuantity),
+    Neumann {
+        scalar: model_expression::CompiledComplexQuantity,
+        field: Option<[model_expression::CompiledComplexQuantity; 2]>,
+    },
     Impedance {
         impedance: Value,
         incident: Option<Value>,
     },
+}
+
+fn compile_boundary_quantity(
+    value: &Value,
+    unit: &str,
+    path: &str,
+) -> Result<model_expression::CompiledComplexQuantity, String> {
+    let actual = value
+        .get("unit")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("{path}.unit is required."))?;
+    let actual_dimension = model_expression::unit(actual)?.1;
+    let expected_dimension = model_expression::unit(unit)?.1;
+    if actual_dimension
+        .iter()
+        .zip(expected_dimension)
+        .any(|(a, b)| (a - b).abs() > 1e-10)
+    {
+        return Err(format!("{path} must have units compatible with {unit}."));
+    }
+    model_expression::CompiledComplexQuantity::compile(value, path)
+}
+
+fn compile_prescribed_boundary(boundary: &Value, path: &str) -> Result<BoundaryCondition, String> {
+    let value = boundary
+        .get("value")
+        .ok_or_else(|| format!("{path}.value is required."))?;
+    match boundary.get("type").and_then(Value::as_str) {
+        Some("dirichlet") => Ok(BoundaryCondition::Dirichlet(compile_boundary_quantity(
+            value,
+            "Pa",
+            &format!("{path}.value"),
+        )?)),
+        Some("neumann") => {
+            let scalar = compile_boundary_quantity(value, "m/s", &format!("{path}.value"))?;
+            let field = boundary
+                .get("fieldValues")
+                .map(|values| {
+                    let values = values
+                        .as_array()
+                        .filter(|values| values.len() == 2)
+                        .ok_or_else(|| {
+                            format!("{path}.fieldValues requires two Cartesian components.")
+                        })?;
+                    Ok::<_, String>([
+                        compile_boundary_quantity(
+                            &values[0],
+                            "m/s",
+                            &format!("{path}.fieldValues[0]"),
+                        )?,
+                        compile_boundary_quantity(
+                            &values[1],
+                            "m/s",
+                            &format!("{path}.fieldValues[1]"),
+                        )?,
+                    ])
+                })
+                .transpose()?;
+            Ok(BoundaryCondition::Neumann { scalar, field })
+        }
+        _ => Err(format!("{path} must be a Dirichlet or Neumann condition.")),
+    }
 }
 
 pub(super) fn compile_incident_fields(
@@ -211,45 +276,6 @@ fn recover_nodal_velocity(
     }
     field_output::average_nodal_vectors(&mut sums, &counts);
     Ok(sums)
-}
-
-fn edge_expression_integrals(
-    points: [V3; 2],
-    expression: &Value,
-    parameters: &HashMap<String, model_expression::Scalar>,
-    frequency_hz: f64,
-    path: &str,
-) -> Result<[f64; 2], String> {
-    const POSITIONS: [f64; 5] = [
-        -0.906179845938664,
-        -0.538469310105683,
-        0.0,
-        0.538469310105683,
-        0.906179845938664,
-    ];
-    const WEIGHTS: [f64; 5] = [
-        0.236926885056189,
-        0.478628670499366,
-        0.568888888888889,
-        0.478628670499366,
-        0.236926885056189,
-    ];
-    let length = (points[1][0] - points[0][0]).hypot(points[1][1] - points[0][1]);
-    let mut integrals = [0.0; 2];
-    for (position, weight) in POSITIONS.into_iter().zip(WEIGHTS) {
-        let t = (position + 1.0) * 0.5;
-        let point = [
-            points[0][0] + t * (points[1][0] - points[0][0]),
-            points[0][1] + t * (points[1][1] - points[0][1]),
-            0.0,
-        ];
-        let symbols = scalar2d::symbols_at_point(parameters, frequency_hz, point);
-        let value = scalar2d::quantity(expression, &symbols, path)?;
-        let weighted_length = length * weight * 0.5;
-        integrals[0] += weighted_length * (1.0 - t) * value;
-        integrals[1] += weighted_length * t * value;
-    }
-    Ok(integrals)
 }
 
 fn assemble(
@@ -309,9 +335,22 @@ fn assemble(
         }
     }
 
+    let mut edge_owners = HashMap::<[usize; 2], Vec<usize>>::new();
+    for (triangle, _) in &mesh.triangles {
+        for opposite in 0..3 {
+            let mut edge = [triangle[(opposite + 1) % 3], triangle[(opposite + 2) % 3]];
+            edge.sort_unstable();
+            edge_owners
+                .entry(edge)
+                .or_default()
+                .push(triangle[opposite]);
+        }
+    }
     let mut used_boundary_tags = HashSet::new();
     for (edge, tag) in &mesh.boundary_edges {
-        if periodic.boundary_tags.contains(tag) {
+        let mut edge_key = *edge;
+        edge_key.sort_unstable();
+        if periodic.boundary_tags.contains(tag) || periodic.boundary_edges.contains(&edge_key) {
             if boundaries.contains_key(tag) {
                 return Err(format!(
                     "Acoustic boundary tag {tag} is periodic and cannot also carry a physical boundary condition."
@@ -329,30 +368,100 @@ fn assemble(
         if length <= 0.0 || !length.is_finite() {
             return Err("The boundary mesh contains a degenerate edge.".into());
         }
+        let owners = edge_owners
+            .get(&edge_key)
+            .ok_or_else(|| format!("Acoustic boundary edge {edge:?} has no adjacent triangle."))?;
+        if owners.len() != 1 {
+            return Err(format!(
+                "Acoustic boundary selection tag {tag} must target an exterior edge."
+            ));
+        }
         match condition {
             BoundaryCondition::Dirichlet(value) => {
                 for node in edge {
                     let point = mesh.nodes[*node];
                     let symbols = scalar2d::symbols_at_point(parameters, frequency_hz, point);
-                    let value = quantity(value, &symbols, &format!("boundary[{tag}].value"))?;
+                    let value = value.evaluate(&symbols, &format!("boundary[{tag}].value"))?;
+                    if !value.re.is_finite() || !value.im.is_finite() {
+                        return Err(format!(
+                            "Dirichlet boundary tag {tag} evaluated to non-finite pressure."
+                        ));
+                    }
                     scalar2d::insert_dirichlet_constraint(
                         &mut dirichlet,
                         periodic,
                         *node,
-                        C { re: value, im: 0.0 },
+                        C {
+                            re: value.re,
+                            im: value.im,
+                        },
                     )?;
                 }
             }
-            BoundaryCondition::Neumann(value) => {
-                let integrals = edge_expression_integrals(
-                    [p0, p1],
-                    value,
-                    parameters,
-                    frequency_hz,
-                    &format!("boundary[{tag}].value"),
-                )?;
-                for local in 0..2 {
-                    rhs_im[edge[local]] -= omega * integrals[local];
+            BoundaryCondition::Neumann { scalar, field } => {
+                let delta = [p1[0] - p0[0], p1[1] - p0[1]];
+                let mut normal = [delta[1] / length, -delta[0] / length];
+                let opposite = mesh.nodes[owners[0]];
+                if normal[0] * (opposite[0] - p0[0]) + normal[1] * (opposite[1] - p0[1]) > 0.0 {
+                    normal = [-normal[0], -normal[1]];
+                }
+                const POSITIONS: [f64; 5] = [
+                    -0.906179845938664,
+                    -0.538469310105683,
+                    0.0,
+                    0.538469310105683,
+                    0.906179845938664,
+                ];
+                const WEIGHTS: [f64; 5] = [
+                    0.236926885056189,
+                    0.478628670499366,
+                    0.568888888888889,
+                    0.478628670499366,
+                    0.236926885056189,
+                ];
+                for (position, weight) in POSITIONS.into_iter().zip(WEIGHTS) {
+                    let t = (position + 1.0) * 0.5;
+                    let point = [p0[0] + t * delta[0], p0[1] + t * delta[1], 0.0];
+                    let symbols = scalar2d::symbols_at_point(parameters, frequency_hz, point);
+                    let scalar_value =
+                        scalar.evaluate(&symbols, &format!("boundary[{tag}].value"))?;
+                    if !scalar_value.re.is_finite() || !scalar_value.im.is_finite() {
+                        return Err(format!(
+                            "Neumann boundary tag {tag} evaluated to non-finite normal velocity."
+                        ));
+                    }
+                    let prescribed = if let Some(field) = field {
+                        if scalar_value.re != 0.0 || scalar_value.im != 0.0 {
+                            return Err(format!(
+                                "Neumann boundary tag {tag} must have zero scalar value when fieldValues is supplied."
+                            ));
+                        }
+                        let mut projected = C::default();
+                        for axis in 0..2 {
+                            let component = field[axis].evaluate(
+                                &symbols,
+                                &format!("boundary[{tag}].fieldValues[{axis}]"),
+                            )?;
+                            projected.re += normal[axis] * component.re;
+                            projected.im += normal[axis] * component.im;
+                        }
+                        projected
+                    } else {
+                        C {
+                            re: scalar_value.re,
+                            im: scalar_value.im,
+                        }
+                    };
+                    if !prescribed.re.is_finite() || !prescribed.im.is_finite() {
+                        return Err(format!(
+                            "Neumann boundary tag {tag} evaluated to non-finite velocity."
+                        ));
+                    }
+                    for (local, shape) in [1.0 - t, t].into_iter().enumerate() {
+                        let factor = omega * length * weight * 0.5 * shape;
+                        rhs_re[edge[local]] += factor * prescribed.im;
+                        rhs_im[edge[local]] -= factor * prescribed.re;
+                    }
                 }
             }
             BoundaryCondition::Impedance { impedance, .. } => {
@@ -552,16 +661,24 @@ fn run_model(
             if let Some(&material) = constant_materials.get(tag) {
                 samples.resize(quadrature.len(), material);
             } else {
-                let sample_points = quadrature.iter().map(|q| {
-                    (0..3).fold([0.0; 3], |mut point, local| {
-                        for axis in 0..3 {
-                            point[axis] += q[local] * points[local][axis];
-                        }
-                        point
+                let sample_points = quadrature
+                    .iter()
+                    .map(|q| {
+                        (0..3).fold([0.0; 3], |mut point, local| {
+                            for axis in 0..3 {
+                                point[axis] += q[local] * points[local][axis];
+                            }
+                            point
+                        })
                     })
-                }).collect::<Vec<_>>();
-                let rows = compiled_materials.evaluate_batch(*tag, &parameter_symbols, frequency,
-                    &sample_points, &format!("triangle {element} quadrature point"))?;
+                    .collect::<Vec<_>>();
+                let rows = compiled_materials.evaluate_batch(
+                    *tag,
+                    &parameter_symbols,
+                    frequency,
+                    &sample_points,
+                    &format!("triangle {element} quadrature point"),
+                )?;
                 for values in rows {
                     samples.push(acoustic_material_from_values(&values)?);
                 }
@@ -572,18 +689,9 @@ fn run_model(
         for (tag, boundary) in &boundary_rows_by_tag {
             let kind = boundary.get("type").and_then(Value::as_str).unwrap_or("");
             let condition = match kind {
-                "dirichlet" => BoundaryCondition::Dirichlet(
-                    boundary
-                        .get("value")
-                        .cloned()
-                        .ok_or("Dirichlet boundary needs value.")?,
-                ),
-                "neumann" => BoundaryCondition::Neumann(
-                    boundary
-                        .get("value")
-                        .cloned()
-                        .ok_or("Neumann boundary needs value.")?,
-                ),
+                "dirichlet" | "neumann" => {
+                    compile_prescribed_boundary(boundary, &format!("boundary tag {tag}"))?
+                }
                 "impedance" => BoundaryCondition::Impedance {
                     impedance: boundary
                         .get("impedance")
@@ -884,4 +992,197 @@ pub(crate) fn run(arguments: &[String]) -> Result<i32, String> {
         |request, _cache| run_request(request),
         crate::run_shared_operation,
     )
+}
+
+#[cfg(test)]
+mod boundary_tests {
+    use super::*;
+
+    fn q(expression: &str, unit: &str) -> Value {
+        json!({"expression":expression,"unit":unit})
+    }
+    fn mesh(edge: [usize; 2]) -> Mesh2D {
+        Mesh2D {
+            nodes: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            triangles: vec![([0, 1, 2], 1)],
+            boundary_edges: vec![(edge, 2)],
+            integration_edges: vec![],
+        }
+    }
+    fn periodic() -> scalar2d::PeriodicDofMap {
+        scalar2d::PeriodicDofMap {
+            node_to_dof: vec![0, 1, 2],
+            node_weights: vec![C { re: 1.0, im: 0.0 }; 3],
+            dof_count: 3,
+            boundary_tags: HashSet::new(),
+            boundary_edges: HashSet::new(),
+        }
+    }
+    fn materials(sound_speed: f64) -> Vec<Vec<AcousticMaterial>> {
+        vec![vec![
+            AcousticMaterial {
+                density: 1.0,
+                sound_speed
+            };
+            triangle_quadrature("standard").unwrap().len()
+        ]]
+    }
+    #[test]
+    fn velocity_uses_outward_normal_for_both_edge_orientations() {
+        let frequency = 10.0;
+        let omega = std::f64::consts::TAU * frequency;
+        let s = std::f64::consts::FRAC_1_SQRT_2;
+        for (edge, normal) in [
+            ([0, 1], [0.0, -1.0]),
+            ([1, 2], [s, s]),
+            ([2, 0], [-1.0, 0.0]),
+        ] {
+            for oriented in [edge, [edge[1], edge[0]]] {
+                let mesh = mesh(oriented);
+                let boundary = json!({"type":"neumann","value":q("0","m/s"),"fieldValues":[q("1+2*i","m/s"),q("3-4*i","m/s")]});
+                let conditions =
+                    HashMap::from([(2, compile_prescribed_boundary(&boundary, "bc").unwrap())]);
+                let (_, re, im, _) = assemble(
+                    &mesh,
+                    &materials(343.0),
+                    "standard",
+                    &conditions,
+                    frequency,
+                    &HashMap::new(),
+                    &periodic(),
+                )
+                .unwrap();
+                let length = (mesh.nodes[edge[1]][0] - mesh.nodes[edge[0]][0])
+                    .hypot(mesh.nodes[edge[1]][1] - mesh.nodes[edge[0]][1]);
+                let expected_re = omega * length * (2.0 * normal[0] - 4.0 * normal[1]) / 2.0;
+                let expected_im = -omega * length * (normal[0] + 3.0 * normal[1]) / 2.0;
+                for node in edge {
+                    assert!(
+                        (re[node] - expected_re).abs() < 1e-9
+                            && (im[node] - expected_im).abs() < 1e-9,
+                        "{oriented:?} {re:?} {im:?}"
+                    );
+                }
+            }
+        }
+    }
+    #[test]
+    fn complex_pressure_scalar_velocity_zero_natural_and_validation() {
+        let mesh = mesh([0, 1]);
+        let d = json!({"type":"dirichlet","value":q("2+3*i","Pa")});
+        let (_, _, _, constraints) = assemble(
+            &mesh,
+            &materials(343.0),
+            "standard",
+            &HashMap::from([(2, compile_prescribed_boundary(&d, "bc").unwrap())]),
+            1.0,
+            &HashMap::new(),
+            &periodic(),
+        )
+        .unwrap();
+        for node in [0, 1] {
+            assert_eq!((constraints[&node].re, constraints[&node].im), (2.0, 3.0));
+        }
+        let n = json!({"type":"neumann","value":q("2+3*i","m/s")});
+        let (_, re, im, _) = assemble(
+            &mesh,
+            &materials(343.0),
+            "standard",
+            &HashMap::from([(2, compile_prescribed_boundary(&n, "bc").unwrap())]),
+            1.0,
+            &HashMap::new(),
+            &periodic(),
+        )
+        .unwrap();
+        assert!(
+            (re[0] - 3.0 * std::f64::consts::PI).abs() < 1e-9
+                && (im[0] + 2.0 * std::f64::consts::PI).abs() < 1e-9
+        );
+        let zeros=[HashMap::new(),HashMap::from([(2,compile_prescribed_boundary(&json!({"type":"neumann","value":q("0","m/s")}),"bc").unwrap())]),HashMap::from([(2,compile_prescribed_boundary(&json!({"type":"neumann","value":q("0","m/s"),"fieldValues":[q("0","m/s"),q("0","m/s")]}),"bc").unwrap())])];
+        for bc in zeros {
+            let (_, re, im, c) = assemble(
+                &mesh,
+                &materials(343.0),
+                "standard",
+                &bc,
+                1.0,
+                &HashMap::new(),
+                &periodic(),
+            )
+            .unwrap();
+            assert!(re.iter().chain(&im).all(|x| *x == 0.0) && c.is_empty());
+        }
+        let bad_units =
+            json!({"type":"neumann","value":q("0","m/s"),"fieldValues":[q("1","Pa"),q("0","m/s")]});
+        let bad_shape = json!({"type":"neumann","value":q("0","m/s"),"fieldValues":[q("0","m/s")]});
+        assert!(compile_prescribed_boundary(&bad_units, "bc").is_err());
+        assert!(compile_prescribed_boundary(&bad_shape, "bc").is_err());
+        let conflict = json!({"type":"neumann","value":q("1","m/s"),"fieldValues":[q("0","m/s"),q("0","m/s")]});
+        assert!(
+            assemble(
+                &mesh,
+                &materials(343.0),
+                "standard",
+                &HashMap::from([(2, compile_prescribed_boundary(&conflict, "bc").unwrap())]),
+                1.0,
+                &HashMap::new(),
+                &periodic()
+            )
+            .is_err()
+        );
+    }
+    #[test]
+    fn manufactured_pressure_solved_with_prescribed_velocity() {
+        let frequency = 100.0;
+        let omega = std::f64::consts::TAU * frequency;
+        let mut mesh = mesh([0, 1]);
+        mesh.boundary_edges = vec![([0, 1], 1), ([1, 2], 2), ([2, 0], 2)];
+        let d = json!({"type":"dirichlet","value":q("(1+i)*s*(x+2*y)","Pa")});
+        let n = json!({"type":"neumann","value":q("0","m/s"),"fieldValues":[q(&format!("{}*(i-1)",1.0/omega),"m/s"),q(&format!("{}*(i-1)",2.0/omega),"m/s")]});
+        let conditions = HashMap::from([
+            (1, compile_prescribed_boundary(&d, "d").unwrap()),
+            (2, compile_prescribed_boundary(&n, "n").unwrap()),
+        ]);
+        let mut dimension = model_expression::unit("Pa").unwrap().1;
+        dimension[0] -= 1.0;
+        let parameters = HashMap::from([(
+            "s".to_string(),
+            model_expression::Scalar {
+                value: 1.0,
+                dimension,
+            },
+        )]);
+        // Infinite wave speed makes the mass term vanish for an exact linear benchmark.
+        let (matrix, re, im, constraints) = assemble(
+            &mesh,
+            &materials(f64::INFINITY),
+            "standard",
+            &conditions,
+            frequency,
+            &parameters,
+            &periodic(),
+        )
+        .unwrap();
+        let (mut matrix, mut re, mut im) =
+            scalar2d::reduce_system(&matrix, &re, &im, &periodic()).unwrap();
+        scalar2d::apply_complex_dirichlet(&mut matrix, &mut re, &mut im, &constraints).unwrap();
+        let (real, imag, _) = solve_linear_system(
+            &matrix,
+            &re,
+            &im,
+            1e-7,
+            "faer",
+            "default",
+            1,
+            &mut SolverCache::default(),
+        )
+        .unwrap();
+        for index in 0..3 {
+            let expected = [0.0, 1.0, 2.0][index];
+            assert!(
+                (real[index] - expected).abs() < 1e-8 && (imag[index] - expected).abs() < 1e-8,
+                "node {index}: {real:?} {imag:?}"
+            );
+        }
+    }
 }

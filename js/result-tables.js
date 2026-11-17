@@ -1,11 +1,11 @@
 import { getCoreUnit } from '../../../platform/core-rust/js/api.js';
 import { createTableData, resolveTableSelection } from '../../../platform/ui/widgets/shared/tables/data.js';
+import {engineeringFrequencyUnit,frequencyDisplayScale} from './result-fields.js';
 
 const fail=(path,message)=>{throw new Error(`${path}: ${message}`);};
 const owns=(value,key)=>Object.hasOwn(value||{},key);
 const finite=(value,path)=>{if(typeof value!=='number'||!Number.isFinite(value))fail(path,'expected a finite numeric sample.');return value;};
-// EM3D writes frequency_GHz to eight decimal places: the rounding error can
-// reach half of 1e-8 GHz, or 5 Hz, even for an otherwise matching saved case.
+// Older GHz CSV results use eight decimals, allowing up to 5 Hz rounding.
 const coordinateTolerance=(key,value)=>Math.max(1,Math.abs(value))*1e-10+(key==='frequency_GHz'?5:0);
 
 export function parseNumericCsv(text,path='CSV artifact') {
@@ -39,7 +39,12 @@ export function parseNumericCsv(text,path='CSV artifact') {
   return {headers,rows};
 }
 
-function unit(value,path){try{return getCoreUnit(value);}catch(error){fail(path,error.message);}}
+export function resultUnit(value){
+  const scale=frequencyDisplayScale(value);
+  if(scale!==undefined)return {...getCoreUnit('Hz'),scale};
+  return getCoreUnit(value);
+}
+function unit(value,path){try{return resultUnit(value);}catch(error){fail(path,error.message);}}
 function compatible(left,right,path){if(left.dimension.some((value,index)=>Math.abs(value-right.dimension[index])>1e-10))fail(path,'source and display units are incompatible.');}
 
 /** Keep rows in SI and attach display scales shared by the plot and table. */
@@ -83,6 +88,18 @@ export function prepareResultDataset(text,dataset,action,model) {
       });
       const column={...structuredClone(descriptor),unit:display,displayScale:displayUnit.scale,role:'parameter'};
       const existing=columns.findIndex(value=>value.key===column.key);if(existing<0)columns.push(column);else columns[existing]=column;
+    }
+  }
+  // Choose one display unit for a frequency axis, preserving explicit choices.
+  if(!dataset.xUnit){
+    const x=columns.find(column=>column.key===dataset.xColumn);
+    if(x){
+      const dimension=unit(x.unit,path).dimension,frequencyDimension=unit('Hz',path).dimension;
+      if(dimension.every((value,index)=>value===frequencyDimension[index])){
+        const magnitude=rows.reduce((largest,row)=>Math.max(largest,Math.abs(row[x.key]||0)),0);
+        const display=engineeringFrequencyUnit(magnitude);
+        x.unit=display.unit;x.displayScale=display.scale;
+      }
     }
   }
   for(const item of series){

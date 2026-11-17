@@ -123,7 +123,21 @@
             "value": {
               "expression": "0",
               "unit": "m/s"
-            }
+            },
+            "fieldValues": [
+              {
+                "expression": "0",
+                "unit": "m/s"
+              },
+              {
+                "expression": "0",
+                "unit": "m/s"
+              },
+              {
+                "expression": "0",
+                "unit": "m/s"
+              }
+            ]
           }
         }
       },
@@ -163,6 +177,19 @@
       ],
       "featureHandlingByType": {
         "periodicCondition": "periodicPair"
+      },
+      "boundaryFieldLayouts": {
+        "neumann": {
+          "role": "derived",
+          "shape": [
+            3
+          ],
+          "componentLabels": [
+            "vx",
+            "vy",
+            "vz"
+          ]
+        }
       }
     },
     "x-fem-scenario": {
@@ -398,6 +425,9 @@
             "unit": "Hz"
           }
         }
+      },
+      "resultDefaults": {
+        "frequencyFieldPrefix": "pressure_"
       },
       "studyType": "frequencyDomain",
       "supportsStationary": false,
@@ -4695,6 +4725,147 @@
                       "field": "/enabled"
                     },
                     "type": "notEquals"
+                  }
+                ]
+              }
+            },
+            "stage": "model"
+          },
+          {
+            "constraint": {
+              "check": "quantity",
+              "inputs": [
+                {
+                  "name": "evaluationPolicy",
+                  "operand": {
+                    "path": "/x-fullmeta-expressionRuntime/real/literal",
+                    "source": "schema"
+                  }
+                },
+                {
+                  "name": "allowedFunctions",
+                  "operand": {
+                    "path": "/x-fullmeta-expressionRuntime/real/literal/allowedFunctions",
+                    "source": "schema"
+                  }
+                },
+                {
+                  "name": "dimensionTolerance",
+                  "operand": {
+                    "literal": 1e-10
+                  }
+                },
+                {
+                  "name": "complex",
+                  "operand": {
+                    "literal": true
+                  }
+                },
+                {
+                  "name": "imaginarySymbol",
+                  "operand": {
+                    "literal": "i"
+                  }
+                },
+                {
+                  "name": "complexFunctions",
+                  "operand": {
+                    "path": "/x-fullmeta-expressionRuntime/real/literal/allowedFunctions",
+                    "source": "schema"
+                  }
+                },
+                {
+                  "name": "symbols",
+                  "operand": {
+                    "binding": "boundaryWaveSymbols",
+                    "path": "/symbols"
+                  }
+                },
+                {
+                  "name": "runtimeSymbols",
+                  "operand": {
+                    "literal": [
+                      {
+                        "requiresRuntimeSample": true,
+                        "symbol": "x"
+                      },
+                      {
+                        "requiresRuntimeSample": true,
+                        "symbol": "y"
+                      },
+                      {
+                        "requiresRuntimeSample": true,
+                        "symbol": "z"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "name": "expectedUnit",
+                  "operand": {
+                    "literal": "m/s"
+                  }
+                }
+              ],
+              "subject": {
+                "field": ""
+              },
+              "subjectInput": "value",
+              "type": "semanticCheck"
+            },
+            "diagnostic": {
+              "message": "Acoustic3D Neumann velocity component must have unit m/s and a valid expression.",
+              "path": ""
+            },
+            "id": "acoustic3d_neumann_field_value",
+            "name": "Acoustic3D derived velocity boundary components",
+            "scope": {
+              "nested": [
+                {
+                  "path": "/fieldValues/*"
+                }
+              ],
+              "path": "/model/physics/*",
+              "source": "root",
+              "when": {
+                "all": [
+                  {
+                    "other": {
+                      "literal": "thermal"
+                    },
+                    "subject": {
+                      "path": "/scenario/physics",
+                      "source": "root"
+                    },
+                    "type": "notEquals"
+                  },
+                  {
+                    "subject": {
+                      "field": "/type"
+                    },
+                    "type": "equals",
+                    "other": {
+                      "literal": "neumann"
+                    }
+                  },
+                  {
+                    "other": {
+                      "literal": false
+                    },
+                    "subject": {
+                      "field": "/enabled"
+                    },
+                    "type": "notEquals"
+                  },
+                  {
+                    "subject": {
+                      "path": "/scenario/profileId",
+                      "source": "root"
+                    },
+                    "type": "equals",
+                    "other": {
+                      "literal": "acoustic-3d"
+                    }
                   }
                 ]
               }
@@ -13225,6 +13396,197 @@
                         "args": [
                           {
                             "var": "__derived_boundaryBaseSymbols",
+                            "path": "/errors"
+                          }
+                        ]
+                      },
+                      0
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "forEach": {
+            "from": "root",
+            "path": "/model/physics/*"
+          },
+          "as": "__obligationItem0",
+          "pathAs": "__obligationPath0",
+          "rules": [
+            {
+              "if": {
+                "op": "all",
+                "args": [
+                  {
+                    "op": "ne",
+                    "args": [
+                      {
+                        "var": "root",
+                        "path": "/scenario/physics"
+                      },
+                      {
+                        "literal": "thermal"
+                      }
+                    ]
+                  },
+                  {
+                    "op": "eq",
+                    "args": [
+                      {
+                        "var": "__obligationItem0",
+                        "path": "/type"
+                      },
+                      {
+                        "literal": "neumann"
+                      }
+                    ]
+                  },
+                  {
+                    "op": "ne",
+                    "args": [
+                      {
+                        "var": "__obligationItem0",
+                        "path": "/enabled"
+                      },
+                      {
+                        "literal": false
+                      }
+                    ]
+                  },
+                  {
+                    "op": "eq",
+                    "args": [
+                      {
+                        "var": "root",
+                        "path": "/scenario/profileId"
+                      },
+                      {
+                        "literal": "acoustic-3d"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "then": [
+                {
+                  "forEach": {
+                    "from": "__obligationItem0",
+                    "path": "/fieldValues/*",
+                    "basePath": {
+                      "var": "__obligationPath0"
+                    }
+                  },
+                  "as": "__obligationItem1",
+                  "pathAs": "__obligationPath1",
+                  "rules": [
+                    {
+                      "let": "path",
+                      "value": {
+                        "op": "text",
+                        "args": [
+                          {
+                            "op": "pathString",
+                            "args": [
+                              {
+                                "var": "__obligationPath1"
+                              }
+                            ]
+                          },
+                          ": ",
+                          "Acoustic3D Neumann velocity component must have unit m/s and a valid expression."
+                        ]
+                      }
+                    },
+                    {
+                      "check": "quantity",
+                      "input": {
+                        "object": {
+                          "value": {
+                            "var": "__obligationItem1",
+                            "path": ""
+                          },
+                          "evaluationPolicy": {
+                            "var": "schema",
+                            "path": "/x-fullmeta-expressionRuntime/real/literal"
+                          },
+                          "allowedFunctions": {
+                            "var": "schema",
+                            "path": "/x-fullmeta-expressionRuntime/real/literal/allowedFunctions"
+                          },
+                          "dimensionTolerance": {
+                            "literal": 1e-10
+                          },
+                          "complex": {
+                            "literal": true
+                          },
+                          "imaginarySymbol": {
+                            "literal": "i"
+                          },
+                          "complexFunctions": {
+                            "var": "schema",
+                            "path": "/x-fullmeta-expressionRuntime/real/literal/allowedFunctions"
+                          },
+                          "symbols": {
+                            "var": "__derived_boundaryWaveSymbols",
+                            "path": "/symbols"
+                          },
+                          "runtimeSymbols": {
+                            "literal": [
+                              {
+                                "requiresRuntimeSample": true,
+                                "symbol": "x"
+                              },
+                              {
+                                "requiresRuntimeSample": true,
+                                "symbol": "y"
+                              },
+                              {
+                                "requiresRuntimeSample": true,
+                                "symbol": "z"
+                              }
+                            ]
+                          },
+                          "expectedUnit": {
+                            "literal": "m/s"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "when": {
+            "op": "all",
+            "args": [
+              {
+                "op": "all",
+                "args": [
+                  {
+                    "op": "not",
+                    "args": [
+                      {
+                        "op": "isNull",
+                        "args": [
+                          {
+                            "var": "__derived_boundaryWaveSymbols"
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "op": "eq",
+                    "args": [
+                      {
+                        "op": "length",
+                        "args": [
+                          {
+                            "var": "__derived_boundaryWaveSymbols",
                             "path": "/errors"
                           }
                         ]

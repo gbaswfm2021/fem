@@ -30,10 +30,11 @@ The Study endpoint starts the registered dispatcher in `--server` mode. Read the
 | `em-2d` | `frequencyPlan` in common preparation | `solverEm2d` → `fullmeta-fem.exe` (`em2d` module) | `--solve`, `--sequence` |
 | `em-3d` | `configuredFrequencyRequest` in common preparation | `solverEm3d` → `fullmeta-fem.exe` (`em3d` module) | `--solve`, `--sequence` |
 | `thermal-2d` | `stationaryPlan` in common preparation | `solverThermal2d` → `fullmeta-fem.exe` (`thermal2d` module) | `--solve` |
+| `thermal-3d` | `stationaryPlan` in common preparation | `solverThermal3d` → `fullmeta-fem.exe` (`thermal3d` module) | `--solve` |
 
 Both `rivrs` and `faer` resolve to the common executable when the compiled scenario module supports that backend. A wave preparation produces its normalized plan or request once for the chosen model and Study. The common `stationaryPlan` path produces the stationary solver request from schema declarations and Study metadata. Preparation receives the same model and Study context throughout. A preparation handler returns a plan or an error and terminates. Keep the preparation path acyclic, including any shared preflight call. Preflight returns validation and registration results. The numerical handler receives the prepared inputs. Reject a registration that routes preparation recursively through the active dispatcher entry.
 
-`frequencyPlan` returns a harmonic Study plan with the scenario and Study IDs, effective solver settings, ordered frequencies in Hz, and case parameter values and dimensions. `configuredFrequencyRequest` prepares the EM3D solver request with the checked mesh file, at least one material assignment, and the prepared cases. Its enabled ordinary boundary input is impedance. Under `allAssignedMaterials`, the active domain set matches the material assignment set. Report unsupported enabled boundary declarations during preparation. `stationaryPlan` prepares the stationary solver request from generic mesh, material, boundary, result-default and solver-setting metadata; the scenario module receives that request and performs the numerical solve.
+`frequencyPlan` returns a harmonic Study plan with the scenario and Study IDs, effective solver settings, ordered frequencies in Hz, and case parameter values and dimensions. `configuredFrequencyRequest` prepares the EM3D solver request with the checked mesh file, at least one material assignment, and the prepared cases. Its enabled ordinary boundary inputs are Dirichlet, Neumann and impedance. Under `allAssignedMaterials`, the active domain set matches the material assignment set. Report unsupported enabled boundary declarations during preparation. `stationaryPlan` prepares the stationary solver request from generic mesh, material, boundary, result-default and solver-setting metadata; the scenario module receives that request and performs the numerical solve.
 
 Resolve the handler, executable, entry, profile, and backend before starting that stage. A missing registration, unsupported preparation kind, missing executable, or unsupported backend ends the operation promptly with a terminal error. Identify the profile, Study, failed stage, and the specific registration or executable to correct. Preserve the run diagnostic. Acceptance exercises every profile's actual preparation and solve path, with a separate missing-route failure case. [Runtime registration and storage](runtime-integration-boundary.md)
 
@@ -58,7 +59,7 @@ The root `x-fem-capabilities.mesh` catalog declares `familyByDimension` (`"2": "
 
 It also declares `mesh.fieldFormulations`, keyed by formulation token, with an
 `elementOrders` array per entry. The required values are `[1]` for `pressure`,
-`Ez`, `Hz`, `firstOrderEH` and `T`, and `[1, 2]` for `electric`. The fixed EM3D
+`Ez`, `Hz` and `T`, and `[1, 2]` for `electric`. The fixed EM3D
 solver reads this map before accepting its requested order; profile mesh orders
 alone do not supply that interface. These values describe the matrix below and
 do not enable a Study/Physics formulation mismatch.
@@ -73,7 +74,7 @@ linked Physics. Displayed defaults do not create optional `discretization` or
 `solver` members. These view projections leave the structural schema and
 semantic validation guards intact, including the experimental E-H mismatch.
 
-The root `x-fem-capabilities.physics` catalog declares solver-accepted `solverBoundaryTypesByProfile`, available `featureTypesByProfile`, and `periodicPolicyByProfile`. Acoustic 2D, acoustic 3D, and EM 2D accept `dirichlet`, `neumann`, and `impedance` ordinary boundaries. EM 3D preparation accepts `impedance`; other enabled ordinary boundary declarations are rejected during preparation. Thermal 2D accepts `dirichlet` and `neumann`. All five profiles declare `periodicCondition`; wave profiles use the `floquet` phase-vector policy, while thermal uses `zeroPhaseOnly`. Declare `ordinaryPeriodicExclusive: true`: neither endpoint of an enabled periodic Physics condition may also be targeted by an enabled ordinary boundary condition. A mesh pair without an enabled Physics condition does not activate this conflict check.
+The root `x-fem-capabilities.physics` catalog declares solver-accepted `solverBoundaryTypesByProfile`, available `featureTypesByProfile`, and `periodicPolicyByProfile`. Acoustic 2D, acoustic 3D, EM 2D and EM 3D accept `dirichlet`, `neumann`, and `impedance` ordinary boundaries. Thermal 2D accepts `dirichlet` and `neumann`. All five profiles declare `periodicCondition`; wave profiles use the `floquet` phase-vector policy, while thermal uses `zeroPhaseOnly`. Declare `ordinaryPeriodicExclusive: true`: neither endpoint of an enabled periodic Physics condition may also be targeted by an enabled ordinary boundary condition. A mesh pair without an enabled Physics condition does not activate this conflict check.
 
 The root `x-fem-capabilities.integration` declares `boundaryIntegration`, `domainIntegration`, `edgeIntegration`, and `pointEvaluation` with `evaluation: "supported"`. Profile `sweepResultQuantities` lists built-in scalar CSV quantities that can be selected as sweep results: acoustic 2D and 3D declare `max_pressure_magnitude_Pa`; EM 2D declares `max_field_magnitude`. EM 3D and thermal 2D declare empty lists: EM 3D's Study sweep columns are configured global-variable outputs and thermal is stationary. Frequency axes and solver diagnostics are not sweep-result quantities.
 
@@ -95,10 +96,38 @@ samples; the checked result adapter determines sample availability separately.
 | `em-2d` | `Ez` or `Hz`, with the Study following the linked Physics | 2D triangles, order 1 | Harmonic point or parameter sweep | EM field data, global data, and sweep CSV |
 | `em-3d` | `electric` | 3D tetrahedra, Nédélec order 1 or 2 | Harmonic point or parameter sweep | EM field data, global data, and sweep CSV |
 | `thermal-2d` | `T` | 2D triangles, order 1 | Single stationary case | Nodal temperature, per-cell flux and conductivity, and summary CSV |
+| `thermal-3d` | `T` | 3D tetrahedra, order 1 | Single stationary case | Nodal temperature, per-cell flux and conductivity, and summary CSV |
 
-The EM3D Study declaration also accepts the experimental `firstOrderEH` token at the structural layer. Its Settings label is **First-order E-H**, with order 1 and the `faer` backend. The built-in Physics formulation is `electric`. FullMeta rejects a Study whose formulation differs from its linked Physics and identifies the formulation field. Keep the structural choice, solver metadata, and semantic guard distinct. [Study serialization and option resolution](../../docs/fullmeta-model-2.md#study-and-sweep)
+Thermal 3D requires positive finite, material-wise constant isotropic thermal
+conductivity. It supports prescribed temperature and outward heat flux on
+exterior faces. Periodic conditions, spatially varying coefficients and
+volumetric heat sources are unsupported. Pure-flux components require balanced
+heat flow and use a volume-weighted mean-temperature reference.
+
 
 ## Common Physics and material functions
+
+### EM3D prescribed tangential fields
+
+For the electric formulation, retain the existing scalar `value` as zero for compatibility and allow optional `fieldValues`, an array of three quantity expressions in model x/y/z order. Dirichlet supplies the electric field E in `V/m`; Neumann supplies the magnetic field H in `A/m`. Their boundary traces are `E_t` and `n × H`, respectively. The Neumann load is `+i omega integral v_t · (n × H)` with outward normal and `exp(+i omega t)` convention. The legacy zero scalar Neumann quantity retains its existing `V/m^2` unit. Reject a nonzero scalar, including when a vector is supplied. Scalar zero with no vector remains valid.
+
+Constrain oriented tangential edge moments and order-2 face moments, respecting periodic phases and rejecting inconsistent prescriptions. Apply the Neumann integral on selected exterior faces; zero retains the natural condition. Preserve impedance, periodicity, other profiles and saved scalar values. Exercise zero/nonzero fields, orders 1 and 2, shared/periodic constraints, unit validation and normal editor operations.
+
+### EM2D prescribed primary and derived fields
+
+For `Ez`, Dirichlet `value` is the complex scalar E_z in V/m and Neumann `fieldValues` contains H_x and H_y in A/m. For `Hz`, Dirichlet is H_z in A/m and Neumann contains E_x and E_y in V/m. Neumann field expressions use the boundary's outward tangent and the signs and normalizations documented in [the EM2D manual](../../fem-rust/docs/notes_em2d.md). Retain scalar conormal Neumann values when the field array is absent; if the array is present, require scalar `value` to evaluate to zero. Reject wrong component counts and units. Exercise complex expressions, both formulations, reversed edge orientation, compatibility with existing scalar values, and periodic constraints.
+
+### Acoustic3D prescribed pressure and velocity
+
+Dirichlet `value` is complex scalar pressure in Pa. Neumann `fieldValues` is a three-component particle-velocity vector in m/s, projected onto the outward face normal. Apply `-i omega` times that normal velocity to the pressure weak-form load under `exp(+i omega t)`. When the vector is absent, retain the existing scalar normal-velocity meaning, including nonzero values; when it is present, the accompanying scalar `value` must evaluate to zero. Unassigned nonperiodic exterior faces have zero normal velocity. Validate component count, unit and expressions; exercise complex values, outward orientation, scalar compatibility and periodic restrictions. See [the acoustic3D manual](../../fem-rust/docs/notes_acoustic3d.md).
+
+### Acoustic2D prescribed pressure and velocity
+
+Dirichlet `value` is complex scalar pressure in Pa. Neumann `fieldValues` is the two-component in-plane particle velocity in m/s, projected onto the outward edge normal. Apply `-i omega` times that normal velocity to the pressure weak-form load under `exp(+i omega t)`. When the vector is absent, retain the scalar normal-velocity meaning, including nonzero values; when present, require scalar `value` to evaluate to zero. Unassigned nonperiodic exterior edges have zero normal velocity. Validate component count, unit and expressions; exercise complex values, edge orientation, scalar compatibility and periodic restrictions. See [the acoustic2D manual](../../fem-rust/docs/notes_acoustic2d.md).
+
+### Thermal2D prescribed temperature and heat flux
+
+Dirichlet `value` is real scalar temperature in K. Neumann `fieldValues` is the two-component in-plane heat-flux vector in W/m², projected onto each edge's outward normal. Apply minus the outward flux to the conduction weak-form load. When the vector is absent, retain the scalar outward-flux meaning, including nonzero values; when present, require scalar `value` to evaluate to zero. Expressions are real, parameter-based and constant on a selected boundary. Unassigned nonperiodic exterior edges are insulated. Preserve the pure-flux heat-balance and mean-temperature checks. See [the thermal2D manual](../../fem-rust/docs/notes_thermal2d.md).
 
 The Physics object identifies the family, formulation, active domains, and frequency for a wave profile. Electromagnetic profiles also declare the phasor convention. Physics owns ordinary boundary conditions and periodic features. Settings fields and units follow the selected profile, formulation, and condition kind.
 
@@ -111,7 +140,7 @@ The Physics object identifies the family, formulation, active domains, and frequ
 | Impedance | `selectionId`, `impedance`, optional `incidentField`, optional `polarization`, identity/name, `type` | Display source fields only where the profile/condition accepts them. | Check finite, supported impedance and incident-source values; validate actual mesh sampling. |
 | Periodic | `periodicPairId`, `phaseVector`, identity/name, `type` | Choose an enabled matched mesh pair; edit only supported phase components. | Verify actual source/destination correspondence and apply the supported trace relation. |
 
-All built-in wave profiles declare Dirichlet, Neumann, impedance, and periodic conditions for editing. EM3D preparation accepts impedance as its enabled ordinary boundary input, and reports other enabled ordinary conditions with an actionable diagnostic. Thermal declares Dirichlet, Neumann, and zero-phase periodic temperature equality. Use scenario validation and preparation to check executable support.
+All built-in wave profiles declare Dirichlet, Neumann, impedance, and periodic conditions for editing and solving, subject to formulation-specific supported values. Thermal declares Dirichlet, Neumann, and zero-phase periodic temperature equality. Use scenario validation and preparation to check executable support.
 
 ### Material properties
 

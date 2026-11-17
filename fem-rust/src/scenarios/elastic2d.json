@@ -1,0 +1,761 @@
+{
+  "contractVersion": "fullmeta-fem-scenario/1",
+  "id": "elastic-2d",
+  "version": "1.0.0",
+  "schemaDocument": {
+    "$defs": {
+      "physicsFormulation": {
+        "enum": [
+          "planeStress",
+          "planeStrain"
+        ]
+      },
+      "scenario": {
+        "properties": {
+          "dimension": {
+            "const": 2
+          },
+          "physics": {
+            "const": "elasticity"
+          },
+          "profileId": {
+            "const": "elastic-2d"
+          }
+        }
+      }
+    },
+    "if": {
+      "properties": {
+        "scenario": {
+          "properties": {
+            "profileId": {
+              "const": "elastic-2d"
+            }
+          },
+          "required": [
+            "profileId"
+          ]
+        }
+      },
+      "required": [
+        "scenario"
+      ]
+    },
+    "then": {
+      "properties": {
+        "model": {
+          "properties": {
+            "physics": {
+              "not": {
+                "required": [
+                  "phasorConvention"
+                ]
+              },
+              "properties": {
+                "formulation": {
+                  "enum": [
+                    "planeStress",
+                    "planeStrain"
+                  ]
+                },
+                "type": {
+                  "const": "elasticity"
+                }
+              },
+              "required": [
+                "frequency"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "title": "FEM elastic 2D profile",
+    "x-fem-capabilities": {
+      "study": {
+        "preparationByProfile": {
+          "elastic-2d": {
+            "kind": "frequencyPlan"
+          }
+        },
+        "solverRuntimesByProfile": {
+          "elastic-2d": {
+            "faer": {
+              "backend": "faer",
+              "kind": "executable",
+              "programId": "solverElastic2d",
+              "sequenceArgument": "--sequence",
+              "solveArgument": "--solve"
+            },
+            "rivrs": {
+              "backend": "rivrs",
+              "kind": "executable",
+              "programId": "solverElastic2d",
+              "sequenceArgument": "--sequence",
+              "solveArgument": "--solve"
+            }
+          }
+        },
+        "solverSettingsByProfile": {
+          "elastic-2d": {
+            "defaults": {
+              "elementOrder": 1
+            },
+            "fieldFormulationsFromPhysics": true
+          }
+        }
+      }
+    },
+    "x-fem-physics": {
+      "boundaryDefaultsByFormulation": {
+        "planeStress": {
+          "dirichlet": {
+            "value": {
+              "expression": "0",
+              "unit": "m"
+            },
+            "fieldValues": [
+              {
+                "expression": "0",
+                "unit": "m"
+              },
+              {
+                "expression": "0",
+                "unit": "m"
+              }
+            ]
+          },
+          "neumann": {
+            "value": {
+              "expression": "0",
+              "unit": "Pa"
+            },
+            "fieldValues": [
+              {
+                "expression": "0",
+                "unit": "Pa"
+              },
+              {
+                "expression": "0",
+                "unit": "Pa"
+              }
+            ]
+          },
+          "impedance": {
+            "impedance": {
+              "expression": "10000000",
+              "unit": "Pa*s/m"
+            }
+          }
+        },
+        "planeStrain": {
+          "dirichlet": {
+            "value": {
+              "expression": "0",
+              "unit": "m"
+            },
+            "fieldValues": [
+              {
+                "expression": "0",
+                "unit": "m"
+              },
+              {
+                "expression": "0",
+                "unit": "m"
+              }
+            ]
+          },
+          "neumann": {
+            "value": {
+              "expression": "0",
+              "unit": "Pa"
+            },
+            "fieldValues": [
+              {
+                "expression": "0",
+                "unit": "Pa"
+              },
+              {
+                "expression": "0",
+                "unit": "Pa"
+              }
+            ]
+          },
+          "impedance": {
+            "impedance": {
+              "expression": "10000000",
+              "unit": "Pa*s/m"
+            }
+          }
+        }
+      },
+      "supportedBoundaryTypes": [
+        "dirichlet",
+        "neumann",
+        "impedance"
+      ],
+      "supportedFeatureTypes": [],
+      "conditionActions": [
+        {
+          "action": "add-dirichlet-boundary",
+          "conditionType": "dirichlet",
+          "itemName": "Dirichlet condition",
+          "label": "Add Dirichlet condition"
+        },
+        {
+          "action": "add-neumann-boundary",
+          "conditionType": "neumann",
+          "itemName": "Neumann condition",
+          "label": "Add Neumann condition"
+        },
+        {
+          "action": "add-impedance-boundary",
+          "conditionType": "impedance",
+          "itemName": "impedance condition",
+          "label": "Add impedance condition"
+        }
+      ],
+      "boundaryFieldLayouts": {
+        "dirichlet": {
+          "role": "primary",
+          "shape": [
+            2
+          ],
+          "componentLabels": [
+            "ux",
+            "uy"
+          ],
+          "zeroScalarOnly": true
+        },
+        "neumann": {
+          "role": "derived",
+          "shape": [
+            2
+          ],
+          "componentLabels": [
+            "tx",
+            "ty"
+          ],
+          "zeroScalarOnly": true
+        }
+      }
+    },
+    "x-fem-scenario": {
+      "editorOptions": {
+        "globalVariables": false,
+        "integrationOperators": false,
+        "parameterSweep": true,
+        "periodicPairs": false,
+        "pointwiseVariables": false
+      },
+      "fields": {
+        "formulations": {
+          "planeStress": {
+            "formulation": "planeStress",
+            "fieldVariables": [
+              {
+                "symbol": "ux",
+                "unit": "m",
+                "solverComponent": {
+                  "family": "displacement",
+                  "axis": "x"
+                }
+              },
+              {
+                "symbol": "uy",
+                "unit": "m",
+                "solverComponent": {
+                  "family": "displacement",
+                  "axis": "y"
+                }
+              }
+            ],
+            "derivedFieldVariables": [
+              {
+                "symbol": "sigma_xx",
+                "unit": "Pa",
+                "solverComponent": {
+                  "family": "sigma_xx"
+                }
+              },
+              {
+                "symbol": "sigma_yy",
+                "unit": "Pa",
+                "solverComponent": {
+                  "family": "sigma_yy"
+                }
+              },
+              {
+                "symbol": "sigma_zz",
+                "unit": "Pa",
+                "solverComponent": {
+                  "family": "sigma_zz"
+                }
+              },
+              {
+                "symbol": "sigma_xy",
+                "unit": "Pa",
+                "solverComponent": {
+                  "family": "sigma_xy"
+                }
+              }
+            ],
+            "zeroFieldVariables": []
+          },
+          "planeStrain": {
+            "formulation": "planeStrain",
+            "fieldVariables": [
+              {
+                "symbol": "ux",
+                "unit": "m",
+                "solverComponent": {
+                  "family": "displacement",
+                  "axis": "x"
+                }
+              },
+              {
+                "symbol": "uy",
+                "unit": "m",
+                "solverComponent": {
+                  "family": "displacement",
+                  "axis": "y"
+                }
+              }
+            ],
+            "derivedFieldVariables": [
+              {
+                "symbol": "sigma_xx",
+                "unit": "Pa",
+                "solverComponent": {
+                  "family": "sigma_xx"
+                }
+              },
+              {
+                "symbol": "sigma_yy",
+                "unit": "Pa",
+                "solverComponent": {
+                  "family": "sigma_yy"
+                }
+              },
+              {
+                "symbol": "sigma_zz",
+                "unit": "Pa",
+                "solverComponent": {
+                  "family": "sigma_zz"
+                }
+              },
+              {
+                "symbol": "sigma_xy",
+                "unit": "Pa",
+                "solverComponent": {
+                  "family": "sigma_xy"
+                }
+              }
+            ],
+            "zeroFieldVariables": []
+          }
+        },
+        "plotSources": [
+          "primary",
+          "derived",
+          "material"
+        ]
+      },
+      "materials": {
+        "name": "Isotropic elastic material properties",
+        "properties": [
+          {
+            "default": {
+              "expression": "2700",
+              "unit": "kg/m^3"
+            },
+            "key": "density",
+            "label": "Density",
+            "plottable": true,
+            "representation": "quantity",
+            "symbol": "rho",
+            "unit": "kg/m^3",
+            "required": true,
+            "schema": {
+              "additionalProperties": false,
+              "properties": {
+                "expression": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string",
+                  "x-fullmeta-edit": {
+                    "expression": {
+                      "namespaces": [
+                        "parameters"
+                      ]
+                    }
+                  }
+                },
+                "unit": {
+                  "const": "kg/m^3",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "expression",
+                "unit"
+              ],
+              "title": "Density",
+              "type": "object",
+              "x-fullmeta-ui-behavior": {
+                "context": "projectEditing",
+                "format": "fullmeta-ui-behavior/1",
+                "payload": {
+                  "presentation": {
+                    "hidden": true
+                  },
+                  "widget": {
+                    "settings": {},
+                    "type": "quantity"
+                  }
+                },
+                "target": {
+                  "kind": "field"
+                }
+              }
+            }
+          },
+          {
+            "default": {
+              "expression": "70000000000",
+              "unit": "Pa"
+            },
+            "key": "youngModulus",
+            "label": "Young's modulus",
+            "plottable": true,
+            "representation": "quantity",
+            "symbol": "young",
+            "unit": "Pa",
+            "required": true,
+            "schema": {
+              "additionalProperties": false,
+              "properties": {
+                "expression": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string",
+                  "x-fullmeta-edit": {
+                    "expression": {
+                      "namespaces": [
+                        "parameters"
+                      ]
+                    }
+                  }
+                },
+                "unit": {
+                  "const": "Pa",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "expression",
+                "unit"
+              ],
+              "title": "Young's modulus",
+              "type": "object",
+              "x-fullmeta-ui-behavior": {
+                "context": "projectEditing",
+                "format": "fullmeta-ui-behavior/1",
+                "payload": {
+                  "presentation": {
+                    "hidden": true
+                  },
+                  "widget": {
+                    "settings": {},
+                    "type": "quantity"
+                  }
+                },
+                "target": {
+                  "kind": "field"
+                }
+              }
+            }
+          },
+          {
+            "default": "0.33",
+            "key": "poissonRatio",
+            "label": "Poisson ratio",
+            "optional": false,
+            "plottable": true,
+            "representation": "expression",
+            "symbol": "nu",
+            "unit": "1",
+            "required": true,
+            "schema": {
+              "maxLength": 512,
+              "minLength": 1,
+              "title": "Poisson ratio",
+              "type": "string",
+              "x-fullmeta-edit": {
+                "expression": {
+                  "namespaces": [
+                    "parameters"
+                  ]
+                }
+              },
+              "x-fullmeta-ui-behavior": {
+                "context": "projectEditing",
+                "format": "fullmeta-ui-behavior/1",
+                "payload": {
+                  "presentation": {
+                    "hidden": true
+                  }
+                },
+                "target": {
+                  "kind": "field"
+                }
+              }
+            }
+          },
+          {
+            "default": "0",
+            "key": "densityLossFactor",
+            "label": "Density loss factor",
+            "optional": true,
+            "plottable": true,
+            "representation": "expression",
+            "symbol": "densityLoss",
+            "unit": "1",
+            "required": false,
+            "schema": {
+              "maxLength": 512,
+              "minLength": 1,
+              "title": "Density loss factor",
+              "type": "string",
+              "x-fullmeta-edit": {
+                "expression": {
+                  "namespaces": [
+                    "parameters"
+                  ]
+                }
+              },
+              "x-fullmeta-ui-behavior": {
+                "context": "projectEditing",
+                "format": "fullmeta-ui-behavior/1",
+                "payload": {
+                  "presentation": {
+                    "hidden": true
+                  }
+                },
+                "target": {
+                  "kind": "field"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "profile": {
+        "dimension": 2,
+        "formulations": [
+          "planeStress",
+          "planeStrain"
+        ],
+        "id": "elastic-2d",
+        "modelPhysicsType": "elasticity",
+        "name": "2D linear elasticity",
+        "physics": "elasticity"
+      },
+      "sweepResultQuantities": [
+        "max_uy_magnitude_m"
+      ],
+      "starterDefaults": {
+        "physics": {
+          "frequency": {
+            "expression": "1",
+            "unit": "Hz"
+          }
+        }
+      },
+      "studyType": "frequencyDomain",
+      "supportsStationary": false,
+      "solverModule": "elastic2d",
+      "resultDefaults": {
+        "frequencyFieldPrefix": "displacement_",
+        "frequencyColumn": "frequency_Hz"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://fullmeta.local/applications/fem/scenarios/elastic-2d.schema.json"
+  },
+  "capabilities": {
+    "mesh": {
+      "elementOrdersByProfile": {
+        "elastic-2d": [
+          1
+        ]
+      },
+      "fieldFormulations": {
+        "planeStress": {
+          "elementOrders": [
+            1
+          ]
+        },
+        "planeStrain": {
+          "elementOrders": [
+            1
+          ]
+        }
+      }
+    },
+    "physics": {
+      "featureTypesByProfile": {
+        "elastic-2d": []
+      },
+      "solverBoundaryTypesByProfile": {
+        "elastic-2d": [
+          "dirichlet",
+          "neumann",
+          "impedance"
+        ]
+      }
+    },
+    "study": {
+      "discretizationChoicesByProfile": {
+        "elastic-2d": [
+          {
+            "label": "Plane stress",
+            "value": "planeStress"
+          },
+          {
+            "label": "Plane strain",
+            "value": "planeStrain"
+          }
+        ]
+      },
+      "preparationByProfile": {
+        "elastic-2d": {
+          "kind": "frequencyPlan"
+        }
+      },
+      "solverRuntimesByProfile": {
+        "elastic-2d": {
+          "faer": {
+            "backend": "faer",
+            "kind": "executable",
+            "programId": "solverElastic2d",
+            "sequenceArgument": "--sequence",
+            "solveArgument": "--solve"
+          },
+          "rivrs": {
+            "backend": "rivrs",
+            "kind": "executable",
+            "programId": "solverElastic2d",
+            "sequenceArgument": "--sequence",
+            "solveArgument": "--solve"
+          }
+        }
+      },
+      "solverSettingsByProfile": {
+        "elastic-2d": {
+          "defaults": {
+            "elementOrder": 1
+          },
+          "fieldFormulationsFromPhysics": true
+        }
+      }
+    }
+  },
+  "schemaContributions": {
+    "x-fullmeta-ui-profiles": {
+      "elastic-2d": {
+        "layout": {
+          "graphicsHeightPercent": 60,
+          "treeWidthPx": 260
+        }
+      }
+    },
+    "modelAllOf": [
+      {
+        "if": {
+          "properties": {
+            "physics": {
+              "properties": {
+                "formulation": {
+                  "const": "planeStress"
+                }
+              },
+              "required": [
+                "formulation"
+              ]
+            }
+          },
+          "required": [
+            "physics"
+          ]
+        },
+        "then": {
+          "properties": {
+            "study": {
+              "items": {
+                "properties": {
+                  "discretization": {
+                    "default": {
+                      "elementOrder": 1,
+                      "fieldFormulation": "planeStress"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "if": {
+          "properties": {
+            "physics": {
+              "properties": {
+                "formulation": {
+                  "const": "planeStrain"
+                }
+              },
+              "required": [
+                "formulation"
+              ]
+            }
+          },
+          "required": [
+            "physics"
+          ]
+        },
+        "then": {
+          "properties": {
+            "study": {
+              "items": {
+                "properties": {
+                  "discretization": {
+                    "default": {
+                      "elementOrder": 1,
+                      "fieldFormulation": "planeStrain"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "x-fullmeta-runtime": {
+      "externalPrograms": {
+        "solverElastic2d": {
+          "allowedEntries": [
+            "--validate",
+            "--server",
+            "--prepare-study",
+            "--solve",
+            "--sequence"
+          ],
+          "executable": ".runtime/x86_64-pc-windows-gnu/release/fullmeta-fem.exe",
+          "pathType": "relative"
+        }
+      }
+    }
+  }
+}
