@@ -25,6 +25,11 @@
       "id": "thermal-2d",
       "file": "thermal2d.json",
       "default": false
+    },
+    {
+      "id": "thermal-3d",
+      "file": "thermal3d.json",
+      "default": false
     }
   ]
 }

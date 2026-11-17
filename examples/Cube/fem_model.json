@@ -1,0 +1,185 @@
+{
+  "application": "fem",
+  "metadata": {
+    "id": "Thermal3dGuiCase",
+    "name": "Cube"
+  },
+  "model": {
+    "geometry": {
+      "features": [
+        {
+          "id": "box",
+          "name": "Box",
+          "position": [
+            {
+              "expression": "0",
+              "unit": "m"
+            },
+            {
+              "expression": "0",
+              "unit": "m"
+            },
+            {
+              "expression": "0",
+              "unit": "m"
+            }
+          ],
+          "positionMode": "corner",
+          "size": [
+            {
+              "expression": "1",
+              "unit": "m"
+            },
+            {
+              "expression": "1",
+              "unit": "m"
+            },
+            {
+              "expression": "1",
+              "unit": "m"
+            }
+          ],
+          "type": "box"
+        }
+      ],
+      "tolerance": {
+        "expression": "1e-9",
+        "unit": "m"
+      }
+    },
+    "integrationOperators": [],
+    "materials": [
+      {
+        "id": "material",
+        "name": "Thermal conductivity",
+        "selectionId": "domainSelection",
+        "thermalConductivity": {
+          "expression": "2.5",
+          "unit": "W/(m*K)"
+        }
+      }
+    ],
+    "mesh": {
+      "elementFamily": "tetrahedron",
+      "gmsh": {
+        "algorithm3D": 1,
+        "elementOrder": 1,
+        "optimize": true,
+        "optimizeNetgen": true,
+        "optimizeThreshold": 0.25,
+        "smoothing": 10,
+        "threads": 1
+      },
+      "maxSize": {
+        "expression": "0.3",
+        "unit": "m"
+      },
+      "meshSizeControls": [],
+      "minSize": {
+        "expression": "0.15",
+        "unit": "m"
+      },
+      "periodicPairs": []
+    },
+    "parameters": [],
+    "physics": {
+      "dirichlet": {
+        "id": "dirichlet",
+        "name": "Dirichlet condition",
+        "selectionId": "boundarySelection",
+        "type": "dirichlet",
+        "value": {
+          "expression": "300",
+          "unit": "K"
+        }
+      },
+      "dirichlet_2": {
+        "id": "dirichlet_2",
+        "name": "Dirichlet condition 2",
+        "selectionId": "boundarySelection_2",
+        "type": "dirichlet",
+        "value": {
+          "expression": "400",
+          "unit": "K"
+        }
+      },
+      "domainSelectionIds": [
+        "domainSelection"
+      ],
+      "formulation": "T",
+      "id": "physics",
+      "name": "Physics",
+      "type": "thermal"
+    },
+    "pointwiseVariables": [],
+    "results": [
+      {
+        "id": "fieldPlot",
+        "name": "Domain field plot",
+        "quantity": {
+          "component": "T",
+          "part": "real",
+          "type": "fieldComponent"
+        },
+        "type": "field"
+      }
+    ],
+    "selections": [
+      {
+        "addresses": [
+          {
+            "membership": {
+              "box": "inside"
+            }
+          }
+        ],
+        "entity": "domain",
+        "id": "domainSelection",
+        "name": "Volume selection"
+      },
+      {
+        "addresses": [
+          {
+            "membership": {
+              "box": "boundary"
+            }
+          }
+        ],
+        "coordinateExpression": "x",
+        "entity": "boundary",
+        "id": "boundarySelection",
+        "name": "Cold face"
+      },
+      {
+        "addresses": [
+          {
+            "membership": {
+              "box": "boundary"
+            }
+          }
+        ],
+        "coordinateExpression": "x-1",
+        "entity": "boundary",
+        "id": "boundarySelection_2",
+        "name": "Hot face"
+      }
+    ],
+    "study": [
+      {
+        "id": "study",
+        "name": "Stationary thermal 3D",
+        "physicsId": "physics",
+        "type": "stationary"
+      }
+    ],
+    "units": "m",
+    "variables": []
+  },
+  "modelFormat": "fem-model/2",
+  "scenario": {
+    "dimension": 3,
+    "physics": "thermal",
+    "profileId": "thermal-3d"
+  },
+  "x-fullmeta-schema": "../../applications/fem/fem.schema.json"
+}

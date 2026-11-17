@@ -1,0 +1,286 @@
+{
+  "application": "fem",
+  "metadata": {
+    "id": "CylinderConduction3D",
+    "name": "CylinderConduction3D"
+  },
+  "model": {
+    "geometry": {
+      "features": [
+        {
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "base": [
+            {
+              "expression": "0",
+              "unit": "m"
+            },
+            {
+              "expression": "0",
+              "unit": "m"
+            },
+            {
+              "expression": "0",
+              "unit": "m"
+            }
+          ],
+          "height": {
+            "expression": "0.14",
+            "unit": "m"
+          },
+          "id": "outer",
+          "name": "Outer cylinder",
+          "radius": {
+            "expression": "0.1",
+            "unit": "m"
+          },
+          "type": "cylinder"
+        },
+        {
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "base": [
+            {
+              "expression": "0",
+              "unit": "m"
+            },
+            {
+              "expression": "0",
+              "unit": "m"
+            },
+            {
+              "expression": "0",
+              "unit": "m"
+            }
+          ],
+          "height": {
+            "expression": "0.04",
+            "unit": "m"
+          },
+          "id": "boreLower",
+          "name": "Insulated lower bore",
+          "radius": {
+            "expression": "0.02",
+            "unit": "m"
+          },
+          "type": "cylinder"
+        },
+        {
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "base": [
+            {
+              "expression": "0",
+              "unit": "m"
+            },
+            {
+              "expression": "0",
+              "unit": "m"
+            },
+            {
+              "expression": "0.04",
+              "unit": "m"
+            }
+          ],
+          "height": {
+            "expression": "0.06",
+            "unit": "m"
+          },
+          "id": "boreHeated",
+          "name": "Heated bore band",
+          "radius": {
+            "expression": "0.02",
+            "unit": "m"
+          },
+          "type": "cylinder"
+        },
+        {
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "base": [
+            {
+              "expression": "0",
+              "unit": "m"
+            },
+            {
+              "expression": "0",
+              "unit": "m"
+            },
+            {
+              "expression": "0.1",
+              "unit": "m"
+            }
+          ],
+          "height": {
+            "expression": "0.04",
+            "unit": "m"
+          },
+          "id": "boreUpper",
+          "name": "Insulated upper bore",
+          "radius": {
+            "expression": "0.02",
+            "unit": "m"
+          },
+          "type": "cylinder"
+        }
+      ],
+      "tolerance": {
+        "expression": "1e-9",
+        "unit": "m"
+      }
+    },
+    "integrationOperators": [],
+    "materials": [
+      {
+        "id": "material",
+        "name": "Isotropic conductor, k = 52",
+        "selectionId": "solid",
+        "thermalConductivity": {
+          "expression": "52",
+          "unit": "W/(m*K)"
+        }
+      }
+    ],
+    "mesh": {
+      "elementFamily": "tetrahedron",
+      "gmsh": {
+        "algorithm3D": 1,
+        "elementOrder": 1,
+        "optimize": true,
+        "optimizeNetgen": true,
+        "optimizeThreshold": 0.25,
+        "smoothing": 10,
+        "threads": 1
+      },
+      "maxSize": {
+        "expression": "0.005",
+        "unit": "m"
+      },
+      "meshSizeControls": [],
+      "minSize": {
+        "expression": "0.0016666666666666668",
+        "unit": "m"
+      },
+      "periodicPairs": []
+    },
+    "parameters": [],
+    "physics": {
+      "domainSelectionIds": [
+        "solid"
+      ],
+      "formulation": "T",
+      "heating": {
+        "id": "heating",
+        "name": "Inward heating, 500000 W/m2",
+        "selectionId": "heatedWall",
+        "type": "neumann",
+        "value": {
+          "expression": "-500000",
+          "unit": "W/m^2"
+        }
+      },
+      "id": "physics",
+      "name": "Steady conduction",
+      "temperature": {
+        "id": "temperature",
+        "name": "273.15 K exterior",
+        "selectionId": "coldExterior",
+        "type": "dirichlet",
+        "value": {
+          "expression": "273.15",
+          "unit": "K"
+        }
+      },
+      "type": "thermal"
+    },
+    "pointwiseVariables": [],
+    "results": [
+      {
+        "id": "temperaturePlot",
+        "name": "Cylinder temperature",
+        "quantity": {
+          "component": "T",
+          "part": "real",
+          "type": "fieldComponent"
+        },
+        "type": "field"
+      }
+    ],
+    "selections": [
+      {
+        "addresses": [
+          {
+            "membership": {
+              "boreHeated": "outside",
+              "boreLower": "outside",
+              "boreUpper": "outside",
+              "outer": "inside"
+            }
+          }
+        ],
+        "entity": "domain",
+        "id": "solid",
+        "name": "Hollow conducting cylinder"
+      },
+      {
+        "addresses": [
+          {
+            "membership": {
+              "boreHeated": "outside",
+              "boreLower": "outside",
+              "boreUpper": "outside",
+              "outer": "boundary"
+            }
+          }
+        ],
+        "entity": "boundary",
+        "id": "coldExterior",
+        "name": "Outer wall and both ends"
+      },
+      {
+        "addresses": [
+          {
+            "membership": {
+              "boreHeated": "boundary",
+              "boreLower": "outside",
+              "boreUpper": "outside",
+              "outer": "inside"
+            }
+          }
+        ],
+        "entity": "boundary",
+        "id": "heatedWall",
+        "name": "Inner wall, z = 0.04 to 0.10 m"
+      }
+    ],
+    "study": [
+      {
+        "id": "study",
+        "name": "Cylinder conduction stationary",
+        "physicsId": "physics",
+        "type": "stationary"
+      }
+    ],
+    "units": "m",
+    "variables": []
+  },
+  "modelFormat": "fem-model/2",
+  "scenario": {
+    "dimension": 3,
+    "physics": "thermal",
+    "profileId": "thermal-3d"
+  },
+  "x-fullmeta-schema": "../../applications/fem/fem.schema.json"
+}

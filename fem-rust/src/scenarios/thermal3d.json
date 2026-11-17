@@ -1,0 +1,402 @@
+{
+  "contractVersion": "fullmeta-fem-scenario/1",
+  "id": "thermal-3d",
+  "version": "0.3.0",
+  "schemaDocument": {
+    "$defs": {
+      "physicsFormulation": {
+        "enum": [
+          "T"
+        ]
+      },
+      "scenario": {
+        "properties": {
+          "dimension": {
+            "const": 3
+          },
+          "physics": {
+            "const": "thermal"
+          },
+          "profileId": {
+            "const": "thermal-3d"
+          }
+        }
+      }
+    },
+    "if": {
+      "properties": {
+        "scenario": {
+          "properties": {
+            "profileId": {
+              "const": "thermal-3d"
+            }
+          },
+          "required": [
+            "profileId"
+          ]
+        }
+      },
+      "required": [
+        "scenario"
+      ]
+    },
+    "then": {
+      "properties": {
+        "model": {
+          "properties": {
+            "physics": {
+              "allOf": [
+                {
+                  "not": {
+                    "required": [
+                      "frequency"
+                    ]
+                  }
+                },
+                {
+                  "not": {
+                    "required": [
+                      "phasorConvention"
+                    ]
+                  }
+                }
+              ],
+              "properties": {
+                "formulation": {
+                  "enum": [
+                    "T"
+                  ]
+                },
+                "type": {
+                  "const": "thermal"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "title": "FEM thermal 3D profile",
+    "x-fem-capabilities": {
+      "study": {
+        "preparationByProfile": {
+          "thermal-3d": {
+            "kind": "stationaryPlan"
+          }
+        },
+        "solverRuntimesByProfile": {
+          "thermal-3d": {
+            "faer": {
+              "backend": "faer",
+              "kind": "executable",
+              "programId": "solverThermal3d",
+              "solveArgument": "--solve"
+            },
+            "rivrs": {
+              "backend": "rivrs",
+              "kind": "executable",
+              "programId": "solverThermal3d",
+              "solveArgument": "--solve"
+            }
+          }
+        },
+        "solverSettingsByProfile": {
+          "thermal-3d": {
+            "defaults": {
+              "elementOrder": 1,
+              "fieldFormulation": "T"
+            }
+          }
+        }
+      }
+    },
+    "x-fem-physics": {
+      "boundaryDefaultsByFormulation": {
+        "T": {
+          "dirichlet": {
+            "value": {
+              "expression": "293.15",
+              "unit": "K"
+            }
+          },
+          "neumann": {
+            "value": {
+              "expression": "0",
+              "unit": "W/m^2"
+            }
+          }
+        }
+      },
+      "supportedBoundaryTypes": [
+        "dirichlet",
+        "neumann"
+      ],
+      "supportedFeatureTypes": [],
+      "conditionActions": [
+        {
+          "action": "add-dirichlet-boundary",
+          "conditionType": "dirichlet",
+          "itemName": "Dirichlet condition",
+          "label": "Add Dirichlet condition"
+        },
+        {
+          "action": "add-neumann-boundary",
+          "conditionType": "neumann",
+          "itemName": "Neumann condition",
+          "label": "Add Neumann condition"
+        }
+      ],
+      "featureHandlingByType": {}
+    },
+    "x-fem-scenario": {
+      "editorOptions": {
+        "globalVariables": false,
+        "integrationOperators": true,
+        "parameterSweep": false,
+        "periodicPairs": false,
+        "pointwiseVariables": false
+      },
+      "fields": {
+        "formulations": {
+          "T": {
+            "derivedFieldVariables": [],
+            "fieldVariables": [
+              {
+                "solverComponent": {
+                  "family": "temperature"
+                },
+                "symbol": "T",
+                "unit": "K"
+              }
+            ],
+            "formulation": "T",
+            "zeroFieldVariables": []
+          }
+        },
+        "plotSources": [
+          "primary"
+        ]
+      },
+      "materials": {
+        "name": "Thermal material properties",
+        "properties": [
+          {
+            "default": {
+              "expression": "1",
+              "unit": "W/(m*K)"
+            },
+            "bounds": {
+              "exclusiveMinimum": 0
+            },
+            "key": "thermalConductivity",
+            "label": "Thermal conductivity",
+            "plottable": true,
+            "representation": "quantity",
+            "symbol": "k",
+            "unit": "W/(m*K)",
+            "required": true,
+            "schema": {
+              "additionalProperties": false,
+              "properties": {
+                "expression": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string",
+                  "x-fullmeta-edit": {
+                    "expression": {
+                      "namespaces": [
+                        "parameters"
+                      ]
+                    }
+                  }
+                },
+                "unit": {
+                  "const": "W/(m*K)",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "expression",
+                "unit"
+              ],
+              "title": "Thermal conductivity",
+              "type": "object",
+              "x-fullmeta-ui-behavior": {
+                "context": "projectEditing",
+                "format": "fullmeta-ui-behavior/1",
+                "payload": {
+                  "presentation": {
+                    "hidden": true
+                  },
+                  "widget": {
+                    "settings": {},
+                    "type": "quantity"
+                  }
+                },
+                "target": {
+                  "kind": "field"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "profile": {
+        "dimension": 3,
+        "formulations": [
+          "T"
+        ],
+        "id": "thermal-3d",
+        "modelPhysicsType": "thermal",
+        "name": "3D thermal",
+        "physics": "thermal"
+      },
+      "sweepResultQuantities": [],
+      "starterDefaults": {
+        "physics": {},
+        "study": {
+          "type": "stationary",
+          "name": "Stationary thermal 3D"
+        }
+      },
+      "studyFingerprint": {
+        "defaultCsvFilename": "thermal-summary.csv",
+        "studyProperties": {
+          "meanTemperature": {
+            "default": {
+              "expression": "0",
+              "unit": "K"
+            }
+          }
+        }
+      },
+      "resultDefaults": {
+        "stationaryFieldFilename": "temperature.json",
+        "stationaryFieldSchema": "fullmeta-thermal-field/1",
+        "stationaryFieldLabel": "Stationary 3D temperature"
+      },
+      "studyType": "stationary",
+      "supportsStationary": true,
+      "solverModule": "thermal3d"
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://fullmeta.local/applications/fem/scenarios/thermal-3d.schema.json"
+  },
+  "capabilities": {
+    "mesh": {
+      "elementOrdersByProfile": {
+        "thermal-3d": [
+          1
+        ]
+      },
+      "fieldFormulations": {
+        "T": {
+          "elementOrders": [
+            1
+          ]
+        }
+      }
+    },
+    "physics": {
+      "featureTypesByProfile": {
+        "thermal-3d": []
+      },
+      "periodicPolicyByProfile": {
+        "thermal-3d": "zeroPhaseOnly"
+      },
+      "solverBoundaryTypesByProfile": {
+        "thermal-3d": [
+          "dirichlet",
+          "neumann"
+        ]
+      }
+    },
+    "study": {
+      "discretizationChoicesByProfile": {
+        "thermal-3d": [
+          {
+            "label": "Temperature",
+            "value": "T"
+          }
+        ]
+      },
+      "preparationByProfile": {
+        "thermal-3d": {
+          "kind": "stationaryPlan"
+        }
+      },
+      "solverRuntimesByProfile": {
+        "thermal-3d": {
+          "faer": {
+            "backend": "faer",
+            "kind": "executable",
+            "programId": "solverThermal3d",
+            "solveArgument": "--solve"
+          },
+          "rivrs": {
+            "backend": "rivrs",
+            "kind": "executable",
+            "programId": "solverThermal3d",
+            "solveArgument": "--solve"
+          }
+        }
+      },
+      "solverSettingsByProfile": {
+        "thermal-3d": {
+          "defaults": {
+            "elementOrder": 1,
+            "fieldFormulation": "T"
+          }
+        }
+      }
+    }
+  },
+  "schemaContributions": {
+    "x-fullmeta-ui-profiles": {
+      "thermal-3d": {
+        "layout": {
+          "graphicsHeightPercent": 58,
+          "treeWidthPx": 260
+        }
+      }
+    },
+    "studyItemAllOf": [
+      {
+        "if": {
+          "properties": {
+            "type": {
+              "const": "stationary"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        "then": {
+          "properties": {
+            "discretization": {
+              "default": {
+                "elementOrder": 1,
+                "fieldFormulation": "T"
+              }
+            }
+          }
+        }
+      }
+    ],
+    "x-fullmeta-runtime": {
+      "externalPrograms": {
+        "solverThermal3d": {
+          "allowedEntries": [
+            "--validate",
+            "--server",
+            "--prepare-study",
+            "--solve"
+          ],
+          "executable": ".runtime/x86_64-pc-windows-gnu/release/fullmeta-fem.exe",
+          "pathType": "relative"
+        }
+      }
+    }
+  }
+}
