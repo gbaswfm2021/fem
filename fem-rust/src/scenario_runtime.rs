@@ -571,6 +571,7 @@ fn configure_profile_schema(
         .ok_or("FEM base schema must declare its fixed Physics condition variants.")?;
     let mut profile_branches = Vec::new();
     let mut seen_types = HashSet::new();
+    let mut domain_source_units = Vec::<String>::new();
     for (values, kind) in [
         (supported_boundaries, "boundary"),
         (supported_features, "feature"),
@@ -601,6 +602,39 @@ fn configure_profile_schema(
                     format!("FEM base schema has no fixed Physics {kind} variant for {condition_type:?}.")
                 })?;
             let mut branch = branch.clone();
+            if physics.pointer(&format!("/featureHandlingByType/{condition_type}")).and_then(Value::as_str) == Some("domainSource") {
+                let layout = physics.get("domainSourceLayout").ok_or_else(|| format!("Scenario {id:?} must declare a domain source layout."))?;
+                let labels = layout.get("componentLabels").and_then(Value::as_array)
+                    .filter(|items| !items.is_empty() && items.len() <= 3 && items.iter().all(|v| v.as_str().is_some_and(|s| !s.trim().is_empty())))
+                    .ok_or_else(|| format!("Scenario {id:?} must label every domain source component."))?;
+                let defaults = physics.get("boundaryDefaultsByFormulation").and_then(Value::as_object)
+                    .ok_or("Domain source formulation defaults are required.")?;
+                let mut units = Vec::<String>::new();
+                for (formulation, defaults) in defaults {
+                    let components = defaults.get(condition_type).and_then(|v| v.get("values")).and_then(Value::as_array)
+                        .filter(|v| v.len() == labels.len()).ok_or_else(|| format!("Scenario {id:?} needs domain source defaults for {formulation}."))?;
+                    if let Some(form_labels) = layout.get("labelsByFormulation").and_then(|v| v.get(formulation)) {
+                        if form_labels.as_array().is_none_or(|v| v.len() != labels.len() || v.iter().any(|x| x.as_str().is_none_or(|s| s.trim().is_empty()))) {
+                            return Err(format!("Scenario {id:?} has invalid domain source labels for {formulation}."));
+                        }
+                    }
+                    for component in components {
+                        let unit = component.get("unit").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).ok_or("Domain source default needs a unit.")?;
+                        if !units.iter().any(|known| known == unit) { units.push(unit.to_string()); }
+                    }
+                }
+                if units.is_empty() { return Err(format!("Scenario {id:?} has no domain source units.")); }
+                for unit in &units { if !domain_source_units.contains(unit) { domain_source_units.push(unit.clone()); } }
+                let vector = branch.pointer_mut("/properties/values").and_then(Value::as_object_mut).ok_or("FEM base schema must declare domain source values.")?;
+                vector.insert("minItems".into(), json!(labels.len()));
+                vector.insert("maxItems".into(), json!(labels.len()));
+                if let Some(title) = layout.get("title").and_then(Value::as_str).filter(|s| !s.trim().is_empty()) { vector.insert("title".into(), json!(title)); }
+                let settings = vector.get_mut("x-fullmeta-ui-behavior").and_then(|ui| ui.pointer_mut("/payload/widget/settings")).and_then(Value::as_object_mut)
+                    .ok_or("Domain source values must declare widget settings.")?;
+                settings.insert("componentLabels".into(), Value::Array(labels.clone()));
+                vector.get_mut("items").and_then(|v| v.pointer_mut("/properties/unit")).and_then(Value::as_object_mut)
+                    .ok_or("Domain source component unit schema is required.")?.insert("enum".into(), json!(units));
+            }
             let layout = physics.get("boundaryFieldLayouts").and_then(|layouts| layouts.get(condition_type));
             if layout.is_none() {
                 if let Some(properties) = branch.get_mut("properties").and_then(Value::as_object_mut) {
@@ -635,6 +669,9 @@ fn configure_profile_schema(
             profile_branches.push(branch);
         }
     }
+    let parameter_units = root.pointer_mut("/properties/model/properties/parameters/items/properties/unit/enum")
+        .and_then(Value::as_array_mut).ok_or("FEM base schema must declare parameter units.")?;
+    for unit in domain_source_units { if !parameter_units.iter().any(|v| v.as_str() == Some(&unit)) { parameter_units.push(json!(unit)); } }
     let profile_physics = document
         .pointer_mut("/then/properties/model/properties/physics")
         .and_then(Value::as_object_mut)

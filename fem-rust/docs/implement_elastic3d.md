@@ -1,5 +1,8 @@
 # Elastic3D: implementation instruction
 
+> Historical instruction: its scenario-specific Rust module requirement has
+> been superseded by the [scenario-neutral assembler migration](implement_scenario_neutral_assembler.md).
+
 ## Status and intent
 
 This document records the implementation instruction. The `elastic-3d` scenario and its free-plate example have since been added; consult the [elastic3d design note](notes_elastic3d.md) and [example README](../../examples/elastic_plate_3d/README.md) for the implemented subset, verification results, and outstanding accuracy limitations. The requirements below are design targets, not a claim that every suggested verification or extension has been completed.
@@ -14,13 +17,13 @@ Before coding, read [FEM application instructions](../../AGENTS.md), [FEM Rust i
 
 Expected scenario work:
 
-- Add `src/scenarios/elastic3d.rs`, exporting the documented scenario runner entry point.
-- Add `src/scenarios/elastic3d.json`, declaring a versioned `elastic-3d` package and `schemaDocument.x-fem-scenario.solverModule = "elastic3d"`.
+- Declare the formulation and its numerical capabilities in the
+  `src/scenarios/elastic3d.json` package, using the shared vector execution path.
 - Register the package in `src/scenarios/registry.json`; preserve the other entries and their defaults.
 - Add the requested plate example under `applications/fem/examples/` using an appropriate new example directory and the public model format.
 - Add focused verification and update documentation to describe only behavior actually implemented and tested.
 
-The Rust and JSON files alone are not sufficient: registry discovery and an example artifact are also needed. Do not add a separate binary, hand-maintained registry module, Cargo target, profile-ID switch in shared Rust, or scenario-specific content in the base `fem.schema.json`. Use existing shared interfaces. If a genuinely shared semantic, storage or output capability is missing, first identify its smallest required change and applicable ownership; do not assume either that the two scenario files suffice or that shared edits are automatically needed. Reconcile applicable public-format/specification documentation with any authorized contract extension and report any fixed-dependency blockers with evidence.
+The JSON package alone is not sufficient: registry discovery and an example artifact are also needed. Do not add a separate binary, hand-maintained registry module, Cargo target, profile-ID switch in shared Rust, or scenario-specific content in the base `fem.schema.json`. Use existing shared interfaces. If a genuinely shared semantic, storage or output capability is missing, first identify its smallest required change and applicable ownership. Reconcile applicable public-format/specification documentation with any authorized contract extension and report any fixed-dependency blockers with evidence.
 
 ## Physics and field contract
 

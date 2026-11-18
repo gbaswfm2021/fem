@@ -1254,6 +1254,21 @@ pub fn compile(model: &Value, component_id: Option<&str>) -> Result<CompiledGeom
         geo.push("inactiveVolumes[] -= {activeVolumes[]};".to_string());
         geo.push("Delete { Volume{inactiveVolumes[]}; }".to_string());
     }
+    let probe_ids = crate::model_schema::physics_domain_sources(&component["physics"])
+        .filter(|row| row.get("enabled").and_then(Value::as_bool) != Some(false))
+        .map(|row| row.get("selectionId").and_then(Value::as_str).filter(|id| !id.is_empty())
+            .ok_or_else(|| "Enabled domain source requires a selectionId.".to_string()))
+        .collect::<Result<std::collections::BTreeSet<_>>>()?;
+    for (index, id) in probe_ids.iter().enumerate() {
+        let variable = format!("domainProbe{index}");
+        emit_domain_selection(&mut geo, &variable, id, &selections, &feature_memberships, &address_primitives, &feature_by_id, tolerance)?;
+        geo.push(format!("Printf(\"FULLMETA_DOMAIN_ENTITY {index} 0\");"));
+        geo.push(format!("If (#{variable}[] > 0)"));
+        geo.push(format!("For domainProbeIndex In {{0:#{variable}[]-1}}"));
+        geo.push(format!("  Printf(\"FULLMETA_DOMAIN_ENTITY {index} %g\", {variable}[domainProbeIndex]);"));
+        geo.push("EndFor".to_string());
+        geo.push("EndIf".to_string());
+    }
     geo.push("Mesh 3;".to_string());
     let primitive_rows = address_primitives.clone();
     let domain_selections: Vec<&Value> = selection_values
@@ -1275,6 +1290,7 @@ pub fn compile(model: &Value, component_id: Option<&str>) -> Result<CompiledGeom
         "primitives":primitive_rows,
         "domainFeatureIds":domain_feature_ids,
         "domainSelections":domain_selections,
+        "domainEntityProbeIds":probe_ids,
         "periodicPairs":periodic_pair_records
     });
     Ok(CompiledGeometry {

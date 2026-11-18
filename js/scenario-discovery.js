@@ -303,6 +303,41 @@ function configureScenarioSchema(root, document, id) {
     const branch = fixedSchemas.find(candidate => candidate?.properties?.type?.const === type);
     if (!branch) throw new Error(`FEM base schema has no fixed Physics condition variant for ${type}.`);
     const effective = structuredClone(branch);
+    if (physics?.featureHandlingByType?.[type] === 'domainSource') {
+      const sourceLayout = physics?.domainSourceLayout;
+      if (!isRecord(sourceLayout) || !Array.isArray(sourceLayout.componentLabels)
+        || sourceLayout.componentLabels.length < 1 || sourceLayout.componentLabels.length > 3
+        || sourceLayout.componentLabels.some(label => typeof label !== 'string' || !label.trim())) {
+        throw new Error(`FEM scenario ${id} must label each domain source component.`);
+      }
+      const values = effective.properties?.values;
+      if (!values || !values['x-fullmeta-ui-behavior']?.payload?.widget?.settings) {
+        throw new Error('FEM base schema must define the domain source quantity widget.');
+      }
+      values.minItems = values.maxItems = sourceLayout.componentLabels.length;
+      values['x-fullmeta-ui-behavior'].payload.widget.settings.componentLabels = [...sourceLayout.componentLabels];
+      if (typeof sourceLayout.title === 'string' && sourceLayout.title.trim()) values.title = sourceLayout.title;
+      const unitChoices = new Set();
+      for (const [formulation, defaults] of Object.entries(physics.boundaryDefaultsByFormulation || {})) {
+        const formulationLabels = sourceLayout.labelsByFormulation?.[formulation];
+        if (formulationLabels !== undefined && (!Array.isArray(formulationLabels)
+          || formulationLabels.length !== sourceLayout.componentLabels.length
+          || formulationLabels.some(label => typeof label !== 'string' || !label.trim()))) {
+          throw new Error(`FEM scenario ${id} has invalid domain source labels for ${formulation}.`);
+        }
+        const components = defaults?.[type]?.values;
+        if (!Array.isArray(components) || components.length !== sourceLayout.componentLabels.length
+          || components.some(component => typeof component?.unit !== 'string' || !component.unit.trim())) {
+          throw new Error(`FEM scenario ${id} must declare domain source defaults and units for each formulation.`);
+        }
+        for (const component of components) unitChoices.add(component.unit);
+      }
+      if (!unitChoices.size) throw new Error(`FEM scenario ${id} has no domain source unit choices.`);
+      values.items.properties.unit.enum = [...unitChoices];
+      const parameterUnits = root.properties?.model?.properties?.parameters?.items?.properties?.unit?.enum;
+      if (!Array.isArray(parameterUnits)) throw new Error('FEM base schema must declare parameter units.');
+      for (const unit of unitChoices) if (!parameterUnits.includes(unit)) parameterUnits.push(unit);
+    }
     const layout = physics?.boundaryFieldLayouts?.[type];
     if (!layout) delete effective.properties?.fieldValues;
     else {

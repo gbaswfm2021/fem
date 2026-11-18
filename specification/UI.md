@@ -171,7 +171,7 @@ On Add, create the fields below in addition to `id`, `name`, and `type`. Save ea
 | Selections | `add-domain-address-selection` offers Add area selection in 2D and Add volume selection in 3D. `add-boundary-address-selection` offers Add edge selection in 2D and Add area selection in 3D. `add-edge-address-selection` offers Add edge selection in 3D. `add-point-address-selection` offers Add point selection in both. | Create one named address selection with the correct `entity` token and its ordered membership editor. |
 | Integration operators | `add-integration-operator` offers Add integration operator. | Insert an operator with a valid selection reference from the declared choices. |
 | Mesh periodic pairs | `add-periodic-pair` offers Add periodic pair. | Insert one pair object with lower/upper selections and a translation. Use the enabled-pair reference control for mesh activation. |
-| Physics | `add-dirichlet-boundary`, `add-neumann-boundary`, `add-impedance-boundary`, and `add-periodic-condition` offer Add Dirichlet condition, Add Neumann condition, Add impedance condition, and Add periodic condition. | Store the condition at the key of its generated ID. Use the profile's type choices, reference eligibility, and formulation defaults. |
+| Physics | Offer Add Domain Source, Add Dirichlet condition, Add Neumann condition, Add impedance condition, and Add periodic condition when supported. | Store the condition at the key of its generated ID. Use the profile's type choices, reference eligibility, and formulation defaults. Domain Sources use domain selections and may share a selection. |
 | Study | `add-harmonic-study` offers Add Harmonic study. `add-stationary-study` offers Add Stationary study. `add-parameter-sweep` offers Add Parameter sweep on an eligible harmonic Study. | Use names Harmonic study, Stationary study, and Parameter sweep respectively, with the matching type and linked Physics or parent Study. |
 | Results | `add-global-variable-plot` offers Add Global variable plot. `add-domain-field-plot` offers Add Domain field plot. | Add `plot.sweep` or `field` under `/model/results` as allowed by the profile. Open the selected recipe's Settings and result scene. |
 
@@ -228,6 +228,7 @@ Use `x-fullmeta-ui-modelEditor.titles` to set the Settings heading **Physics** f
 
 | Condition type | Settings heading |
 | --- | --- |
+| `domainSource` | Domain Source |
 | `dirichlet` | Dirichlet condition |
 | `neumann` | Neumann condition |
 | `impedance` | Impedance condition |
@@ -235,6 +236,7 @@ Use `x-fullmeta-ui-modelEditor.titles` to set the Settings heading **Physics** f
 
 In the Physics interface Settings, show the read-only **Solver field and material variables** summary using `x-fullmeta-ui-modelEditor.fieldSummary`. Resolve the active profile and formulation and group the declared symbols into Primary field variables, Derived field variables, Zero components in this formulation, and Material variables or Material parameters as applicable. Show each symbol and its unit. Label zero components and dimension-specific zeros, and explain the supported expression and result scopes. Show a missing-definition message when the profile or formulation has no matching catalog.
 
+- `domainSource` shows **id (automatic)**, **name**, a **domain selection** selector, and the scenario-declared source component expressions and units. Multiple entries may refer to the same domain selection.
 - `impedance` shows **id (automatic)**, **name**, a **boundary selection** selector, and an **Impedance** expression with a unit selector. Show **Specify an incident field** while the incident field is absent. Activating it adds the **Incident factor** and its polarization vector together. Label the polarization entries with the active formulation's primary field symbols and display their units. An explicit clear removes both optional values together. [Ordinary condition widget bindings](contracts/shared-widget-contract.md#ordinary-condition-settings)
 - `neumann` and `dirichlet` show **id (automatic)**, **name**, **boundary selection**, and the corresponding prescribed **value** quantity. [Ordinary condition widget bindings](contracts/shared-widget-contract.md#ordinary-condition-settings)
 - `periodicCondition` shows **id (automatic)**, **name**, and **periodic pair** in that order, followed by the **phaseVector** group. Use the saved pair name for the selected option and **Choose periodic pair…** for the empty option. Offer eligible enabled mesh pairs, and report a saved pair that is no longer eligible without silently changing it. Show the phase quantities as **x-component**, **y-component**, and **z-component**, in order. Each row has a separate expression input and a unit selector, even when `rad/m` is the only allowed choice. [Periodic condition widget bindings](contracts/shared-widget-contract.md#periodic-condition-settings)

@@ -1,4 +1,4 @@
-import { getCoreUnit } from '../../../platform/core-rust/js/api.js';
+import { getCoreUnit } from './runtime/core-api.js';
 import { createTableData, resolveTableSelection } from '../../../platform/ui/widgets/shared/tables/data.js';
 import {engineeringFrequencyUnit,frequencyDisplayScale} from './result-fields.js';
 

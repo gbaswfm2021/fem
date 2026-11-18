@@ -4,7 +4,7 @@ This guide describes the current `thermal-3d` stationary conduction scenario,
 its model settings and its linear-tetrahedron solver. See the [FEM project
 guide](../../docs/README.md), [Model 2 reference](../../docs/fullmeta-model-2.md),
 [scenario contract](../src/scenarios/thermal3d.json), and
-[solver implementation](../src/scenarios/thermal3d.rs).
+[solver implementation](../src/prepared_scalar.rs).
 
 ## Physics and fields
 
@@ -12,14 +12,14 @@ Temperature `T` in kelvin is the primary unknown. For isotropic conductivity
 `k`, the heat-flux vector `q` and stationary equation are
 
 ```math
-\mathbf q=-k\nabla T,\qquad \nabla\cdot\mathbf q=0,
-\qquad -\nabla\cdot(k\nabla T)=0.
+\mathbf q=-k\nabla T,\qquad \nabla\cdot\mathbf q=Q,
+\qquad -\nabla\cdot(k\nabla T)=Q.
 ```
 
-This scenario has no volumetric heat source or transient heat capacity. It does
-not model convection, radiation, or thermal impedance boundary conditions.
-Heat can enter or leave through prescribed-temperature or prescribed-flux
-boundaries.
+`Q` is volumetric heat generation in `W/m^3` and is zero when no Domain Source
+is enabled. The scenario has no transient heat capacity and does not model
+convection, radiation, or thermal impedance boundary conditions. Heat can also
+enter or leave through prescribed-temperature or prescribed-flux boundaries.
 
 The scenario exposes `T` as its primary plot field. The solver also recovers a
 three-component heat flux for each tetrahedron and writes it to the field file;
@@ -33,7 +33,7 @@ equation is
 
 ```math
 \int_\Omega k\nabla v\cdot\nabla T\,dV
-=-\int_{\Gamma_N}v\,q_n\,dS.
+=\int_\Omega vQ\,dV-\int_{\Gamma_N}v\,q_n\,dS.
 ```
 
 Prescribed temperatures on the Dirichlet boundary are imposed separately. On
@@ -79,7 +79,7 @@ Periodic thermal-3D conditions and periodic mesh pairs are unsupported.
 ### Pure-flux components
 
 If a connected part of the mesh has no prescribed temperature, its integrated
-outward heat flux must balance to zero. Otherwise the solver rejects the case.
+outward heat flux must equal the integrated heat generation. Otherwise the solver rejects the case.
 For each such connected component, a volume-weighted mean-temperature
 constraint fixes the otherwise arbitrary additive temperature. The Study's
 `meanTemperature` supplies the reference; its default is `0 K`. Set a suitable
@@ -108,7 +108,7 @@ residual, and minimum and maximum temperature.
 
 ## Simple check
 
-For a homogeneous slab `0 <= x <= L`, insulated on its other faces, with
+For a homogeneous slab `0 <= x <= L` with zero domain source, insulated on its other faces, with
 `T(0) = T_left` and `T(L) = T_right`, the exact solution is
 
 ```math
@@ -119,3 +119,13 @@ T(x)=T_{\rm left}+\frac{T_{\rm right}-T_{\rm left}}{L}x,
 The outward normal flux is `-q_x` on the left and `q_x` on the right. Compare
 the calculated temperature and flux with these values and check heat balance;
 use mesh refinement for more complex geometries or material interfaces.
+
+## Domain Source
+
+The current implementation supports multiple Domain Source entries under PHYSICS, each with an existing domain selection and expressions in spatial coordinates. Overlapping entries add; no entry means zero source. The project model stores selections and expressions, while the scenario contract declares their physical interpretation and weak-form contribution. This implementation is undergoing verification; its availability in a deployed installation depends on compatible FEM and platform runtimes.
+
+For stationary conduction, the source is volumetric heat generation. The pure-Neumann compatibility check includes the integrated source.
+
+For source density Q in W/m^3, use `-div(k grad T) = Q` and add `integral(test * Q) dV`.
+
+See the [implementation plan](implement_domain_sources.md) for expression evaluation, generic assembly and verification requirements.

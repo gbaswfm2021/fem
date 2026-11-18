@@ -90,6 +90,16 @@ export function projectSettingsSchema({model,path,schema,getSchema,scenario}){
   if(path[1]==='physics'&&typeof path[2]==='string'){
     const rootPath=path.slice(0,3),condition=at(model,rootPath);
     const physics=schema.$defs?.femProfiles?.[profileId]?.['x-fem-physics'];
+    if(physics?.featureHandlingByType?.[condition?.type]==='domainSource'){
+      const root=structuredClone(getSchema(rootPath));
+      const values=root?.properties?.values;
+      const defaults=physics.boundaryDefaultsByFormulation?.[model.model.physics.formulation]?.[condition.type]?.values;
+      if(values?.items?.properties?.unit && Array.isArray(defaults)){
+        const units=[...new Set(defaults.map(item=>item?.unit).filter(unit=>typeof unit==='string'&&unit))];
+        if(units.length)values.items.properties.unit.enum=units;
+      }
+      return path.length===3?root:getSchema(path);
+    }
     const layout=physics?.boundaryFieldLayouts?.[condition?.type];
     if(layout){
       const root=structuredClone(getSchema(rootPath)),fields=root?.properties;

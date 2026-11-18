@@ -1,5 +1,5 @@
-import { resolveParameterTable } from '../../../platform/core-rust/js/api.js';
-import { bindRuntimePolicy } from '../../../platform/model-rust/js/api.js';
+import { resolveParameterTable } from './runtime/core-api.js';
+import { bindRuntimePolicy } from './runtime/model-api.js';
 import { modelWithSchemaValidSettingsItem } from '../../../platform/js/services.js';
 
 /** Adapt the public Model Editor hooks to FEM's saved declarations. */

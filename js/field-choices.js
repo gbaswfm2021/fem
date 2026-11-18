@@ -1,4 +1,4 @@
-import {getCoreUnit} from '../../../platform/core-rust/js/api.js';
+import {getCoreUnit} from './runtime/core-api.js';
 import {resultQuantityDescriptors} from './result-adapters.js';
 import {fieldComponentHasSamples} from './field-view-state.js';
 

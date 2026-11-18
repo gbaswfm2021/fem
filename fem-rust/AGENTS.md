@@ -1,13 +1,13 @@
 # FEM scenario contributor boundary
 
-Scenario additions and scenario-specific solver work belong inside this
-`fem-rust/` directory. Keep each new scenario's contract in `src/scenarios/<module>.json`
-and its solver implementation in `src/scenarios/<module>.rs`. Register
-the package in `src/scenarios/registry.json` using the ID without hyphens as the filename stem, and set
-`schemaDocument.x-fem-scenario.solverModule` to the Rust module name.
+Keep each scenario's declarations in `src/scenarios/<module>.json` and
+register it in `src/scenarios/registry.json` using the ID without hyphens as
+the filename stem. Use a declared generic execution capability for supported
+mathematics; do not add scenario-specific Rust solver files.
 
-The build script discovers registered modules. Do not add a hand-maintained scenario registry module, a binary wrapper or Cargo target, or a
-profile-ID branch to shared Rust code for an ordinary scenario addition.
+The build script validates registered packages. Do not add a hand-maintained
+scenario registry module, a binary wrapper or Cargo target, or a profile-ID
+branch to shared Rust code for an ordinary scenario addition.
 `src/scenario_runtime.rs`, `build.rs`, and the code under `src/` outside
 `scenarios/` are shared infrastructure; change them only when improving
 a cross-scenario contract or behavior. Never put scenario-specific data in

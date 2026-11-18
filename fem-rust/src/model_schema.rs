@@ -129,6 +129,19 @@ pub(crate) fn physics_periodic_conditions(physics: &Value) -> impl Iterator<Item
     })
 }
 
+pub(crate) fn physics_domain_sources(physics: &Value) -> impl Iterator<Item = &Value> {
+    let mut types = BTreeSet::new();
+    if let Ok(context) = context() {
+        for document in context.documents() {
+            if let Some(handling) = document.pointer("/x-fem-physics/featureHandlingByType").and_then(Value::as_object) {
+                types.extend(handling.iter().filter_map(|(kind, behavior)|
+                    (behavior.as_str() == Some("domainSource")).then(|| kind.clone())));
+            }
+        }
+    }
+    physics_conditions(physics).filter(move |value| value.get("type").and_then(Value::as_str).is_some_and(|kind| types.contains(kind)))
+}
+
 /// Resolve a registered executable name from the selected model schema.
 pub(crate) fn external_program_executable(id: &str) -> Result<&'static str, String> {
     let mut found = None;

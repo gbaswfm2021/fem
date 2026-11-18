@@ -1,5 +1,5 @@
-import { evaluateQuantity, resolveParameterTable } from '../../../platform/core-rust/js/api.js';
-import { bindRuntimePolicy } from '../../../platform/model-rust/js/api.js';
+import { evaluateQuantity, resolveParameterTable } from '../js/runtime/core-api.js';
+import { bindRuntimePolicy } from '../js/runtime/model-api.js';
 import { drawPlot1d } from '../../../platform/ui/widgets/plot-1d/widget.js';
 import { plot1dColor } from '../../../platform/ui/widgets/graphics-console/widget.js';
 import { createTableData } from '../../../platform/ui/widgets/shared/tables/data.js';

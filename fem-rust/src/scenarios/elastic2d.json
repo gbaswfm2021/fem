@@ -1,7 +1,559 @@
 {
   "contractVersion": "fullmeta-fem-scenario/1",
   "id": "elastic-2d",
+  "domainSources": {
+    "planeStress": {
+      "form": {
+        "dimension": 2,
+        "fieldComponents": 2,
+        "test": "value"
+      },
+      "input": {
+        "components": 2,
+        "path": "/values",
+        "unit": "N/m^3",
+        "number": "complex"
+      },
+      "coefficient": 1
+    },
+    "planeStrain": {
+      "form": {
+        "dimension": 2,
+        "fieldComponents": 2,
+        "test": "value"
+      },
+      "input": {
+        "components": 2,
+        "path": "/values",
+        "unit": "N/m^3",
+        "number": "complex"
+      },
+      "coefficient": 1
+    }
+  },
+  "preparedVector": {
+    "supportedQuadrature": ["standard"],
+    "formulationMatch": { "modelPath": "/model/physics/formulation" },
+    "meshFormat": "fullmeta-v2", "boundaryQuadrature": "gauss2", "periodic": "reject", "globalVariables": "ignore",
+    "vectorComponents": ["ux", "uy"], "tensorMatrix": "stress", "maximumComponent": 1,
+    "essentialForm": "dirichlet", "minimumRealInputs": { "Z": 0 }, "zeroOnlyScalarInputs": ["neumann"], "zeroTolerance": 1e-14,
+    "topology": { "rejectDuplicateCells": false, "rejectNonManifoldFacets": false, "requireAllNodesUsed": false, "requireNonemptyCells": true,
+      "determinantTolerance": { "kind": "absolute", "value": 0, "rejectEqual": true } }
+  },
+  "resultPlans": {
+    "planeStress": {
+      "completion": [{"literal":"Elastic 2D "},{"input":"formulation","format":"text"},{"literal":" · "},{"input":"frequency","format":"fixed","precision":3},{"literal":" Hz · "},{"input":"unknowns","format":"integer"},{"literal":" DOFs · "},{"input":"cellCount","format":"integer"},{"literal":" triangles · residual "},{"input":"residual","format":"scientific","precision":2},{"literal":" · max |uy| "},{"input":"maximum","format":"scientific","precision":5},{"literal":" m"}],
+      "document": {
+        "object": {
+          "schema": {
+            "literal": "fullmeta-elastic-field/1"
+          },
+          "frequencyHz": {
+            "input": "frequency"
+          },
+          "dimension": {
+            "literal": 2
+          },
+          "fieldComponentCoordinateSystem": {
+            "literal": "model"
+          },
+          "nodes": {
+            "input": "nodes"
+          },
+          "formulation": {
+            "input": "formulation"
+          },
+          "triangles": {
+            "input": "cells"
+          },
+          "fields": {
+            "object": {
+              "ux": {
+                "field": {
+                  "input": "ux",
+                  "unit": "m",
+                  "source": "solved"
+                }
+              },
+              "uy": {
+                "field": {
+                  "input": "uy",
+                  "unit": "m",
+                  "source": "solved"
+                }
+              },
+              "sigma_xx": {
+                "field": {
+                  "input": "sigma_xx",
+                  "unit": "Pa",
+                  "source": "derived"
+                }
+              },
+              "sigma_yy": {
+                "field": {
+                  "input": "sigma_yy",
+                  "unit": "Pa",
+                  "source": "derived"
+                }
+              },
+              "sigma_zz": {
+                "field": {
+                  "input": "sigma_zz",
+                  "unit": "Pa",
+                  "source": "derived"
+                }
+              },
+              "sigma_xy": {
+                "field": {
+                  "input": "sigma_xy",
+                  "unit": "Pa",
+                  "source": "derived"
+                }
+              }
+            }
+          },
+          "materialFieldsByCell": {
+            "input": "materialFields"
+          },
+          "stressByCell": {
+            "cellMatrix": {
+              "input": "stress",
+              "components": [
+                "sigma_xx",
+                "sigma_yy",
+                "sigma_zz",
+                "sigma_xy"
+              ],
+              "unit": "Pa"
+            }
+          },
+          "fieldConvention": {
+            "literal": "exp(+i omega t)"
+          },
+          "derivedFieldRecovery": {
+            "literal": "arithmetic mean of incident triangle centroid stresses at each node; raw stressByCell retained"
+          },
+          "solver": {
+            "object": {
+              "backend": {
+                "input": "backend"
+              },
+              "ordering": {
+                "input": "ordering"
+              },
+              "threads": {
+                "input": "threads"
+              },
+              "constitutiveQuadrature": {
+                "literal": "standard"
+              },
+              "residual": {
+                "input": "residual"
+              },
+              "unknowns": {
+                "input": "unknowns"
+              }
+            }
+          },
+          "maximumUyMagnitudeM": {
+            "input": "maximum"
+          }
+        }
+      },
+      "csv": [
+        {
+          "header": "frequency_Hz",
+          "input": "frequency",
+          "format": "fixed",
+          "precision": 12
+        },
+        {
+          "header": "unknowns",
+          "input": "unknowns",
+          "format": "integer"
+        },
+        {
+          "header": "residual",
+          "input": "residual",
+          "format": "scientific",
+          "precision": 8
+        },
+        {
+          "header": "max_uy_magnitude_m",
+          "input": "maximum",
+          "format": "scientific",
+          "precision": 12
+        }
+      ]
+    },
+    "planeStrain": {
+      "completion": [{"literal":"Elastic 2D "},{"input":"formulation","format":"text"},{"literal":" · "},{"input":"frequency","format":"fixed","precision":3},{"literal":" Hz · "},{"input":"unknowns","format":"integer"},{"literal":" DOFs · "},{"input":"cellCount","format":"integer"},{"literal":" triangles · residual "},{"input":"residual","format":"scientific","precision":2},{"literal":" · max |uy| "},{"input":"maximum","format":"scientific","precision":5},{"literal":" m"}],
+      "document": {
+        "object": {
+          "schema": {
+            "literal": "fullmeta-elastic-field/1"
+          },
+          "frequencyHz": {
+            "input": "frequency"
+          },
+          "dimension": {
+            "literal": 2
+          },
+          "fieldComponentCoordinateSystem": {
+            "literal": "model"
+          },
+          "nodes": {
+            "input": "nodes"
+          },
+          "formulation": {
+            "input": "formulation"
+          },
+          "triangles": {
+            "input": "cells"
+          },
+          "fields": {
+            "object": {
+              "ux": {
+                "field": {
+                  "input": "ux",
+                  "unit": "m",
+                  "source": "solved"
+                }
+              },
+              "uy": {
+                "field": {
+                  "input": "uy",
+                  "unit": "m",
+                  "source": "solved"
+                }
+              },
+              "sigma_xx": {
+                "field": {
+                  "input": "sigma_xx",
+                  "unit": "Pa",
+                  "source": "derived"
+                }
+              },
+              "sigma_yy": {
+                "field": {
+                  "input": "sigma_yy",
+                  "unit": "Pa",
+                  "source": "derived"
+                }
+              },
+              "sigma_zz": {
+                "field": {
+                  "input": "sigma_zz",
+                  "unit": "Pa",
+                  "source": "derived"
+                }
+              },
+              "sigma_xy": {
+                "field": {
+                  "input": "sigma_xy",
+                  "unit": "Pa",
+                  "source": "derived"
+                }
+              }
+            }
+          },
+          "materialFieldsByCell": {
+            "input": "materialFields"
+          },
+          "stressByCell": {
+            "cellMatrix": {
+              "input": "stress",
+              "components": [
+                "sigma_xx",
+                "sigma_yy",
+                "sigma_zz",
+                "sigma_xy"
+              ],
+              "unit": "Pa"
+            }
+          },
+          "fieldConvention": {
+            "literal": "exp(+i omega t)"
+          },
+          "derivedFieldRecovery": {
+            "literal": "arithmetic mean of incident triangle centroid stresses at each node; raw stressByCell retained"
+          },
+          "solver": {
+            "object": {
+              "backend": {
+                "input": "backend"
+              },
+              "ordering": {
+                "input": "ordering"
+              },
+              "threads": {
+                "input": "threads"
+              },
+              "constitutiveQuadrature": {
+                "literal": "standard"
+              },
+              "residual": {
+                "input": "residual"
+              },
+              "unknowns": {
+                "input": "unknowns"
+              }
+            }
+          },
+          "maximumUyMagnitudeM": {
+            "input": "maximum"
+          }
+        }
+      },
+      "csv": [
+        {
+          "header": "frequency_Hz",
+          "input": "frequency",
+          "format": "fixed",
+          "precision": 12
+        },
+        {
+          "header": "unknowns",
+          "input": "unknowns",
+          "format": "integer"
+        },
+        {
+          "header": "residual",
+          "input": "residual",
+          "format": "scientific",
+          "precision": 8
+        },
+        {
+          "header": "max_uy_magnitude_m",
+          "input": "maximum",
+          "format": "scientific",
+          "precision": 12
+        }
+      ]
+    }
+  },
+  "boundaryInputs": {
+    "planeStress": { "dirichlet": { "mode": "point", "sampling": "point", "prescribed": {
+      "scalar": { "path": "/value", "unit": "m", "number": "complex" },
+      "vector": { "path": "/fieldValues", "unit": "m", "number": "complex", "components": 2 }
+    } }, "neumann": { "mode": "trace", "sampling": "point", "prescribed": {
+      "scalar": { "path": "/value", "unit": "Pa", "number": "complex" },
+      "vector": { "path": "/fieldValues", "unit": "Pa", "number": "complex", "components": 2 },
+      "scalarForm": "neumann", "vectorForm": "neumann", "source": "traction", "scalarExpansion": 2
+    } }, "impedance": { "mode": "impedance", "sampling": "point", "form": "impedance", "coefficients": [
+      { "name": "Z", "path": "/impedance", "unit": "Pa*s/m", "number": "complex" }
+    ] } },
+    "planeStrain": { "dirichlet": { "mode": "point", "sampling": "point", "prescribed": {
+      "scalar": { "path": "/value", "unit": "m", "number": "complex" },
+      "vector": { "path": "/fieldValues", "unit": "m", "number": "complex", "components": 2 }
+    } }, "neumann": { "mode": "trace", "sampling": "point", "prescribed": {
+      "scalar": { "path": "/value", "unit": "Pa", "number": "complex" },
+      "vector": { "path": "/fieldValues", "unit": "Pa", "number": "complex", "components": 2 },
+      "scalarForm": "neumann", "vectorForm": "neumann", "source": "traction", "scalarExpansion": 2
+    } }, "impedance": { "mode": "impedance", "sampling": "point", "form": "impedance", "coefficients": [
+      { "name": "Z", "path": "/impedance", "unit": "Pa*s/m", "number": "complex" }
+    ] } }
+  },
+  "discovery": { "order": 4, "default": false },
   "version": "1.0.0",
+  "materialBindings": {
+    "planeStress": [
+      {
+        "target": "rho",
+        "source": "rho",
+        "unit": "kg/m^3",
+        "bounds": {
+          "exclusiveMinimum": 0
+        }
+      },
+      {
+        "target": "young",
+        "source": "young",
+        "unit": "Pa",
+        "bounds": {
+          "exclusiveMinimum": 0
+        }
+      },
+      {
+        "target": "nu",
+        "source": "nu",
+        "unit": "1",
+        "bounds": {
+          "exclusiveMinimum": -1,
+          "exclusiveMaximum": 0.5
+        }
+      },
+      {
+        "target": "loss",
+        "source": "densityLoss",
+        "unit": "1",
+        "default": 0,
+        "bounds": {
+          "minimum": 0
+        }
+      }
+    ],
+    "planeStrain": [
+      {
+        "target": "rho",
+        "source": "rho",
+        "unit": "kg/m^3",
+        "bounds": {
+          "exclusiveMinimum": 0
+        }
+      },
+      {
+        "target": "young",
+        "source": "young",
+        "unit": "Pa",
+        "bounds": {
+          "exclusiveMinimum": 0
+        }
+      },
+      {
+        "target": "nu",
+        "source": "nu",
+        "unit": "1",
+        "bounds": {
+          "exclusiveMinimum": -1,
+          "exclusiveMaximum": 0.5
+        }
+      },
+      {
+        "target": "loss",
+        "source": "densityLoss",
+        "unit": "1",
+        "default": 0,
+        "bounds": {
+          "minimum": 0
+        }
+      }
+    ]
+  },
+  "selectionPlan": {
+    "collections": [
+    {"name":"domainSources","cellMapSection":"domainCellSelections","path":"/model/physics","mapSection":"physicalGroups","kind":"identifiedEntries","missing":"empty","disabled":"skip","duplicates":"keepAll","declaredTag":"ignore","coverage":["assignedInMesh"],"positiveMeshTags":false,"types":["domainSource"]},
+      {
+        "name": "materials",
+        "path": "/model/materials",
+        "mapSection": "physicalGroups",
+        "kind": "array",
+        "missing": "error",
+        "disabled": "include",
+        "duplicates": "reject",
+        "declaredTag": "ignore",
+        "coverage": [
+          "meshAssigned"
+        ],
+        "positiveMeshTags": false
+      },
+      {
+        "name": "boundaries",
+        "path": "/model/physics",
+        "mapSection": "boundarySelections",
+        "kind": "identifiedEntries",
+        "types": [
+          "dirichlet",
+          "neumann",
+          "impedance"
+        ],
+        "missing": "error",
+        "disabled": "skip",
+        "duplicates": "reject",
+        "declaredTag": "ignore",
+        "coverage": [
+          "assignedInMesh"
+        ],
+        "positiveMeshTags": false
+      }
+    ]
+  },
+  "weakForms": {
+    "planeStress": {
+      "dimension": 2,
+      "fieldComponents": 2,
+      "element": { "cell": "triangle", "family": "lagrange", "fieldComponents": 2, "orders": [1] },
+      "coefficients": {
+        "lambda3d": { "divide": [ { "multiply": [ { "symbol": "young" }, { "symbol": "nu" } ] }, { "multiply": [ { "add": [ 1, { "symbol": "nu" } ] }, { "add": [ 1, { "multiply": [ -2, { "symbol": "nu" } ] } ] } ] } ] },
+        "mu": { "divide": [ { "symbol": "young" }, { "multiply": [ 2, { "add": [ 1, { "symbol": "nu" } ] } ] } ] },
+        "lambda": { "divide": [ { "multiply": [ 2, { "symbol": "lambda3d" }, { "symbol": "mu" } ] }, { "add": [ { "symbol": "lambda3d" }, { "multiply": [ 2, { "symbol": "mu" } ] } ] } ] },
+        "lambdaPlus2Mu": { "add": [ { "symbol": "lambda" }, { "multiply": [ 2, { "symbol": "mu" } ] } ] },
+        "stressZZFactor": 0,
+        "mass": { "complex": [ { "multiply": [ -1, { "symbol": "omega" }, { "symbol": "omega" }, { "symbol": "rho" } ] }, { "multiply": [ { "symbol": "omega" }, { "symbol": "omega" }, { "symbol": "rho" }, { "symbol": "loss" } ] } ] }
+      },
+      "matrixCoefficients": { "C": { "values": [
+        ["lambdaPlus2Mu",0,0,"lambda"],
+        [0,"mu","mu",0],
+        [0,"mu","mu",0],
+        ["lambda",0,0,"lambdaPlus2Mu"]
+      ] } },
+      "terms": [
+        { "test": "symmetricGradient", "trial": "symmetricGradient", "coefficient": "C" },
+        { "test": "value", "trial": "value", "coefficient": "mass" }
+      ]
+    },
+    "planeStrain": {
+      "dimension": 2,
+      "fieldComponents": 2,
+      "element": { "cell": "triangle", "family": "lagrange", "fieldComponents": 2, "orders": [1] },
+      "coefficients": {
+        "lambda3d": { "divide": [ { "multiply": [ { "symbol": "young" }, { "symbol": "nu" } ] }, { "multiply": [ { "add": [ 1, { "symbol": "nu" } ] }, { "add": [ 1, { "multiply": [ -2, { "symbol": "nu" } ] } ] } ] } ] },
+        "mu": { "divide": [ { "symbol": "young" }, { "multiply": [ 2, { "add": [ 1, { "symbol": "nu" } ] } ] } ] },
+        "lambda": { "symbol": "lambda3d" },
+        "lambdaPlus2Mu": { "add": [ { "symbol": "lambda" }, { "multiply": [ 2, { "symbol": "mu" } ] } ] },
+        "stressZZFactor": { "symbol": "lambda3d" },
+        "mass": { "complex": [ { "multiply": [ -1, { "symbol": "omega" }, { "symbol": "omega" }, { "symbol": "rho" } ] }, { "multiply": [ { "symbol": "omega" }, { "symbol": "omega" }, { "symbol": "rho" }, { "symbol": "loss" } ] } ] }
+      },
+      "matrixCoefficients": { "C": { "values": [
+        ["lambdaPlus2Mu",0,0,"lambda"],
+        [0,"mu","mu",0],
+        [0,"mu","mu",0],
+        ["lambda",0,0,"lambdaPlus2Mu"]
+      ] } },
+      "terms": [
+        { "test": "symmetricGradient", "trial": "symmetricGradient", "coefficient": "C" },
+        { "test": "value", "trial": "value", "coefficient": "mass" }
+      ]
+    }
+  },
+  "tensorRecoveries": {
+    "planeStress": {
+      "dimension": 2, "fieldComponents": 2, "operator": "symmetricGradient",
+      "sampling": "cellCentroid", "output": "cellAndNodalArithmeticMean",
+      "components": ["sigma_xx", "sigma_yy", "sigma_zz", "sigma_xy"],
+      "coefficients": {"L":{"symbol":"lambda"}, "M":{"symbol":"mu"}, "Z":{"symbol":"stressZZFactor"}, "D":{"add":[{"symbol":"lambda"},{"multiply":[2,{"symbol":"mu"}]}]}},
+      "matrix": [["D",0,0,"L"],["L",0,0,"D"],["Z",0,0,"Z"],[0,"M","M",0]]
+    },
+    "planeStrain": {
+      "dimension": 2, "fieldComponents": 2, "operator": "symmetricGradient",
+      "sampling": "cellCentroid", "output": "cellAndNodalArithmeticMean",
+      "components": ["sigma_xx", "sigma_yy", "sigma_zz", "sigma_xy"],
+      "coefficients": {"L":{"symbol":"lambda"}, "M":{"symbol":"mu"}, "Z":{"symbol":"stressZZFactor"}, "D":{"add":[{"symbol":"lambda"},{"multiply":[2,{"symbol":"mu"}]}]}},
+      "matrix": [["D",0,0,"L"],["L",0,0,"D"],["Z",0,0,"Z"],[0,"M","M",0]]
+    }
+  },
+  "essentialForms": {
+    "planeStress": { "dirichlet": { "dimension": 2, "fieldComponents": 2, "trace": "value", "functional": "point", "legacyInput": "zeroOnly", "legacyZeroTolerance": 1e-14, "conflictRelativeTolerance": 1e-9, "conflictScaleFloor": 1e-12, "conflictMessage": "Conflicting displacement constraints at {context}.", "legacyMessage": "Elastic Dirichlet scalar must be zero on {context}; use fieldValues.", "fieldMessage": "Non-finite displacement on {context}." } },
+    "planeStrain": { "dirichlet": { "dimension": 2, "fieldComponents": 2, "trace": "value", "functional": "point", "legacyInput": "zeroOnly", "legacyZeroTolerance": 1e-14, "conflictRelativeTolerance": 1e-9, "conflictScaleFloor": 1e-12, "conflictMessage": "Conflicting displacement constraints at {context}.", "legacyMessage": "Elastic Dirichlet scalar must be zero on {context}; use fieldValues.", "fieldMessage": "Non-finite displacement on {context}." } }
+  },
+  "boundaryForms": {
+    "planeStress": {
+      "neumann": { "dimension": 2, "fieldComponents": 2,
+        "coefficients": { "load": 1 },
+        "loadTerms": [{ "test": "value", "sourceTrace": "value", "source": "traction", "coefficient": "load" }] },
+      "impedance": { "dimension": 2, "fieldComponents": 2,
+        "coefficients": { "matrix": { "multiply": [ { "complex": [ 0, 1 ] }, { "symbol": "omega" }, { "symbol": "Z" } ] } },
+        "matrixTerms": [{ "test": "value", "trial": "value", "coefficient": "matrix" }] }
+    },
+    "planeStrain": {
+      "neumann": { "dimension": 2, "fieldComponents": 2,
+        "coefficients": { "load": 1 },
+        "loadTerms": [{ "test": "value", "sourceTrace": "value", "source": "traction", "coefficient": "load" }] },
+      "impedance": { "dimension": 2, "fieldComponents": 2,
+        "coefficients": { "matrix": { "multiply": [ { "complex": [ 0, 1 ] }, { "symbol": "omega" }, { "symbol": "Z" } ] } },
+        "matrixTerms": [{ "test": "value", "trial": "value", "coefficient": "matrix" }] }
+    }
+  },
   "schemaDocument": {
     "$defs": {
       "physicsFormulation": {
@@ -107,8 +659,11 @@
       }
     },
     "x-fem-physics": {
+      "domainSourceLayout": {"title":"Body force density","componentLabels":["fx","fy"]},
+      "featureHandlingByType": { "domainSource": "domainSource" },
       "boundaryDefaultsByFormulation": {
         "planeStress": {
+          "domainSource": {"values":[{"expression":"0","unit":"N/m^3"},{"expression":"0","unit":"N/m^3"}]},
           "dirichlet": {
             "value": {
               "expression": "0",
@@ -149,6 +704,7 @@
           }
         },
         "planeStrain": {
+          "domainSource": {"values":[{"expression":"0","unit":"N/m^3"},{"expression":"0","unit":"N/m^3"}]},
           "dirichlet": {
             "value": {
               "expression": "0",
@@ -194,8 +750,9 @@
         "neumann",
         "impedance"
       ],
-      "supportedFeatureTypes": [],
+      "supportedFeatureTypes": ["domainSource"],
       "conditionActions": [
+        {"action":"add-domain-source","conditionType":"domainSource","itemName":"Domain Source","label":"Add Domain Source"},
         {
           "action": "add-dirichlet-boundary",
           "conditionType": "dirichlet",
@@ -574,7 +1131,7 @@
       },
       "studyType": "frequencyDomain",
       "supportsStationary": false,
-      "solverModule": "elastic2d",
+      "execution": { "kind": "vectorSimplexP1" },
       "resultDefaults": {
         "frequencyFieldPrefix": "displacement_",
         "frequencyColumn": "frequency_Hz"

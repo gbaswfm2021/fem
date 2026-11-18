@@ -1,4 +1,4 @@
-import { evaluateQuantity, getCoreUnit, resolveParameterTable } from '../../../platform/core-rust/js/api.js';
+import { evaluateQuantity, getCoreUnit, resolveParameterTable } from '../js/runtime/core-api.js';
 
 const axes=['x','y','z'];
 const fail=message=>{throw new Error(message);};

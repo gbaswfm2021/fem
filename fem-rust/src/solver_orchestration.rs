@@ -81,6 +81,10 @@ pub(crate) enum SolverRuntime {
     Native {
         module: String,
     },
+    Generic {
+        kind: String,
+        profile: String,
+    },
     External {
         executable: PathBuf,
         solve_argument: String,
@@ -259,7 +263,7 @@ fn coordinate_solver_sweep_with(
         fs::write(output_directory.join(debug_csv), merged_debug)?;
     }
     let runtime_name = match runtime {
-        SolverRuntime::Native { .. } => "native",
+        SolverRuntime::Native { .. } | SolverRuntime::Generic { .. } => "native",
         SolverRuntime::External { .. } => "external executable",
     };
     let execution_summary = format!(
@@ -286,6 +290,11 @@ fn run_solver_case(
                 "--solve".to_string(),
                 request_path.to_string_lossy().into_owned(),
             ],
+        ),
+        SolverRuntime::Generic { kind, profile } => (
+            env::current_exe()?,
+            vec!["--scenario-runtime".into(), kind.clone(), profile.clone(), "--solve".into(),
+                request_path.to_string_lossy().into_owned()],
         ),
         SolverRuntime::External {
             executable,
@@ -318,6 +327,10 @@ fn run_solver_sequence(
                 "--sequence".to_string(),
                 manifest,
             ],
+        ),
+        SolverRuntime::Generic { kind, profile } => (
+            env::current_exe()?,
+            vec!["--scenario-runtime".into(), kind.clone(), profile.clone(), "--sequence".into(), manifest],
         ),
         SolverRuntime::External {
             executable,

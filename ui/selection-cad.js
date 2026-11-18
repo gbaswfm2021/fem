@@ -1,4 +1,4 @@
-import {evaluateQuantity,evaluateQuantityExpression} from '../../../platform/core-rust/js/api.js';
+import {evaluateQuantity,evaluateQuantityExpression} from '../js/runtime/core-api.js';
 import {decodeSelection} from './selection-adapter.js';
 import {selectionGeometrySignature} from '../js/mesh-map.js';
 

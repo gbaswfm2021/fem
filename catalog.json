@@ -3,7 +3,7 @@
   "description": "Finite-element simulation workspace.",
   "id": "fem",
   "name": "FEM",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "schema": "applications/fem/fem.schema.json",
   "runtimePackage": true,
   "schemaLoader": "applications/fem/schema-documents.js",

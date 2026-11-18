@@ -1,6 +1,6 @@
 # 3D pressure acoustics: model and implementation
 
-This manual describes the current `acoustic-3d` scenario for users, scientists and developers. It connects the model tree to the frequency-domain pressure equation and the linear-tetrahedron solver. It describes implemented behavior, not a guarantee of numerical acceptance. See the [project guide](../../docs/README.md), [Model 2 reference](../../docs/fullmeta-model-2.md), [scenario contract](../src/scenarios/acoustic3d.json), and [solver](../src/scenarios/acoustic3d.rs).
+This manual describes the current `acoustic-3d` scenario for users, scientists and developers. It connects the model tree to the frequency-domain pressure equation and the linear-tetrahedron solver. It describes implemented behavior, not a guarantee of numerical acceptance. See the [project guide](../../docs/README.md), [Model 2 reference](../../docs/fullmeta-model-2.md), [scenario contract](../src/scenarios/acoustic3d.json), and [solver](../src/prepared_frequency_scalar.rs).
 
 ## 1. Physical model and fields
 
@@ -71,3 +71,37 @@ The three vector expressions each have the derived field's unit `m/s`; they are 
 No nonzero acoustic material loss, nonlinear acoustics, or transient solver is claimed here. Use a mesh and frequency convergence check and an analytic plane-wave or cavity benchmark appropriate to the selected boundaries.
 
 For a simple check in a homogeneous lossless fluid, a +x travelling plane wave has `p = P exp(-i omega x/c)` and `vx = p/(rho c)`. Set boundary data consistent with that wave and the outward normals; compare complex pressure and velocity rather than only their magnitudes. A 3D boundary integral has surface-area measure, unlike the corresponding 2D edge integral.
+
+## Future eigenfrequency study
+
+An eigenfrequency Study is not implemented. For a source-free, lossless cavity with positive, frequency-independent `rho` and `c`, write the pressure equation from section 1 as
+
+```math
+-\nabla\cdot(\rho^{-1}\nabla p)=\lambda\,(\rho c^2)^{-1}p,
+\qquad \lambda=\omega^2.
+```
+
+The operator on the left is the pressure stiffness operator; the operator multiplying `lambda` on the right weights pressure by the fluid compressibility `1/(rho c^2)`. With homogeneous pressure-release boundaries (`p = 0`) and/or rigid walls (`n·rho^-1 grad(p) = 0`), multiply by a test pressure `q`, integrate over the volume and integrate the left side by parts. The homogeneous boundary term vanishes, giving
+
+```math
+\int_\Omega\rho^{-1}\nabla\overline q\cdot\nabla p\,dV
+=\lambda\int_\Omega(\rho c^2)^{-1}\overline q\,p\,dV.
+```
+
+`q` satisfies the same homogeneous essential boundary conditions as `p`; the bar denotes complex conjugation. Expanding `p` and `q` in the real nodal basis gives the generalized matrix eigenproblem
+
+```math
+K\mathbf p=\omega^2M\mathbf p,\qquad
+K_{ij}=\int_\Omega\rho^{-1}\nabla N_i\cdot\nabla N_j\,dV,\qquad
+M_{ij}=\int_\Omega(\rho c^2)^{-1}N_iN_j\,dV.
+```
+
+Here `N_i` are the tetrahedron basis functions, `M` discretizes the compressibility-weighted operator, `p` is a nonzero mode vector and `f = sqrt(lambda)/(2 pi)` for a positive eigenvalue. Homogeneous essential constraints must be applied to both matrices. A fully rigid connected cavity also has a constant-pressure zero mode; velocity recovery divides by `omega` and does not apply to it. Impedance boundaries or frequency-dependent coefficients require a more general eigenproblem.
+
+## Domain Source
+
+The current implementation supports multiple Domain Source entries under PHYSICS, each with an existing domain selection and expressions in spatial coordinates. Overlapping entries add; no entry means zero source. The project model stores selections and expressions, while the scenario contract declares their physical interpretation and weak-form contribution. This implementation is undergoing verification; its availability in a deployed installation depends on compatible FEM and platform runtimes.
+
+For this pressure formulation, Q is a volume injection rate per volume, in Hz, in `i omega p/(rho c^2) + div(v) = Q`. The pressure weak equation receives `+i omega integral(test * Q) dV`.
+
+See the [implementation plan](implement_domain_sources.md) for expression evaluation, generic assembly and verification requirements.

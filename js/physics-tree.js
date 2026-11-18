@@ -71,7 +71,7 @@ export function preparePhysicsCondition({ model, target, spec, profile, makeId }
   let condition;
   if (profile?.featureHandlingByType?.[type] === 'periodicPair') {
     const used = new Set(conditions.filter(item => profile?.featureHandlingByType?.[item.type] === 'periodicPair').map(item => item.periodicPairId));
-    const assigned = new Set(conditions.filter(item => profile?.featureHandlingByType?.[item.type] !== 'periodicPair').map(item => item.selectionId));
+    const assigned = new Set(conditions.filter(item => !['periodicPair', 'domainSource'].includes(profile?.featureHandlingByType?.[item.type])).map(item => item.selectionId));
     const enabled = new Set(Array.isArray(model.model.mesh?.periodicPairIds) ? model.model.mesh.periodicPairIds : []);
     const boundaries = new Set(selections.filter(item => item?.entity === 'boundary').map(item => item.id));
     const pair = pairs.find(item => enabled.has(item?.id) && !used.has(item.id)
@@ -80,8 +80,15 @@ export function preparePhysicsCondition({ model, target, spec, profile, makeId }
       && !assigned.has(item.lowerSelectionId) && !assigned.has(item.upperSelectionId));
     if (!pair) return { reason: 'Enable an unused periodic pair with available boundary selections in Mesh before adding this condition.' };
     condition = { type, periodicPairId: pair.id };
+  } else if (profile?.featureHandlingByType?.[type] === 'domainSource') {
+    const selection = selections.find(item => item?.entity === 'domain' && typeof item.id === 'string'
+      && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(item.id));
+    if (!selection) return { reason: 'Add a domain selection before adding this source.' };
+    const defaults = profile?.boundaryDefaultsByFormulation?.[physics.formulation]?.[type];
+    if (!defaults || typeof defaults !== 'object') return { reason: `${name} has no defaults for the active formulation.` };
+    condition = { type, selectionId: selection.id, ...structuredClone(defaults) };
   } else {
-    const used = new Set(conditions.filter(item => profile?.featureHandlingByType?.[item.type] !== 'periodicPair').map(item => item.selectionId));
+    const used = new Set(conditions.filter(item => !['periodicPair', 'domainSource'].includes(profile?.featureHandlingByType?.[item.type])).map(item => item.selectionId));
     const activePairs = new Set(conditions.filter(item => profile?.featureHandlingByType?.[item.type] === 'periodicPair').map(item => item.periodicPairId));
     for (const pair of pairs) if (pair && activePairs.has(pair.id)) { used.add(pair.lowerSelectionId); used.add(pair.upperSelectionId); }
     const selection = selections.find(item => item?.entity === 'boundary' && typeof item.id === 'string'

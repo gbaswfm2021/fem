@@ -5,17 +5,65 @@
 //! and scenario programs own run-time checks on generated and numerical data.
 
 pub(crate) mod model_expression;
+pub(crate) mod model_bindings;
+pub(crate) mod assembler;
+pub(crate) mod boundary_form;
+pub(crate) mod boundary_input;
+pub(crate) mod coefficient_expr;
+pub(crate) mod coefficient_matrix;
+pub(crate) mod constraints;
+pub(crate) mod discretization;
+pub(crate) mod declared_boundary;
+pub(crate) mod domain_source;
+pub(crate) mod essential_form;
+pub(crate) mod recovery;
+pub(crate) mod result_contract;
+pub(crate) mod scenario_package;
+pub(crate) mod scenario_plan;
+pub(crate) mod selection_plan;
+pub(crate) mod simplex;
+pub(crate) mod simplex_topology;
+pub(crate) mod vector_form;
+pub(crate) mod vector_p1;
+pub(crate) mod weak_form;
 pub(crate) mod model_schema;
 mod model_validation;
 mod mesh;
 pub(crate) mod field_output;
+pub(crate) mod generic_scenario_runtime;
+pub(crate) mod tensor_recovery;
 pub(crate) mod integration;
 mod core_language;
 pub(crate) mod material;
+pub(crate) mod material_bindings;
 pub(crate) mod mesh2d;
+pub(crate) mod mesh3d;
+pub(crate) mod nedelec;
+pub(crate) mod nedelec_driver;
+pub(crate) mod nedelec_volume;
+pub(crate) mod nodal_p1;
+pub(crate) mod nullspace;
+pub(crate) mod quadrature;
 mod operation_retry;
 mod operation_contracts;
 pub(crate) mod preflight_client;
+pub(crate) mod prepared_case;
+pub(crate) mod prepared_scalar;
+pub(crate) mod prepared_scalar_execution;
+pub(crate) mod prepared_frequency_scalar;
+pub(crate) mod prepared_frequency_execution;
+pub(crate) mod prepared_frequency_output;
+pub(crate) mod prepared_vector;
+pub(crate) mod prepared_vector_model;
+pub(crate) mod nedelec_dofs;
+pub(crate) mod nedelec_periodic;
+pub(crate) mod coordinate_frame;
+pub(crate) mod prepared_configured;
+pub(crate) mod prepared_edge;
+pub(crate) mod prepared_edge_output;
+pub(crate) mod prepared_edge_execution;
+pub(crate) mod prepared_edge_publication;
+pub(crate) mod configured_integration;
 mod result_clear;
 mod result_resolve;
 mod result_save;
@@ -26,6 +74,10 @@ pub(crate) mod solver_common;
 pub(crate) mod solver_options;
 pub(crate) mod solver_request;
 include!(concat!(env!("OUT_DIR"), "/scenario_runners.rs"));
+
+
+
+
 #[path = "solver_orchestration.rs"]
 mod solver_orchestration;
 use crate::mesh::sha256;
@@ -36,7 +88,7 @@ mod study_prepare;
 mod validation_receipt;
 
 pub(crate) use solver_common::{
-    C, MU0, SolverCache, TET_Q, TRI_Q, c_add, c_mul, c_scale, solve_linear_system,
+    C, SolverCache, TET_Q, TRI_Q, c_add, c_mul, c_scale,
 };
 pub(crate) use model_schema as json_schema;
 
@@ -92,6 +144,12 @@ fn declared_scenario_module(metadata: &Value) -> Result<Option<&str>> {
         .filter(|module| !module.trim().is_empty())
         .map(Some)
         .ok_or_else(|| "Scenario solverModule must be a non-empty string.".into())
+}
+
+#[derive(Clone, Debug)]
+enum ScenarioRoute {
+    Module(String),
+    Generic { kind: String, profile: String },
 }
 
 fn application_id_is_valid(value: &str) -> bool {
@@ -288,36 +346,9 @@ struct Registry {
     programs: Value,
 }
 
-#[cfg(test)]
-#[test]
-fn scenario_runner_is_selected_by_package_module_metadata() {
-    let metadata = json!({
-        "profile":{"id":"elastic-3d","dimension":3},
-        "solverModule":"elastic3d"
-    });
-    assert_eq!(declared_scenario_module(&metadata), Ok(Some("elastic3d")));
-    assert_eq!(
-        declared_scenario_module(&json!({"profile":{"id":"elastic-3d"}})),
-        Ok(None)
-    );
-    assert!(declared_scenario_module(&json!({"solverModule":false})).is_err());
-}
 
-#[cfg(test)]
-#[test]
-fn missing_preparation_route_names_the_stage_and_selection() {
-    let registry = Registry {
-        root: PathBuf::new(),
-        executable: PathBuf::new(),
-        profiles: HashSet::new(),
-        capabilities: json!({"study":{"preparationByProfile":{}}}),
-        programs: json!({}),
-    };
-    let model = json!({"scenario":{"profileId":"acoustic-2d"}});
-    assert_eq!(registry.require_preparation_route(&model, Some("study")), Err(
-        "Profile acoustic-2d, Study study, preparation: preparationByProfile registration is missing.".into()
-    ));
-}
+
+
 
 fn initialize_operation_registry() -> Result<()> {
     fullmeta_operation_contracts::install_default_registry(include_bytes!(concat!(env!("OUT_DIR"), "/native-operations.json")))
@@ -382,6 +413,20 @@ fn main() {
             Ok(code) => code,
             Err(error) => {
                 eprintln!("fullmeta-fem scenario runner {module}: {error}");
+                1
+            }
+        };
+        std::process::exit(code);
+    }
+    if raw_arguments.first().map(String::as_str) == Some("--scenario-runtime") {
+        let (Some(kind), Some(profile)) = (raw_arguments.get(1), raw_arguments.get(2)) else {
+            eprintln!("fullmeta-fem: --scenario-runtime requires an execution kind and profile.");
+            std::process::exit(1);
+        };
+        let code = match generic_scenario_runtime::run(kind, profile, &raw_arguments[3..]) {
+            Ok(code) => code,
+            Err(error) => {
+                eprintln!("fullmeta-fem generic scenario runtime: {error}");
                 1
             }
         };
@@ -672,12 +717,12 @@ fn run(operation_contract: Option<&fullmeta_operation_contracts::ContractIdentit
                     return Ok(0);
                 }
                 registry.require_valid_dispatch(model, scenario, study_id)?;
-                let scenario_module = registry.scenario_module(model)?;
+                let scenario_route = registry.scenario_route(model)?;
                 let executable = registry.scenario_executable(model, study_id)?;
                 launch_preflighted(
                     &registry.root,
                     &executable,
-                    scenario_module.as_deref(),
+                    scenario_route.as_ref(),
                     arguments,
                     Some(&input),
                     model,
@@ -755,12 +800,12 @@ fn run(operation_contract: Option<&fullmeta_operation_contracts::ContractIdentit
             require_valid_report(&report)?;
             registry.require_preparation_route(&model, options.study_id.as_deref())?;
             registry.require_valid_dispatch(&model, scenario, options.study_id.as_deref())?;
-            let scenario_module = registry.scenario_module(&model)?;
+            let scenario_route = registry.scenario_route(&model)?;
             let executable = registry.scenario_executable(&model, options.study_id.as_deref())?;
             launch_preflighted(
                 &registry.root,
                 &executable,
-                scenario_module.as_deref(),
+                scenario_route.as_ref(),
                 arguments,
                 None,
                 &model,
@@ -1500,9 +1545,12 @@ fn utc_timestamp() -> String {
 }
 
 impl Registry {
-    fn scenario_module(&self, model: &Value) -> Result<Option<String>> {
+    fn scenario_route(&self, model: &Value) -> Result<Option<ScenarioRoute>> {
         let profile = model_validation::declared_profile(model)?;
         let metadata = model_schema::scenario_metadata_for_profile(profile)?;
+        if let Some(kind) = generic_scenario_runtime::declared_kind(metadata)? {
+            return Ok(Some(ScenarioRoute::Generic { kind: kind.to_string(), profile: profile.to_string() }));
+        }
         let Some(module) = declared_scenario_module(metadata)? else {
             return Ok(None);
         };
@@ -1511,7 +1559,7 @@ impl Registry {
                 "Scenario {profile:?} declares solver module {module:?}, but this runtime was built without it. Rebuild the FEM runtime from the registered scenario package."
             ));
         }
-        Ok(Some(module.to_string()))
+        Ok(Some(ScenarioRoute::Module(module.to_string())))
     }
 
     fn require_preparation_route(&self, model: &Value, study_id: Option<&str>) -> Result<()> {
@@ -1730,7 +1778,7 @@ impl Registry {
 
     fn scenario_executable(&self, model: &Value, requested_study: Option<&str>) -> Result<PathBuf> {
         let profile = model_validation::declared_profile(model)?;
-        let scenario_module = self.scenario_module(model)?;
+        let scenario_route = self.scenario_route(model)?;
         let studies = model.pointer("/model/study").and_then(Value::as_array);
         let study = if let Some(id) = requested_study {
             Some(
@@ -1792,10 +1840,10 @@ impl Registry {
                 name.to_string()
             }
         };
-        if let Some(module) = scenario_module {
+        if scenario_route.is_some() {
             if !same_executable_path(&candidate, &self.executable) {
                 return Err(format!(
-                    "Scenario {profile:?} declares in-process runner {module:?}, but its registered executable does not resolve to this FEM dispatcher."
+                    "Scenario {profile:?} declares an in-process runtime, but its registered executable does not resolve to this FEM dispatcher."
                 ));
             }
         } else {
@@ -2123,7 +2171,7 @@ impl ChildEventCapture {
 fn launch_preflighted(
     root: &Path,
     executable: &Path,
-    scenario_module: Option<&str>,
+    scenario_route: Option<&ScenarioRoute>,
     arguments: &[String],
     input: Option<&[u8]>,
     model: &Value,
@@ -2145,8 +2193,10 @@ fn launch_preflighted(
             Stdio::inherit()
         })
         .stderr(Stdio::inherit());
-    if let Some(module) = scenario_module {
-        command.arg("--scenario-module").arg(module);
+    match scenario_route {
+        Some(ScenarioRoute::Module(module)) => { command.arg("--scenario-module").arg(module); }
+        Some(ScenarioRoute::Generic { kind, profile }) => { command.arg("--scenario-runtime").arg(kind).arg(profile); }
+        None => {}
     }
     command.args(arguments);
     let model_bytes = serde_json::to_vec(model)

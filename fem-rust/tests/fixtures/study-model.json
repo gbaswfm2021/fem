@@ -1,0 +1,236 @@
+{
+  "application": "fem3",
+  "modelFormat": "fem-model/2",
+  "metadata": {
+    "id": "authFingerprint",
+    "name": "Fingerprint fixture"
+  },
+  "scenario": {
+    "profileId": "em-3d",
+    "dimension": 3,
+    "physics": "electromagnetics"
+  },
+  "model": {
+    "units": "m",
+    "geometry": {
+      "features": [
+        {
+          "id": "solid",
+          "type": "box",
+          "name": "Box",
+          "position": [
+            {
+              "expression": "0",
+              "unit": "m"
+            },
+            {
+              "expression": "0",
+              "unit": "m"
+            },
+            {
+              "expression": "0",
+              "unit": "m"
+            }
+          ],
+          "size": [
+            {
+              "expression": "1",
+              "unit": "m"
+            },
+            {
+              "expression": "1",
+              "unit": "m"
+            },
+            {
+              "expression": "1",
+              "unit": "m"
+            }
+          ]
+        }
+      ],
+      "tolerance": {
+        "expression": "1e-9",
+        "unit": "m"
+      }
+    },
+    "mesh": {
+      "elementFamily": "tetrahedron",
+      "minSize": {
+        "expression": "0.1",
+        "unit": "m"
+      },
+      "maxSize": {
+        "expression": "0.4",
+        "unit": "m"
+      },
+      "periodicPairs": [],
+      "gmsh": {
+        "algorithm3D": 1,
+        "elementOrder": 1,
+        "optimize": true,
+        "optimizeNetgen": true,
+        "optimizeThreshold": 0.25,
+        "smoothing": 10,
+        "threads": 1
+      }
+    },
+    "selections": [
+      {
+        "id": "insideSolid",
+        "name": "Volume",
+        "entity": "domain",
+        "addresses": [
+          {
+            "membership": {
+              "solid": "inside"
+            }
+          }
+        ]
+      },
+      {
+        "id": "boundarySolid",
+        "name": "Boundary",
+        "entity": "boundary",
+        "addresses": [
+          {
+            "membership": {
+              "solid": "boundary"
+            }
+          }
+        ],
+        "coordinateExpression": "x - selectedFace"
+      },
+      {
+        "id": "outerBoundary",
+        "name": "All faces",
+        "entity": "boundary",
+        "addresses": [
+          {
+            "membership": {
+              "solid": "boundary"
+            }
+          }
+        ]
+      }
+    ],
+    "materials": [
+      {
+        "id": "medium",
+        "name": "Medium",
+        "selectionId": "insideSolid",
+        "relativePermittivity": "twicePermittivity",
+        "relativePermeability": "1",
+        "conductivity": {
+          "expression": "0",
+          "unit": "S/m"
+        }
+      }
+    ],
+    "physics": {
+      "id": "wave",
+      "name": "Wave",
+      "type": "electromagnetics",
+      "formulation": "electric",
+      "phasorConvention": "exp(+i omega t)",
+      "domainSelectionIds": [
+        "insideSolid"
+      ],
+      "frequency": {
+        "expression": "drive",
+        "unit": "Hz"
+      },
+      "boundary": {
+        "id": "boundary",
+        "name": "Impedance",
+        "type": "impedance",
+        "selectionId": "boundarySolid",
+        "impedance": {
+          "expression": "376.730313668",
+          "unit": "ohm"
+        }
+      }
+    },
+    "parameters": [
+      {
+        "id": "pDrive",
+        "name": "Drive",
+        "symbol": "drive",
+        "expression": "1000000000",
+        "unit": "Hz"
+      },
+      {
+        "id": "pMaterial",
+        "name": "Relative permittivity",
+        "symbol": "permittivity",
+        "expression": "2",
+        "unit": "1"
+      },
+      {
+        "id": "pTwice",
+        "name": "Double permittivity",
+        "symbol": "twicePermittivity",
+        "expression": "2 * permittivity",
+        "unit": "1"
+      },
+      {
+        "id": "pBase",
+        "name": "Face offset",
+        "symbol": "faceOffset",
+        "expression": "0.1",
+        "unit": "m"
+      },
+      {
+        "id": "pSelected",
+        "name": "Selected face",
+        "symbol": "selectedFace",
+        "expression": "faceOffset",
+        "unit": "m"
+      },
+      {
+        "id": "pUnused",
+        "name": "Unused",
+        "symbol": "unused",
+        "expression": "2",
+        "unit": "1"
+      }
+    ],
+    "variables": [
+      {
+        "id": "summary",
+        "name": "Output",
+        "symbol": "summary",
+        "expression": "surfaceValue(x)",
+        "unit": "m^3"
+      }
+    ],
+    "pointwiseVariables": [],
+    "integrationOperators": [
+      {
+        "id": "integration",
+        "name": "surfaceValue",
+        "selectionId": "boundarySolid"
+      }
+    ],
+    "study": [
+      {
+        "id": "study",
+        "name": "Primary Study",
+        "type": "frequencyDomain",
+        "physicsId": "wave"
+      },
+      {
+        "id": "other",
+        "name": "Other Study",
+        "type": "frequencyDomain",
+        "physicsId": "wave"
+      }
+    ],
+    "results": [
+      {
+        "id": "plot",
+        "type": "plot.sweep",
+        "name": "My results"
+      }
+    ]
+  }
+}

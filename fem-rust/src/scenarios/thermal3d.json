@@ -1,7 +1,232 @@
 {
   "contractVersion": "fullmeta-fem-scenario/1",
   "id": "thermal-3d",
+  "domainSources": {
+    "T": {
+      "form": {
+        "dimension": 3,
+        "fieldComponents": 1,
+        "test": "value"
+      },
+      "input": {
+        "components": 1,
+        "path": "/values",
+        "unit": "W/m^3",
+        "number": "real"
+      },
+      "coefficient": 1
+    }
+  },
+  "resultPlans": {
+    "T": {
+      "completion": [
+        {
+          "literal": "Thermal 3D · "
+        },
+        {
+          "input": "unknowns",
+          "format": "integer"
+        },
+        {
+          "literal": " unknowns · "
+        },
+        {
+          "input": "cellCount",
+          "format": "integer"
+        },
+        {
+          "literal": " tetrahedra · residual "
+        },
+        {
+          "input": "residual",
+          "format": "scientific",
+          "precision": 2
+        },
+        {
+          "literal": " · T ["
+        },
+        {
+          "input": "minimum",
+          "format": "scientific",
+          "precision": 6
+        },
+        {
+          "literal": ", "
+        },
+        {
+          "input": "maximum",
+          "format": "scientific",
+          "precision": 6
+        },
+        {
+          "literal": "] K"
+        }
+      ],
+      "document": { "object": {
+        "schema": { "literal": "fullmeta-thermal-field/1" },
+        "dimension": { "literal": 3 },
+        "studyId": { "input": "studyId" },
+        "fieldComponentCoordinateSystem": { "literal": "model" },
+        "nodes": { "input": "nodes" },
+        "tetrahedra": { "input": "cells" },
+        "temperatureK": { "realSeries": "primary" },
+        "fields": { "object": { "T": { "field": { "input": "primary", "unit": "K", "source": "solved" } } } },
+        "heatFluxByCell": { "object": {
+          "values": { "realMatrix": "recovered" }, "unit": { "literal": "W/m^2" },
+          "source": { "literal": "-k grad(T)" }, "coordinateSystem": { "literal": "model" }
+        } },
+        "materialFieldsByCell": { "object": { "k": { "object": {
+          "real": { "repeatSeries": { "input": "cellMaterial", "part": "real", "count": 4 } },
+          "imag": { "repeatSeries": { "input": "cellMaterial", "part": "imaginary", "count": 4 } },
+          "unit": { "literal": "W/(m*K)" }
+        } } } },
+        "minimumTemperatureK": { "input": "minimum" },
+        "maximumTemperatureK": { "input": "maximum" },
+        "solver": { "object": {
+          "backend": { "input": "backend" }, "ordering": { "input": "ordering" },
+          "threads": { "input": "threads" }, "constitutiveQuadrature": { "input": "quadrature" },
+          "residual": { "input": "residual" }, "unknowns": { "input": "unknowns" },
+          "meanTemperatureConstraints": { "input": "meanConstraints" },
+          "meanTemperatureK": { "input": "meanValue" }, "systemUnknowns": { "input": "systemUnknowns" }
+        } },
+        "fieldConvention": { "literal": "stationary" },
+        "heatFluxConvention": { "literal": "positive outward normal flux removes heat" },
+        "derivedFieldRecovery": { "literal": "constant per tetrahedron; material interface jumps preserved" },
+        "volumeM3": { "input": "volume" },
+        "boundaryOutwardPowerWByTag": { "input": "boundaryPower" },
+        "boundaryAreaM2ByTag": { "input": "boundaryArea" },
+        "netBoundaryOutwardPowerW": { "input": "netBoundaryPower" }
+      } },
+      "csv": [
+        { "header": "case", "input": "case", "format": "integer" },
+        { "header": "unknowns", "input": "unknowns", "format": "integer" },
+        { "header": "residual", "input": "residual", "format": "scientific", "precision": 12 },
+        { "header": "minimum_temperature_K", "input": "minimum", "format": "scientific", "precision": 12 },
+        { "header": "maximum_temperature_K", "input": "maximum", "format": "scientific", "precision": 12 }
+      ]
+    }
+  },
+  "boundaryInputs": {
+    "T": {
+      "dirichlet": { "mode": "point", "sampling": "parameters", "prescribed": { "scalar": { "path": "/value", "unit": "K", "number": "real" } } },
+      "neumann": { "mode": "trace", "sampling": "parameters", "prescribed": { "scalar": { "path": "/value", "unit": "W/m^2", "number": "real" }, "scalarForm": "neumannScalar", "source": "flux" } }
+    }
+  },
+  "discovery": { "order": 7, "default": false },
+  "nullspaces": { "T": { "kind": "componentMean", "balanceRelativeTolerance": 1e-10, "phaseTolerance": 0, "reference": { "studyProperty": "meanTemperature", "unit": "K", "default": 0 } } },
+  "essentialForms": {
+    "T": { "dirichlet": { "dimension": 3, "fieldComponents": 1, "trace": "value", "functional": "point", "legacyInput": "scalar", "valueType": "real", "legacyZeroTolerance": 0, "conflictRelativeTolerance": 1e-10, "conflictScaleFloor": 1, "duplicatePolicy": "last", "conflictMessage": "Conflicting prescribed temperatures at {context}." } }
+  },
+  "boundaryForms": {
+    "T": {
+      "neumannScalar": {
+        "dimension": 3, "fieldComponents": 1,
+        "loadTerms": [{"test":"value", "source":"flux", "sourceTrace":"value", "coefficient":"load"}],
+        "coefficients": {"load": -1}
+      }
+    }
+  },
+  "recoveries": {
+    "T": {
+      "operator": "gradient", "transform": [[1,0,0],[0,1,0],[0,0,1]],
+      "factor": {"multiply": [-1, {"symbol":"conductivity"}]},
+      "sampling": "cellConstant", "output": "cell"
+    }
+  },
   "version": "0.3.0",
+  "materialBindings": {
+    "T": [
+      {
+        "target": "conductivity",
+        "source": "k",
+        "unit": "W/(m*K)",
+        "bounds": {
+          "exclusiveMinimum": 0
+        }
+      }
+    ]
+  },
+  "selectionPlan": {
+    "collections": [
+    {"name":"domainSources","cellMapSection":"domainCellSelections","path":"/model/physics","mapSection":"physicalGroups","kind":"identifiedEntries","missing":"empty","disabled":"skip","duplicates":"keepAll","declaredTag":"ignore","coverage":["assignedInMesh"],"positiveMeshTags":false,"types":["domainSource"]},
+      {
+        "name": "materials",
+        "path": "/model/materials",
+        "mapSection": "physicalGroups",
+        "kind": "array",
+        "missing": "error",
+        "disabled": "include",
+        "duplicates": "reject",
+        "declaredTag": "ignore",
+        "coverage": [
+          "meshAssigned"
+        ],
+        "positiveMeshTags": false
+      },
+      {
+        "name": "boundaries",
+        "path": "/model/physics",
+        "mapSection": "boundarySelections",
+        "kind": "identifiedEntries",
+        "types": [
+          "dirichlet",
+          "neumann",
+          "impedance"
+        ],
+        "missing": "error",
+        "disabled": "skip",
+        "duplicates": "reject",
+        "declaredTag": "ignore",
+        "coverage": [
+          "assignedInMesh"
+        ],
+        "positiveMeshTags": false
+      }
+    ]
+  },
+  "preparedScalar": {
+    "recoveryCentered": true,
+    "validateAuxiliary": true,
+    "residualTolerance": 1e-9,
+    "parameterResolver": "modelValues",
+    "recoveryImaginaryTolerance": 0,
+    "solutionNumber": "real",
+    "imaginaryTolerance": 1e-10,
+    "meshFormat": "fullmeta-v1-contiguous",
+    "resultMaterialSymbol": "conductivity",
+    "allFacetOwnership": "exteriorOnly",
+    "materialScope": "parameters",
+    "topology": {
+      "rejectDuplicateCells": true,
+      "rejectNonManifoldFacets": true,
+      "requireAllNodesUsed": true,
+      "requireNonemptyCells": true,
+      "determinantTolerance": {
+        "kind": "relative",
+        "fraction": 1e-14,
+        "rejectEqual": true
+      }
+    },
+    "periodic": {
+      "mode": "reject",
+      "phase": "zero",
+      "phaseTolerance": 0,
+      "essentialMapping": "directRepresentative",
+      "requireModelMapAgreement": false,
+      "rejectMeshPairs": true
+    }
+  },
+  "weakForms": {
+    "T": {
+      "dimension": 3,
+      "fieldComponents": 1,
+      "element": { "cell": "tetrahedron", "family": "lagrange", "fieldComponents": 1, "orders": [1] },
+      "terms": [
+        {"test": "gradient", "trial": "gradient", "coefficient": "diffusion"}
+      ],
+      "coefficients": {"diffusion": {"symbol": "conductivity"}}
+    }
+  },
   "schemaDocument": {
     "$defs": {
       "physicsFormulation": {
@@ -111,8 +336,10 @@
       }
     },
     "x-fem-physics": {
+      "domainSourceLayout": {"title":"Heat generation density","componentLabels":["Q"]},
       "boundaryDefaultsByFormulation": {
         "T": {
+          "domainSource": {"values":[{"expression":"0","unit":"W/m^3"}]},
           "dirichlet": {
             "value": {
               "expression": "293.15",
@@ -131,8 +358,9 @@
         "dirichlet",
         "neumann"
       ],
-      "supportedFeatureTypes": [],
+      "supportedFeatureTypes": ["domainSource"],
       "conditionActions": [
+        {"action":"add-domain-source","conditionType":"domainSource","itemName":"Domain Source","label":"Add Domain Source"},
         {
           "action": "add-dirichlet-boundary",
           "conditionType": "dirichlet",
@@ -146,7 +374,7 @@
           "label": "Add Neumann condition"
         }
       ],
-      "featureHandlingByType": {}
+      "featureHandlingByType": {"domainSource": "domainSource"}
     },
     "x-fem-scenario": {
       "editorOptions": {
@@ -277,7 +505,7 @@
       },
       "studyType": "stationary",
       "supportsStationary": true,
-      "solverModule": "thermal3d"
+      "execution": { "kind": "scalarSimplexP1", "recordModuleLabel": "thermal3d" }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "$id": "https://fullmeta.local/applications/fem/scenarios/thermal-3d.schema.json"

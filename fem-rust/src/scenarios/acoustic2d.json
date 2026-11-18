@@ -1,7 +1,252 @@
 {
   "contractVersion": "fullmeta-fem-scenario/1",
   "id": "acoustic-2d",
+  "domainSources": {
+    "pressure": {
+      "form": {
+        "dimension": 2,
+        "fieldComponents": 1,
+        "test": "value"
+      },
+      "input": {
+        "components": 1,
+        "path": "/values",
+        "unit": "Hz",
+        "number": "complex"
+      },
+      "coefficient": {
+        "complex": [
+          0,
+          {
+            "symbol": "omega"
+          }
+        ]
+      }
+    }
+  },
+  "preparedFrequencyScalar": {
+    "pressure": {
+      "meshFormat": "fullmeta-v2",
+      "fieldFamilies": { "scalars": { "pressure": "primary" }, "vectors": { "velocity": ["recovered0", "recovered1", "zero"] } },
+      "topology": { "rejectDuplicateCells": false, "rejectNonManifoldFacets": false, "requireAllNodesUsed": false, "requireNonemptyCells": true,
+        "determinantTolerance": { "kind": "absolute", "value": 0, "rejectEqual": true } },
+      "volumeInputs": ["density", "soundSpeed", "omega"], "nonzeroInputs": ["density", "soundSpeed"],
+      "boundaryQuadrature": "gauss5"
+    }
+  },
+  "resultPlans": {
+    "pressure": {
+      "document": {
+        "object": {
+          "schema": {
+            "literal": "fullmeta-acoustic-field/1"
+          },
+          "frequencyHz": {
+            "input": "frequency"
+          },
+          "dimension": {
+            "literal": 2
+          },
+          "fieldComponentCoordinateSystem": {
+            "literal": "model"
+          },
+          "nodes": {
+            "input": "nodes"
+          },
+          "triangles": {
+            "input": "cells"
+          },
+          "pressureRealPa": {
+            "realSeries": "primary"
+          },
+          "pressureImaginaryPa": {
+            "imaginarySeries": "primary"
+          },
+          "fields": {
+            "object": {
+              "p": {
+                "field": {
+                  "input": "p",
+                  "unit": "Pa",
+                  "source": "solved"
+                }
+              },
+              "vx": {
+                "field": {
+                  "input": "vx",
+                  "unit": "m/s",
+                  "source": "derived"
+                }
+              },
+              "vy": {
+                "field": {
+                  "input": "vy",
+                  "unit": "m/s",
+                  "source": "derived"
+                }
+              },
+              "vz": {
+                "field": {
+                  "input": "vz",
+                  "unit": "m/s",
+                  "source": "identicallyZeroIn2D"
+                }
+              }
+            }
+          },
+          "materialFieldsByCell": {
+            "input": "materialFields"
+          },
+          "globalVariables": {
+            "input": "globalVariables"
+          },
+          "fieldConvention": {
+            "literal": "exp(+i omega t)"
+          },
+          "derivedFieldRecovery": {
+            "literal": "arithmetic mean of incident triangle values at each node"
+          },
+          "solver": {
+            "object": {
+              "backend": {
+                "input": "backend"
+              },
+              "ordering": {
+                "input": "ordering"
+              },
+              "threads": {
+                "input": "threads"
+              },
+              "constitutiveQuadrature": {
+                "input": "quadrature"
+              },
+              "residual": {
+                "input": "residual"
+              },
+              "unknowns": {
+                "input": "unknowns"
+              }
+            }
+          },
+          "maximumPressureMagnitudePa": {
+            "input": "maximum"
+          }
+        }
+      },
+      "csv": [
+        {
+          "header": "frequency_Hz",
+          "input": "frequency",
+          "format": "fixed",
+          "precision": 12
+        },
+        {
+          "header": "unknowns",
+          "input": "unknowns",
+          "format": "integer"
+        },
+        {
+          "header": "residual",
+          "input": "residual",
+          "format": "scientific",
+          "precision": 8
+        },
+        {
+          "header": "max_pressure_magnitude_Pa",
+          "input": "maximum",
+          "format": "scientific",
+          "precision": 12
+        }
+      ],
+      "csvVariables": {
+        "realSuffix": "_re",
+        "imaginarySuffix": "_im",
+        "precision": 14
+      }
+    }
+  },
+  "selectionPlan": { "collections": [
+    {"name":"domainSources","cellMapSection":"domainCellSelections","path":"/model/physics","mapSection":"physicalGroups","kind":"identifiedEntries","missing":"empty","disabled":"skip","duplicates":"keepAll","declaredTag":"ignore","coverage":["assignedInMesh"],"positiveMeshTags":false,"types":["domainSource"]},
+    { "name":"materials", "path":"/model/materials", "mapSection":"physicalGroups", "kind":"array", "missing":"error", "disabled":"include", "duplicates":"reject", "declaredTag":"ignore", "coverage":["meshAssigned"], "positiveMeshTags":false },
+    { "name":"boundaries", "path":"/model/physics", "mapSection":"boundarySelections", "kind":"identifiedEntries", "types":["dirichlet","neumann","impedance"], "missing":"error", "disabled":"skip", "duplicates":"reject", "declaredTag":"ignore", "coverage":["assignedInMesh"], "positiveMeshTags":false }
+  ] },
+  "boundaryInputs": { "pressure": {
+    "dirichlet": { "mode": "point", "sampling": "point", "prescribed": { "scalar": { "path": "/value", "unit": "Pa", "number": "complex" } } },
+    "neumann": { "mode": "trace", "sampling": "point", "prescribed": { "scalar": { "path": "/value", "unit": "m/s", "number": "complex" }, "vector": { "path": "/fieldValues", "unit": "m/s", "number": "complex", "components": 2 }, "scalarForm": "neumannScalar", "vectorForm": "neumannVector", "source": "prescribed", "companionScalar": "zero" } },
+    "impedance": { "mode": "impedance", "sampling": "point", "form": "impedance", "coefficients": [{ "name": "impedance", "path": "/impedance", "unit": "Pa*s/m", "number": "real", "nonzero": true }], "sources": [{ "name": "incident", "optional": true, "unit": "Pa", "number": "complex", "product": { "factorPath": "/incidentField", "componentsPath": "/polarization", "components": 1, "component": 0 } }] }
+  } },
+  "discovery": { "order": 0, "default": false },
+  "essentialForms": {
+    "pressure": { "dirichlet": { "dimension": 2, "fieldComponents": 1, "trace": "value", "functional": "point", "legacyInput": "scalar", "valueType": "complex", "legacyZeroTolerance": 0, "conflictRelativeTolerance": 1e-9, "conflictScaleFloor": 1, "minimumWeightMagnitude": 1e-150, "conflictMessage": "Conflicting Dirichlet values meet at periodic mesh degree of freedom {context} after Floquet phase normalization.", "invalidWeightMessage": "A scalar Dirichlet constraint has a non-finite value or periodic phase." } }
+  },
+  "boundaryForms": {
+    "pressure": {
+      "neumannScalar": { "dimension": 2, "fieldComponents": 1,
+        "loadTerms": [{ "test": "value", "source": "prescribed", "sourceTrace": "value", "coefficient": "load" }],
+        "coefficients": { "load": { "complex": [0, { "multiply": [-1, { "symbol": "omega" }] }] } } },
+      "neumannVector": { "dimension": 2, "fieldComponents": 1,
+        "loadTerms": [{ "test": "value", "source": "prescribed", "sourceTrace": "normal", "coefficient": "load" }],
+        "coefficients": { "load": { "complex": [0, { "multiply": [-1, { "symbol": "omega" }] }] } } },
+      "impedance": { "dimension": 2, "fieldComponents": 1,
+        "matrixTerms": [{ "test": "value", "trial": "value", "coefficient": "matrix" }],
+        "loadTerms": [{ "test": "value", "source": "incident", "sourceTrace": "value", "coefficient": "source" }],
+        "coefficients": {
+          "matrix": { "complex": [0, { "divide": [{ "symbol": "omega" }, { "symbol": "impedance" }] }] },
+          "source": { "complex": [0, { "divide": [{ "multiply": [2, { "symbol": "omega" }] }, { "symbol": "impedance" }] }] }
+        } }
+    }
+  },
+  "recoveries": {
+    "pressure": {
+      "operator": "gradient", "transform": [[1,0,0],[0,1,0],[0,0,1]],
+      "factor": {"divide": [{"complex": [0,1]}, {"multiply": [{"symbol":"omega"},{"symbol":"density"}]}]},
+      "sampling": "cellCentroid", "output": "nodalArithmeticMean"
+    }
+  },
   "version": "1.0.0",
+  "materialBindings": {
+    "pressure": [
+      {
+        "target": "density",
+        "source": "rho",
+        "unit": "kg/m^3",
+        "nonzero": true
+      },
+      {
+        "target": "soundSpeed",
+        "source": "c",
+        "unit": "m/s",
+        "nonzero": true
+      },
+      {
+        "target": "lossFactor",
+        "source": "lossFactor",
+        "unit": "1",
+        "default": 0,
+        "implementedValues": [
+          0
+        ]
+      }
+    ]
+  },
+  "weakForms": {
+    "pressure": {
+      "dimension": 2,
+      "fieldComponents": 1,
+      "element": { "cell": "triangle", "family": "lagrange", "fieldComponents": 1, "orders": [1] },
+      "terms": [
+        {"test": "gradient", "trial": "gradient", "coefficient": "diffusion"},
+        {"test": "value", "trial": "value", "coefficient": "reaction"}
+      ],
+      "coefficients": {
+        "diffusion": {"divide": [1, {"symbol": "density"}]},
+        "reaction": {"divide": [
+          {"multiply": [-1, {"symbol": "omega"}, {"symbol": "omega"}]},
+          {"multiply": [{"symbol": "density"}, {"symbol": "soundSpeed"}, {"symbol": "soundSpeed"}]}
+        ]}
+      }
+    }
+  },
   "schemaDocument": {
     "$defs": {
       "physicsFormulation": {
@@ -105,8 +350,10 @@
       }
     },
     "x-fem-physics": {
+      "domainSourceLayout": {"title":"Volume injection rate","componentLabels":["Q"]},
       "boundaryDefaultsByFormulation": {
         "pressure": {
+          "domainSource": {"values":[{"expression":"0","unit":"Hz"}]},
           "dirichlet": {
             "value": {
               "expression": "0",
@@ -143,9 +390,11 @@
         "impedance"
       ],
       "supportedFeatureTypes": [
+        "domainSource",
         "periodicCondition"
       ],
       "conditionActions": [
+        {"action":"add-domain-source","conditionType":"domainSource","itemName":"Domain Source","label":"Add Domain Source"},
         {
           "action": "add-dirichlet-boundary",
           "conditionType": "dirichlet",
@@ -172,6 +421,7 @@
         }
       ],
       "featureHandlingByType": {
+        "domainSource": "domainSource",
         "periodicCondition": "periodicPair"
       },
       "boundaryFieldLayouts": {
@@ -429,7 +679,7 @@
       },
       "studyType": "frequencyDomain",
       "supportsStationary": false,
-      "solverModule": "acoustic2d"
+      "execution": { "kind": "scalarSimplexP1" }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "$id": "https://fullmeta.local/applications/fem/scenarios/acoustic-2d.schema.json"

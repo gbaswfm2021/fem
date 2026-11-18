@@ -1,6 +1,6 @@
 # 2D electromagnetics: model and implementation
 
-This manual connects the `em-2d` model tree to its equations, triangle discretization and outputs. It is for users, scientists and developers; a declared option does not by itself establish numerical acceptance. See the [project guide](../../docs/README.md), [Model 2 reference](../../docs/fullmeta-model-2.md), [scenario contract](../src/scenarios/em2d.json), and [solver](../src/scenarios/em2d.rs).
+This manual connects the `em-2d` model tree to its equations, triangle discretization and outputs. It is for users, scientists and developers; a declared option does not by itself establish numerical acceptance. See the [project guide](../../docs/README.md), [Model 2 reference](../../docs/fullmeta-model-2.md), [scenario contract](../src/scenarios/em2d.json), and [solver](../src/prepared_frequency_scalar.rs).
 
 ## 1. Maxwell equations and scalar formulations
 
@@ -86,3 +86,37 @@ Zero Dirichlet gives PEC for `Ez` and PMC for `Hz`. Zero Neumann gives PMC for `
 Validate a model with an appropriate analytic wave or cavity case and mesh refinement. This is a 2D z-invariant approximation, not a general 3D vector simulation. The solver's allowed conditions and settings are described by the [solver capability contract](../../specification/contracts/solver-capability-contract.md).
 
 For example, in a homogeneous lossless medium a +x plane wave with `Ez = E0 exp(-i k x)` has `Hy = -Ez/eta`, where `k = omega sqrt(mu epsilon)` and `eta = sqrt(mu/epsilon)`. With compatible boundary data, compare both the complex phase and the sign of `Hy` against this relation. A magnitude-only plot cannot detect a reversed phase or field sign.
+
+## Future eigenfrequency study
+
+An eigenfrequency Study is not implemented. For a source-free cavity with zero conductivity and positive frequency-independent `eps_r` and `mu_r`, the scalar wave equations in section 1 become
+
+```math
+-\nabla\cdot(a\nabla u)=\lambda\mu_0\epsilon_0 b\,u,
+\qquad \lambda=\omega^2,
+```
+
+where `(a,b) = (1/mu_r, eps_r)` for `u = Ez`, and `(a,b) = (1/eps_r, mu_r)` for `u = Hz`. The left operator is the weighted scalar stiffness operator; the right operator multiplies the primary field by `mu0 epsilon0 b`. With homogeneous scalar Dirichlet and/or natural boundaries, testing by `v` and integrating by parts gives
+
+```math
+\int_\Omega a\,\nabla\overline v\cdot\nabla u\,dA
+=\lambda\int_\Omega\mu_0\epsilon_0 b\,\overline v\,u\,dA.
+```
+
+`v` vanishes on Dirichlet boundaries and the bar denotes complex conjugation. Expanding `u` and `v` in the real triangle nodal basis gives
+
+```math
+K\mathbf u=\omega^2M\mathbf u,\qquad
+K_{ij}=\int_\Omega a\,\nabla N_i\cdot\nabla N_j\,dA,\qquad
+M_{ij}=\int_\Omega\mu_0\epsilon_0 b\,N_iN_j\,dA.
+```
+
+`M` discretizes the weighted field operator on the right; its weight depends on the chosen polarization. Apply homogeneous essential constraints to both matrices. A nonzero eigenvector is a mode shape, and for a positive eigenvalue `f = sqrt(lambda)/(2 pi)`. Natural-boundary problems can include a zero mode, for which the derived-field formulas dividing by `omega` do not apply. Conductivity, impedance or frequency-dependent coefficients require a more general eigenproblem.
+
+## Domain Source
+
+The current implementation supports multiple Domain Source entries under PHYSICS, each with an existing domain selection and expressions in spatial coordinates. Overlapping entries add; no entry means zero source. The project model stores selections and expressions, while the scenario contract declares their physical interpretation and weak-form contribution. This implementation is undergoing verification; its availability in a deployed installation depends on compatible FEM and platform runtimes.
+
+For Ez, the source is out-of-plane electric current Jz in A/m^2 and the normalized weak RHS coefficient is `-i omega mu0`. For Hz, it is an equivalent out-of-plane magnetic current Mz in V/m^2, using `curl E = -i omega mu H - M`; the normalized RHS coefficient is `-i omega epsilon0`.
+
+See the [implementation plan](implement_domain_sources.md) for expression evaluation, generic assembly and verification requirements.

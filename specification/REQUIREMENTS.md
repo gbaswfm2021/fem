@@ -32,10 +32,14 @@ Implement the profile/formulation, preparation, backend, element-order and outpu
 | `acoustic-3d` | Pressure | Harmonic point and parameter-sweep studies on 3D tetrahedral meshes. |
 | `em-2d` | `Ez` or `Hz` | Harmonic studies following the linked Physics interface. |
 | `em-3d` | Electric field | Harmonic studies with the specified Nédélec orders and backends. |
+| `elastic-2d` | Plane stress or plane strain displacement | Harmonic studies of in-plane elasticity. |
+| `elastic-3d` | Displacement | Harmonic studies of 3D elasticity. |
 | `thermal-2d` | Temperature | Stationary thermal solve with the specified field and summary outputs. |
 | `thermal-3d` | Temperature | Stationary heat conduction on 3D tetrahedral meshes, with nodal temperature and per-cell heat flux. |
 
 A structurally permitted option is not automatically an implemented numerical capability. Preserve the exact experimental-option rules, formulation matching and rejection behavior specified by the format, validation and solver contracts. An unsupported valid input needs an explicit unsupported-capability result; it must not be silently reinterpreted.
+
+Each registered profile supports repeatable Domain Source Physics features for its declared formulations. Domain selections and quantity expressions are project values; the scenario declares their physical interpretation. Enabled overlapping sources add, and an absent source has zero contribution. [Domain Source format](../docs/fullmeta-model-2.md#materials-and-physics)
 
 ## Invariants
 

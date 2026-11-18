@@ -1,4 +1,4 @@
-import { evaluatePointwiseFields, getCoreUnit } from '../../../platform/core-rust/js/api.js';
+import { evaluatePointwiseFields, getCoreUnit } from './runtime/core-api.js';
 
 const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
 const fail=(path,message)=>{throw new Error(`${path}: ${message}`);};

@@ -1,17 +1,17 @@
 # 2D thermal conduction: model and implementation
 
-This manual connects the `thermal-2d` model tree to its stationary conduction equation and linear-triangle solver. It is intended for users, scientists and developers. See the [project guide](../../docs/README.md), [Model 2 reference](../../docs/fullmeta-model-2.md), [scenario contract](../src/scenarios/thermal2d.json), and [solver](../src/scenarios/thermal2d.rs). The application's numerical acceptance remains open as described in the project guide.
+This manual connects the `thermal-2d` model tree to its stationary conduction equation and linear-triangle solver. It is intended for users, scientists and developers. See the [project guide](../../docs/README.md), [Model 2 reference](../../docs/fullmeta-model-2.md), [scenario contract](../src/scenarios/thermal2d.json), and [solver](../src/prepared_scalar.rs). The application's numerical acceptance remains open as described in the project guide.
 
 ## 1. Physics and fields
 
 This is a **stationary heat-conduction** problem in an x–y cross-section, not a wave or transient heat equation. Temperature `T` in kelvin is the primary field; the physical heat flux `q` in `W/m^2` follows Fourier's law:
 
 ```math
-\mathbf q=-k\nabla T,\qquad \nabla\cdot\mathbf q=0,
-\qquad -\nabla\cdot(k\nabla T)=0.
+\mathbf q=-k\nabla T,\qquad \nabla\cdot\mathbf q=Q,
+\qquad -\nabla\cdot(k\nabla T)=Q.
 ```
 
-Here `k` is scalar thermal conductivity. The first two equations use only first-order spatial derivatives when flux is included; the last equation eliminates flux. There is no modeled volumetric heat source, transient heat capacity, convection/radiation boundary or thermal impedance in this scenario.
+Here `k` is scalar thermal conductivity and `Q` is volumetric heat generation in `W/m^3`, zero when no Domain Source is enabled. The first two equations use only first-order spatial derivatives when flux is included; the last equation eliminates flux. Transient heat capacity, convection/radiation boundaries and thermal impedance are not modeled.
 
 The scenario declares `T` as a primary field and **no derived field variables in its plotting catalog**. The solver nevertheless calculates and exports `heatFluxByCell` as a derived per-triangle result; do not assume its components are exposed as selectable derived field symbols in the model tree. It also exports conductivity by cell.
 
@@ -21,7 +21,7 @@ With a test function `s`, integration by parts gives
 
 ```math
 \int_\Omega k\nabla s\cdot\nabla T\,dA
-=-\int_{\partial\Omega}s\,\overline q_n\,ds,
+=\int_\Omega sQ\,dA-\int_{\partial\Omega}s\,\overline q_n\,ds,
 \qquad \overline q_n=\mathbf q\cdot\mathbf n.
 ```
 
@@ -62,7 +62,7 @@ The Neumann contribution to the right-hand side is `-integral s (n·g) ds`, with
 
 When `fieldValues` is present, scalar `value` must evaluate to zero. Without the vector, the existing scalar prescribes outward normal heat flux directly. A nonperiodic, unassigned exterior edge has zero normal flux and is insulated. A zero Dirichlet temperature means 0 K; it is not the default insulation condition.
 
-If a connected conduction component has no prescribed temperature, its total applied outward flux must balance to zero. For each such component the solver uses the Study's area-weighted `meanTemperature` to fix the additive constant, default `0 K`; it rejects incompatible net heat load. A mean reference cannot compensate for a physical heat source. Choose a meaningful mean if absolute temperature matters.
+If a connected conduction component has no prescribed temperature, its total applied outward flux must equal its integrated heat generation. For each such component the solver uses the Study's area-weighted `meanTemperature` to fix the additive constant, default `0 K`; it rejects incompatible net heat load. A mean reference cannot compensate for an unbalanced physical heat source. Choose a meaningful mean if absolute temperature matters.
 
 ## 4. Mesh, Study and results
 
@@ -72,4 +72,14 @@ If a connected conduction component has no prescribed temperature, its total app
 
 Check a simple slab with prescribed temperatures or balanced inward/outward flux, confirm the flux sign and energy balance, and refine the mesh for nontrivial geometry or interface behavior. Do not interpret a stationary solution as a thermal wave or a transient temperature history.
 
-For a homogeneous slab `0 <= x <= L` with `T(0) = T_left`, `T(L) = T_right` and insulated top and bottom, the exact solution is `T(x) = T_left + (T_right-T_left)x/L` and `qx = -k(T_right-T_left)/L`. At the left boundary the outward normal is `-x_hat`, so its outward flux is `-qx`; at the right it is `qx`. This provides a direct sign and conservation check.
+For a homogeneous slab `0 <= x <= L` with zero domain source, `T(0) = T_left`, `T(L) = T_right` and insulated top and bottom, the exact solution is `T(x) = T_left + (T_right-T_left)x/L` and `qx = -k(T_right-T_left)/L`. At the left boundary the outward normal is `-x_hat`, so its outward flux is `-qx`; at the right it is `qx`. This provides a direct sign and conservation check.
+
+## Domain Source
+
+The current implementation supports multiple Domain Source entries under PHYSICS, each with an existing domain selection and expressions in spatial coordinates. Overlapping entries add; no entry means zero source. The project model stores selections and expressions, while the scenario contract declares their physical interpretation and weak-form contribution. This implementation is undergoing verification; its availability in a deployed installation depends on compatible FEM and platform runtimes.
+
+For this stationary cross-section, the source is volumetric heat generation. The 2D formulation is interpreted per unit thickness, and the pure-Neumann compatibility check includes the integrated source.
+
+For source density Q in W/m^3, use `-div(k grad T) = Q` and add `integral(test * Q) dA` per unit out-of-plane thickness.
+
+See the [implementation plan](implement_domain_sources.md) for expression evaluation, generic assembly and verification requirements.

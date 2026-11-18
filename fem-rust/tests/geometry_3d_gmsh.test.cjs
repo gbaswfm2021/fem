@@ -15,6 +15,12 @@ const gmsh = path.join(crate, 'vendor/gmsh-4.15.2/gmsh-4.15.2-Windows64/gmsh.exe
 const env = {...process.env, FULLMETA_ROOT: workspace, FULLMETA_MODEL_SCHEMA_FILE: path.join(app, 'fem.schema.json')};
 for (const key of ['FULLMETA_CORE_DLL', 'FULLMETA_MODEL_DLL', 'FULLMETA_CONTRACTS_DLL']) delete env[key];
 
+const registry = JSON.parse(fs.readFileSync(path.join(crate, 'src/scenarios/registry.json'), 'utf8'));
+const profiles = registry.packages.map(item => JSON.parse(fs.readFileSync(path.join(crate, 'src/scenarios', item.file), 'utf8')).schemaDocument['x-fem-scenario'].profile);
+const profiles2d = profiles.filter(item => item.dimension === 2).map(item => item.id);
+const profiles3d = profiles.filter(item => item.dimension === 3).map(item => item.id);
+const profile3d = profiles3d[0];
+
 const quantity = n => ({expression: String(n), unit: 'm'});
 const vector = (...values) => values.map(quantity);
 const box = (id, position, size) => ({id, name:id, type:'box', position:vector(...position), size:vector(...size)});
@@ -76,7 +82,7 @@ function assertHollow(elements) {
 const outer=box('outer',[0,0,0],[4,4,4]), inner=box('inner',[1,1,1],[2,2,2]);
 const first=box('first',[0,0,0],[1,1,1]), second=box('second',[2,0,0],[1,1,1]);
 
-for (const profile of ['acoustic-3d','em-3d']) test(`${profile}: preserve inner wall and omit inactive core`, t=>{
+for (const profile of profiles3d) test(`${profile}: preserve inner wall and omit inactive core`, t=>{
   const domain=selection('shell','domain',{outer:'inside',inner:'outside'}), wall=selection('wall','boundary',{outer:'inside',inner:'boundary'});
   assertHollow(mesh(compile(fixture(t),model(profile,3,[outer,inner],[domain,wall],['shell'],[material('shell')]))));
 });
@@ -84,14 +90,14 @@ for (const profile of ['acoustic-3d','em-3d']) test(`${profile}: preserve inner 
 test('single union: mesh only the selected child', t=>{
   const group={id:'assembly',name:'Assembly',type:'union',features:[first,second]};
   const domain=selection('part','domain',{assembly:'inside',first:'inside',second:'outside'});
-  assertSelected(mesh(compile(fixture(t),model('em-3d',3,[group],[domain],['part'],[material('part')]))),1.5);
+  assertSelected(mesh(compile(fixture(t),model(profile3d,3,[group],[domain],['part'],[material('part')]))),1.5);
 });
 
 test('single union: classify a hollow nested feature by CAD overlap', t=>{
   const group={id:'assembly',name:'Assembly',type:'union',features:[outer,inner]};
   const domain=selection('shell','domain',{assembly:'inside',outer:'inside',inner:'outside'});
   const wall=selection('wall','boundary',{assembly:'inside',outer:'inside',inner:'boundary'});
-  assertHollow(mesh(compile(fixture(t),model('em-3d',3,[group],[domain,wall],['shell'],[material('shell')]))));
+  assertHollow(mesh(compile(fixture(t),model(profile3d,3,[group],[domain,wall],['shell'],[material('shell')]))));
 });
 
 test('nested unions: retain membership through multiple Boolean levels', t=>{
@@ -99,25 +105,25 @@ test('nested unions: retain membership through multiple Boolean levels', t=>{
   const subgroup={id:'subgroup',name:'Subgroup',type:'union',features:[first,second]};
   const group={id:'assembly',name:'Assembly',type:'union',features:[subgroup,third]};
   const domain=selection('part','domain',{assembly:'inside',subgroup:'inside',first:'inside',second:'outside',third:'outside'});
-  assertSelected(mesh(compile(fixture(t),model('em-3d',3,[group],[domain],['part'],[material('part')]))),1.5);
+  assertSelected(mesh(compile(fixture(t),model(profile3d,3,[group],[domain],['part'],[material('part')]))),1.5);
 });
 
 test('single intersection: preserve the selected overlap', t=>{
   const overlap=box('overlap',[0.5,0,0],[1,1,1]);
   const group={id:'assembly',name:'Assembly',type:'intersection',features:[first,overlap]};
   const domain=selection('part','domain',{assembly:'inside',first:'inside',overlap:'inside'});
-  const volumes=mesh(compile(fixture(t),model('em-3d',3,[group],[domain],['part'],[material('part')]))).filter(item=>item.type===4);
+  const volumes=mesh(compile(fixture(t),model(profile3d,3,[group],[domain],['part'],[material('part')]))).filter(item=>item.type===4);
   assert.ok(volumes.length, 'expected tetrahedra in the intersection');
   assert.ok(volumes.every(item=>item.tag===1 && item.center[0]>0.5 && item.center[0]<1));
 });
 
 test('multiple features: remove unselected volumes', t=>{
   const domain=selection('part','domain',{first:'inside',second:'outside'});
-  assertSelected(mesh(compile(fixture(t),model('em-3d',3,[first,second],[domain],['part'],[material('part')]))),1.5);
+  assertSelected(mesh(compile(fixture(t),model(profile3d,3,[first,second],[domain],['part'],[material('part')]))),1.5);
 });
 
 test('empty Physics preserves the complete geometry', t=>{
-  const result=compile(fixture(t),model('em-3d',3,[first,second],[],[],[]));
+  const result=compile(fixture(t),model(profile3d,3,[first,second],[],[],[]));
   assert.ok(!result.geo.includes('inactiveVolumes[]'));
   const volumes=mesh(result).filter(item=>item.type===4);
   assert.ok(volumes.some(item=>item.center[0]<1.5) && volumes.some(item=>item.center[0]>1.5));
@@ -125,14 +131,14 @@ test('empty Physics preserves the complete geometry', t=>{
 
 test('single primitive keeps the original meshing path', t=>{
   const domain=selection('part','domain',{first:'inside'});
-  const dir=fixture(t), value=model('em-3d',3,[first],[domain],['part'],[material('part')]);
+  const dir=fixture(t), value=model(profile3d,3,[first],[domain],['part'],[material('part')]);
   const result=compile(path.join(dir,'candidate'),value);
   if (process.env.FULLMETA_BASELINE_EXE) assert.equal(result.geo,compile(path.join(dir,'baseline'),value,process.env.FULLMETA_BASELINE_EXE).geo);
   assert.ok(!result.geo.includes('inactiveVolumes[]'));
   assertSelected(mesh(result),1.5);
 });
 
-for (const profile of ['acoustic-2d','em-2d','thermal-2d']) test(`${profile}: 2D geometry still meshes`, t=>{
+for (const profile of profiles2d) test(`${profile}: 2D geometry still meshes`, t=>{
   const domain=selection('part','domain',{plate:'inside'});
   const dir=fixture(t), value=model(profile,2,[rectangle('plate',[0,0],[1,1])],[domain],['part'],[material('part')]);
   const result=compile(path.join(dir,'candidate'),value);
@@ -142,7 +148,7 @@ for (const profile of ['acoustic-2d','em-2d','thermal-2d']) test(`${profile}: 2D
 
 test('changing the Physics domain changes the mesh cache key', t=>{
   const a=selection('a','domain',{first:'inside',second:'outside'}), b=selection('b','domain',{first:'outside',second:'inside'});
-  const original=model('em-3d',3,[first,second],[a,b],['a'],[material('a')]), changed=structuredClone(original);
+  const original=model(profile3d,3,[first,second],[a,b],['a'],[material('a')]), changed=structuredClone(original);
   changed.model.physics.domainSelectionIds=['b'];
   const dir=fixture(t), left=compile(path.join(dir,'left'),original), right=compile(path.join(dir,'right'),changed);
   assert.notEqual(left.geometryHash,right.geometryHash);

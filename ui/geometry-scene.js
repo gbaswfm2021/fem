@@ -1,4 +1,4 @@
-import { evaluateQuantity,getCoreUnit,resolveParameterTable } from '../../../platform/core-rust/js/api.js';
+import { evaluateQuantity,getCoreUnit,resolveParameterTable } from '../js/runtime/core-api.js';
 import { boxSolid,circlePoints,cylinderSolid,combineSolids,polygon,solidOutlines } from './solid-geometry.js';
 import { meshPreviewSurfaces,meshSurfaceStyle } from '../js/mesh-artifact.js';
 import { namedSelectionPrimitives } from './selection-cad.js';

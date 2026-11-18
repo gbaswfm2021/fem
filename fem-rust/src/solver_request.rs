@@ -1,4 +1,76 @@
 use serde_json::Value;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+/// Shared input for single-frequency scenario runners. The scenario continues
+/// to own mesh format, field/formulation and boundary-specific validation.
+pub(crate) struct FrequencyInput {
+    pub(crate) request: Value,
+    pub(crate) model: Value,
+    pub(crate) map: Value,
+    pub(crate) mesh_path: PathBuf,
+    pub(crate) output_directory: PathBuf,
+    pub(crate) frequency: f64,
+}
+
+struct FrequencyPaths {
+    model: PathBuf,
+    mesh: PathBuf,
+    map: PathBuf,
+    output: PathBuf,
+}
+
+impl FrequencyPaths {
+    fn from_request(request: &Value, base: &Path) -> Result<Self, String> {
+        let resolve = |key: &str| -> Result<PathBuf, String> {
+            let value = request
+                .get(key)
+                .and_then(Value::as_str)
+                .ok_or_else(|| format!("request.{key} is required."))?;
+            let path = PathBuf::from(value);
+            Ok(if path.is_absolute() {
+                path
+            } else {
+                base.join(path)
+            })
+        };
+        Ok(Self {
+            model: resolve("modelFile")?,
+            mesh: resolve("meshFile")?,
+            map: resolve("modelMapFile")?,
+            output: resolve("outputDirectory")?,
+        })
+    }
+}
+
+impl FrequencyInput {
+    pub(crate) fn load(
+        request_path: &Path,
+        solver: &str,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let request: Value = serde_json::from_slice(&fs::read(request_path)?)?;
+        validate_single_case_request(&request, solver)
+            .map_err(|error| format!("Solver request: {error}"))?;
+        let paths = FrequencyPaths::from_request(
+            &request,
+            request_path.parent().unwrap_or(Path::new(".")),
+        )?;
+        let model: Value = serde_json::from_slice(&fs::read(&paths.model)?)?;
+        validate_study_reference(&model, &request)
+            .map_err(|error| format!("Solver request: {error}"))?;
+        let frequency =
+            single_case_frequency(&request).map_err(|error| format!("Solver request: {error}"))?;
+        let map: Value = serde_json::from_slice(&fs::read(&paths.map)?)?;
+        Ok(Self {
+            request,
+            model,
+            map,
+            mesh_path: paths.mesh,
+            output_directory: paths.output,
+            frequency,
+        })
+    }
+}
 
 pub(crate) fn validate_request(request: &Value, expected_solver: &str) -> Result<(), String> {
     let root_schema = crate::model_schema::root()?;
@@ -77,4 +149,40 @@ pub(crate) fn validate_study_reference(model: &Value, request: &Value) -> Result
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn frequency_paths_resolve_relative_to_request_and_preserve_absolute_paths() {
+        let base = std::env::current_dir().unwrap().join("fixture-run");
+        let absolute_mesh = base.join("other").join("mesh.msh");
+        let request = json!({
+            "modelFile": "model.json", "meshFile": absolute_mesh,
+            "modelMapFile": "meshes/map.json", "outputDirectory": "outputs"
+        });
+        let paths = FrequencyPaths::from_request(&request, &base).unwrap();
+        assert_eq!(paths.model, base.join("model.json"));
+        assert_eq!(paths.mesh, absolute_mesh);
+        assert_eq!(paths.map, base.join("meshes").join("map.json"));
+        assert_eq!(paths.output, base.join("outputs"));
+        let error = FrequencyPaths::from_request(&json!({"modelFile":"ok"}), &base)
+            .err()
+            .unwrap();
+        assert_eq!(error, "request.meshFile is required.");
+    }
+
+    #[test]
+    fn frequency_and_study_checks_accept_only_the_selected_case() {
+        let model = json!({"model":{"study":[{"id":"study-a"}]}});
+        let request = json!({"studyId":"study-a", "frequencyCases":[{"frequencyHz":12.5}]});
+        assert_eq!(single_case_frequency(&request).unwrap(), 12.5);
+        validate_study_reference(&model, &request).unwrap();
+        assert!(single_case_frequency(&json!({"frequencyCases":[]})).is_err());
+        assert!(single_case_frequency(&json!({"frequencyCases":[{"frequencyHz":0}]})).is_err());
+        assert!(validate_study_reference(&model, &json!({"studyId":"missing"})).is_err());
+    }
 }

@@ -1,6 +1,389 @@
 {
   "contractVersion": "fullmeta-fem-scenario/1",
   "id": "em-3d",
+  "domainSources": {
+    "electric": {
+      "form": {
+        "dimension": 3,
+        "fieldComponents": 3,
+        "test": "value"
+      },
+      "input": {
+        "components": 3,
+        "path": "/values",
+        "unit": "A/m^2",
+        "number": "complex"
+      },
+      "coefficient": {
+        "complex": [
+          0,
+          {
+            "multiply": [
+              -1,
+              1,
+              {
+                "symbol": "omega"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "preparedEdge": {
+    "electric": {
+      "componentCoordinates": { "inputPath": "/fieldComponentCoordinateSystem", "value": "model" },
+      "supportedQuadrature": ["standard"],
+      "coordinateFrame": { "axisOrder": [1, 2, 0], "origin": "boundsMinimum" },
+      "topology": {
+        "rejectDuplicateCells": false,
+        "rejectNonManifoldFacets": true,
+        "requireAllNodesUsed": false,
+        "requireNonemptyCells": true,
+        "determinantTolerance": null
+      },
+      "facetPolicy": { "ownership": "anyExisting", "duplicates": "reject", "requirePositiveTag": true },
+      "positiveEdgeTags": true,
+      "material": { "collection": "materials", "path": "/material", "fallbackToRow": true, "sampling": "cellCentroid" },
+      "materialOutput": {
+        "fields": { "relativePermittivity": "epsilonRelative", "relativePermeability": "muRelative", "conductivitySPerM": "sigma" },
+        "representation": "First actual tetrahedron centroid sample for this material tag; assembly uses the evaluated coefficients of each tetrahedron."
+      },
+      "selectionEntities": { "domainSources": "cells", "materials": "cells", "impedanceBoundaries": "exteriorFacets", "prescribedBoundaries": "exteriorFacets" },
+      "integrationSelectionKeys": { "physicalGroups": "selectionId", "boundarySelections": "id", "edgeSelections": "id", "pointSelections": "id" },
+      "boundaryCollections": { "impedanceBoundaries": { "kind": "impedance" }, "prescribedBoundaries": { "kindPath": "/type" } },
+      "sourceVectors": { "impedance": { "incident": ["incidentX", "incidentY", "incidentZ"] } },
+      "periodic": { "matchingTolerance": 1e-10, "orientationTolerance": 1e-8 },
+      "solveTolerance": 1e-7,
+      "output": {
+        "discretizationByOrder": { "1": "First-order Nedelec edge elements on tetrahedra", "2": "Second-order Nedelec edge elements on tetrahedra" },
+        "orderingUnavailableUnlessBackend": "rivrs",
+        "debugResult": {
+          "document": { "literal": {} },
+          "csv": [
+            { "header": "frequency_Hz", "input": "frequency", "format": "scientific", "precision": 17 },
+            { "header": "residual", "input": "residual", "format": "scientific", "precision": 6 },
+            { "header": "mesh_nodes", "input": "meshNodes", "format": "integer" },
+            { "header": "tetrahedra", "input": "cellCount", "format": "integer" },
+            { "header": "nedelec_dofs", "input": "unknowns", "format": "integer" },
+            { "header": "element_order", "input": "elementOrder", "format": "integer" }
+          ],
+          "csvVariables": { "realSuffix": "_re", "imaginarySuffix": "_im", "precision": 14 }
+        }
+      },
+      "fieldFamilies": { "vectors": { "electric": "primary", "magnetic": "recovered" } }
+    }
+  },
+  "resultPlans": {
+    "electric": {
+      "document": {
+        "object": {
+          "frequencyHz": {
+            "input": "frequency"
+          },
+          "frequencyGHz": {
+            "input": "frequencyGHz"
+          },
+          "fieldFormulation": {
+            "input": "formulation"
+          },
+          "discretization": {
+            "input": "discretization"
+          },
+          "geometry": {
+            "input": "geometry"
+          },
+          "origin": {
+            "input": "origin"
+          },
+          "coordinateOrder": {
+            "literal": [
+              "y",
+              "z",
+              "x"
+            ]
+          },
+          "fieldComponentCoordinateSystem": {
+            "literal": "model"
+          },
+          "fieldConvention": {
+            "literal": "exp(+i omega t)"
+          },
+          "nodes": {
+            "input": "nodes"
+          },
+          "tetrahedra": {
+            "input": "cells"
+          },
+          "fields": {
+            "object": {
+              "Ex": {
+                "field": {
+                  "input": "Ex",
+                  "unit": "V/m",
+                  "source": "solved"
+                }
+              },
+              "Ey": {
+                "field": {
+                  "input": "Ey",
+                  "unit": "V/m",
+                  "source": "solved"
+                }
+              },
+              "Ez": {
+                "field": {
+                  "input": "Ez",
+                  "unit": "V/m",
+                  "source": "solved"
+                }
+              },
+              "Hx": {
+                "field": {
+                  "input": "Hx",
+                  "unit": "A/m",
+                  "source": "derived"
+                }
+              },
+              "Hy": {
+                "field": {
+                  "input": "Hy",
+                  "unit": "A/m",
+                  "source": "derived"
+                }
+              },
+              "Hz": {
+                "field": {
+                  "input": "Hz",
+                  "unit": "A/m",
+                  "source": "derived"
+                }
+              }
+            }
+          },
+          "materialPropertiesByTag": {
+            "input": "materialProperties"
+          },
+          "materialFieldsByCell": {
+            "input": "materialFields"
+          },
+          "globalVariables": {
+            "input": "globalVariables"
+          },
+          "globalVariableSemantics": {
+            "literal": "Configured expressions and integration operators are evaluated as written; no automatic port or scattering extraction is applied."
+          },
+          "constitutiveQuadrature": {
+            "literal": "standard 11-point tetrahedral quadrature"
+          },
+          "solver": {
+            "object": {
+              "backend": {
+                "input": "backend"
+              },
+              "ordering": {
+                "input": "ordering"
+              },
+              "residual": {
+                "input": "residual"
+              },
+              "unknowns": {
+                "input": "unknowns"
+              },
+              "dofsPerField": {
+                "input": "dofsPerField"
+              },
+              "realBlockUnknowns": {
+                "input": "realBlockUnknowns"
+              },
+              "iterations": {
+                "input": "iterations"
+              }
+            }
+          },
+          "provenance": {
+            "literal": "FEM solver, reconstructed mesh"
+          }
+        }
+      },
+      "csv": [
+        {
+          "header": "frequency_Hz",
+          "input": "frequency",
+          "format": "scientific",
+          "precision": 17
+        }
+      ],
+      "csvVariables": {
+        "realSuffix": "_re",
+        "imaginarySuffix": "_im",
+        "precision": 14
+      }
+    }
+  },
+  "boundaryInputs": { "electric": {
+    "dirichlet": { "mode": "moment", "sampling": "point", "prescribed": {
+      "scalar": { "path": "/value", "unit": "V/m", "number": "complex" },
+      "vector": { "path": "/fieldValues", "fallbackPath": "/value", "unit": "V/m", "number": "complex", "components": 3 },
+      "scalarOptionalWhenVector": true
+    } },
+    "neumann": { "mode": "trace", "sampling": "point", "prescribed": {
+      "scalar": { "path": "/value", "unit": "V/m^2", "number": "complex" },
+      "vector": { "path": "/fieldValues", "fallbackPath": "/value", "unit": "A/m", "number": "complex", "components": 3 },
+      "scalarOptionalWhenVector": true, "scalarExpansion": 3,
+      "scalarForm": "neumann", "vectorForm": "neumann", "source": "prescribed"
+    } },
+    "impedance": { "mode": "impedance", "sampling": "point", "form": "impedance",
+      "coefficients": [ { "name": "impedance", "path": "/impedance", "unit": "ohm", "number": "real", "nonzero": true } ],
+      "sources": [
+        { "name": "incidentX", "unit": "V/m", "number": "complex", "optional": true,
+          "product": { "factorPath": "/incidentField", "componentsPath": "/polarization", "components": 3, "component": 0 } },
+        { "name": "incidentY", "unit": "V/m", "number": "complex", "optional": true,
+          "product": { "factorPath": "/incidentField", "componentsPath": "/polarization", "components": 3, "component": 1 } },
+        { "name": "incidentZ", "unit": "V/m", "number": "complex", "optional": true,
+          "product": { "factorPath": "/incidentField", "componentsPath": "/polarization", "components": 3, "component": 2 } }
+      ]
+    }
+  } },
+  "discovery": { "order": 3, "default": true },
+  "essentialForms": {
+    "electric": { "dirichlet": { "dimension": 3, "fieldComponents": 3, "trace": "tangential", "functional": "orientedMoment", "legacyInput": "zeroOnly", "valueType": "complex", "legacyZeroTolerance": 0, "conflictRelativeTolerance": 1e-9, "conflictScaleFloor": 1, "minimumWeightMagnitude": 1e-150, "conflictMessage": "Conflicting EM3D Dirichlet values at periodic degree of freedom {context}.", "invalidWeightMessage": "EM3D boundary constraint has an invalid value or periodic weight.", "legacyMessage": "{context}: a scalar boundary value must be zero; use three Cartesian components for a nonzero field.", "legacyFieldMessage": "{context}: the scalar value must be zero when a Cartesian vector is supplied." } }
+  },
+  "materialCoefficients": {
+    "mu": {"multiply": [1.25663706212e-6, {"symbol": "muRelative"}]},
+    "epsilon": {"multiply": [8.8541878128e-12, {"symbol": "epsilonRelative"}]}
+  },
+  "recoveries": {
+    "electric": {
+      "operator": "curl", "transform": [[1,0,0],[0,1,0],[0,0,1]],
+      "factor": {"divide": [{"complex": [0,1]}, {"multiply": [{"symbol":"omega"},{"symbol":"mu"}]}]},
+      "sampling": "cellCentroid", "output": "nodalArithmeticMeanAndPoint"
+    }
+  },
+  "materialBindings": {
+    "electric": [
+      {
+        "target": "muRelative",
+        "source": "mu_r",
+        "unit": "1",
+        "nonzero": true
+      },
+      {
+        "target": "epsilonRelative",
+        "source": "eps_r",
+        "unit": "1"
+      },
+      {
+        "target": "sigma",
+        "source": "sigma",
+        "unit": "S/m"
+      }
+    ]
+  },
+  "selectionPlan": {
+    "collections": [
+    {"name":"domainSources","cellMapSection":"domainCellSelections","path":"/modelConfiguration/domainSources","mapSection":"physicalGroups","kind":"array","missing":"empty","disabled":"skip","duplicates":"keepAll","declaredTag":"ignore","coverage":["assignedInMesh"],"positiveMeshTags":false,"mapIdKey":"selectionId","mapTagDuplicates":"allow"},
+      {
+        "name": "materials",
+        "path": "/modelConfiguration/materialAssignments",
+        "mapSection": "physicalGroups",
+        "mapIdKey": "selectionId",
+        "mapTagDuplicates": "allow",
+        "kind": "array",
+        "missing": "error",
+        "disabled": "include",
+        "duplicates": "reject",
+        "declaredTag": "requireMatch",
+        "coverage": [
+          "meshAssigned",
+          "allMapSelectionsAssigned"
+        ],
+        "positiveMeshTags": false
+      },
+      {
+        "name": "impedanceBoundaries",
+        "path": "/modelConfiguration/impedanceBoundaries",
+        "mapSection": "boundarySelections",
+        "mapIdKey": "id",
+        "mapTagDuplicates": "allow",
+        "kind": "array",
+        "missing": "error",
+        "disabled": "include",
+        "duplicates": "reject",
+        "declaredTag": "ignore",
+        "coverage": [
+          "assignedInMesh"
+        ],
+        "positiveMeshTags": true,
+        "uniqueIdGroup": "boundaries",
+        "uniqueTagGroup": "boundaries"
+      },
+      {
+        "name": "prescribedBoundaries",
+        "path": "/modelConfiguration/prescribedBoundaries",
+        "mapSection": "boundarySelections",
+        "mapIdKey": "id",
+        "mapTagDuplicates": "allow",
+        "kind": "array",
+        "missing": "empty",
+        "disabled": "include",
+        "duplicates": "reject",
+        "declaredTag": "ignore",
+        "coverage": [
+          "assignedInMesh"
+        ],
+        "positiveMeshTags": true,
+        "uniqueIdGroup": "boundaries",
+        "uniqueTagGroup": "boundaries"
+      }
+    ]
+  },
+  "weakForms": {
+    "electric": {
+      "dimension": 3,
+      "fieldComponents": 3,
+      "element": { "cell": "tetrahedron", "family": "nedelec", "fieldComponents": 3, "orders": [1, 2] },
+      "terms": [
+        { "test": "curl", "trial": "curl", "coefficient": "curlCoefficient" },
+        { "test": "value", "trial": "value", "coefficient": "valueCoefficient" }
+      ],
+      "coefficients": {
+        "curlCoefficient": { "divide": [1, { "symbol": "mu" }] },
+        "valueCoefficient": { "complex": [
+          { "multiply": [-1, { "symbol": "omega" }, { "symbol": "omega" }, { "symbol": "epsilon" }] },
+          { "multiply": [{ "symbol": "omega" }, { "symbol": "sigma" }] }
+        ] }
+      }
+    }
+  },
+  "boundaryForms": {
+    "electric": {
+      "neumann": {
+        "dimension": 3,
+        "fieldComponents": 3,
+        "loadTerms": [
+          { "test": "tangential", "source": "prescribed", "sourceTrace": "normalCross", "coefficient": "load" }
+        ],
+        "coefficients": {
+          "load": { "complex": [0, { "symbol": "omega" }] }
+        }
+      },
+      "impedance": {
+        "dimension": 3,
+        "fieldComponents": 3,
+        "matrixTerms": [
+          { "test": "tangential", "trial": "tangential", "coefficient": "matrix" }
+        ],
+        "loadTerms": [
+          { "test": "tangential", "source": "incident", "sourceTrace": "tangential", "coefficient": "source" }
+        ],
+        "coefficients": {
+          "matrix": { "complex": [0, { "divide": [{ "symbol": "omega" }, { "symbol": "impedance" }] }] },
+          "source": { "complex": [0, { "divide": [{ "multiply": [2, { "symbol": "omega" }] }, { "symbol": "impedance" }] }] }
+        }
+      }
+    }
+  },
   "version": "1.0.0",
   "schemaDocument": {
     "$defs": {
@@ -101,8 +484,10 @@
       }
     },
     "x-fem-physics": {
+      "domainSourceLayout": {"title":"Source current density","componentLabels":["Jx","Jy","Jz"]},
       "boundaryDefaultsByFormulation": {
         "electric": {
+          "domainSource": {"values":[{"expression":"0","unit":"A/m^2"},{"expression":"0","unit":"A/m^2"},{"expression":"0","unit":"A/m^2"}]},
           "dirichlet": {
             "value": {
               "expression": "0",
@@ -157,9 +542,11 @@
         "impedance"
       ],
       "supportedFeatureTypes": [
+        "domainSource",
         "periodicCondition"
       ],
       "conditionActions": [
+        {"action":"add-domain-source","conditionType":"domainSource","itemName":"Domain Source","label":"Add Domain Source"},
         {
           "action": "add-dirichlet-boundary",
           "conditionType": "dirichlet",
@@ -186,6 +573,7 @@
         }
       ],
       "featureHandlingByType": {
+        "domainSource": "domainSource",
         "periodicCondition": "periodicPair"
       },
       "boundaryFieldLayouts": {
@@ -445,7 +833,7 @@
       },
       "studyType": "frequencyDomain",
       "supportsStationary": false,
-      "solverModule": "em3d"
+      "execution": { "kind": "orientedTetrahedronNedelec", "recordModuleLabel": "em3d" }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "$id": "https://fullmeta.local/applications/fem/scenarios/em-3d.schema.json"

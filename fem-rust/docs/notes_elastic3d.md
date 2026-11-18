@@ -22,7 +22,7 @@ For harmonic amplitudes, the solver uses `exp(+i omega t)`: the real field is `R
 \nabla\cdot\boldsymbol\sigma+\mathbf f=-\rho^*\omega^2\mathbf u.
 ```
 
-Here `u`, `sigma` and `f` are complex amplitudes. The implemented scenario uses real elastic stiffness and the effective complex density defined below; its example is driven by boundary traction. A volume-force input is not declared. Lossless resonances may make the harmonic system singular or ill-conditioned. An unrestrained body has six rigid-body modes in 3D, and the static free-body problem has corresponding null modes; positive frequency alone does not exclude other resonances.
+Here `u`, `sigma` and `f` are complex amplitudes. The implemented scenario uses real elastic stiffness and the effective complex density defined below; its example is driven by boundary traction, and Domain Source can prescribe a volume-force density. Lossless resonances may make the harmonic system singular or ill-conditioned. An unrestrained body has six rigid-body modes in 3D, and the static free-body problem has corresponding null modes; positive frequency alone does not exclude other resonances.
 
 ## 2. Isotropic material and the Christoffel tensor
 
@@ -63,7 +63,8 @@ For a test displacement `v` that vanishes on the essential boundary, the propose
 \boldsymbol\varepsilon(\mathbf u)\,dV
 -\omega^2\int_\Omega\rho^*\,\mathbf v\cdot\mathbf u\,dV
 +i\omega\int_{\Gamma_Z}Z\,\mathbf v\cdot\mathbf u\,dS
-=\int_{\Gamma_N}\mathbf v\cdot\bar{\mathbf t}\,dS.
+=\int_\Omega\mathbf v\cdot\mathbf f\,dV
++\int_{\Gamma_N}\mathbf v\cdot\bar{\mathbf t}\,dS.
 ```
 
 For complex test functions the displayed test factors are conjugated, as in the usual sesquilinear form. The corresponding system is `(K - omega² M* + i omega B_Z) u = F`. The implementation accepts standard tetrahedral quadrature; centroid-only integration is rejected because it underintegrates the P1 consistent mass matrix.
@@ -138,3 +139,38 @@ Mesh refinement must resolve the thickness, bending deformation and relevant gui
 Before trusting the plate response, verify rigid translation and rotation produce zero strain, an affine displacement field gives the expected constant strain and stress, and a simple traction case has the correct sign and resultant. Compare lossless bulk longitudinal and shear waves with the speeds above, and check harmonic energy balance and positive dissipated power for the selected loss convention. For a selected scalar impedance, measure reflected amplitudes for representative incident longitudinal, shear and plate waves, and check the sign and passivity of its boundary contribution. Compare bending deflections and low-frequency modes with an applicable plate or beam reference, and use mesh convergence or a trusted 3D reference to assess the limits of that comparison. Inspect real and imaginary parts as well as magnitudes, and refine the frequency sampling around resonances.
 
 The scenario provides harmonic solves, not an eigenfrequency Study. Compare peaks and their complex field patterns with a separate free-plate reference, accounting for finite damping and source symmetry. A successful sweep alone does not establish plate bending accuracy.
+
+## Future eigenfrequency study
+
+An eigenfrequency Study is not implemented. With no body force or boundary drive, zero density loss, and frequency-independent elastic properties and density, the momentum equation in section 1 becomes
+
+```math
+-\nabla\cdot\boldsymbol\sigma(\mathbf u)=\lambda\rho\mathbf u,
+\qquad \boldsymbol\sigma(\mathbf u)=C:\varepsilon(\mathbf u),
+\qquad \lambda=\omega^2.
+```
+
+The left operator represents elastic stiffness and the right operator multiplies displacement by mass density. With homogeneous fixed boundaries (`u = 0`) and/or free boundaries (`sigma n = 0`), testing by `w` and integrating by parts yields
+
+```math
+\int_\Omega\varepsilon(\overline{\mathbf w}):C:\varepsilon(\mathbf u)\,dV
+=\lambda\int_\Omega\rho\,\overline{\mathbf w}\cdot\mathbf u\,dV.
+```
+
+`w` vanishes on fixed boundaries and the bar denotes complex conjugation. Expanding displacement and test functions in the real vector nodal basis gives
+
+```math
+K\mathbf u=\omega^2M\mathbf u,\qquad
+K_{ij}=\int_\Omega\varepsilon(\mathbf N_i):C:\varepsilon(\mathbf N_j)\,dV,\qquad
+M_{ij}=\int_\Omega\rho\,\mathbf N_i\cdot\mathbf N_j\,dV.
+```
+
+Here `N_i` are vector displacement basis functions, `C` is the elastic stiffness tensor, and `M` is the consistent density-weighted mass matrix. Apply homogeneous displacement constraints to both matrices; a free connected body has six rigid-body zero modes. For positive eigenvalues, `f = sqrt(lambda)/(2 pi)`. Loss, impedance or frequency-dependent coefficients require a more general eigenproblem. Mode shapes have arbitrary amplitude and do not by themselves give a driven response.
+
+## Domain Source
+
+The current implementation supports multiple Domain Source entries under PHYSICS, each with an existing domain selection and expressions in spatial coordinates. Overlapping entries add; no entry means zero source. The project model stores selections and expressions, while the scenario contract declares their physical interpretation and weak-form contribution. This implementation is undergoing verification; its availability in a deployed installation depends on compatible FEM and platform runtimes.
+
+The source is a three-component body-force density `f` in N/m^3, integrated over the selected volume. It contributes `integral(test · f) dV` and is distinct from a surface traction.
+
+See the [implementation plan](implement_domain_sources.md) for expression evaluation, generic assembly and verification requirements.

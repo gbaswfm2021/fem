@@ -1,5 +1,5 @@
 import { loadSchemaDocuments, loadWorkspaceJson } from '../../platform/js/schema-document-loader.js';
-import { configureModelSchema } from '../../platform/model-rust/js/api.js';
+import { configureModelSchema } from './js/runtime/model-api.js';
 import { composeScenarioContracts, loadScenarioContracts } from './js/scenario-discovery.js';
 
 const workspaceUrl = new URL('../../', import.meta.url);

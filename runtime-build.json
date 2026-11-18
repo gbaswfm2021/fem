@@ -2,6 +2,7 @@
   "format": "fullmeta-application-runtime-build/1",
   "targetDirectory": "applications/fem/.build",
   "runtimeDirectory": "applications/fem/.runtime",
+  "buildScript": "applications/fem/build-runtime.ps1",
   "crates": ["applications/fem/fem-rust"],
   "buildTargets": [
     {"manifest":"applications/fem/fem-rust/Cargo.toml","binary":"fullmeta-fem","label":"FEM dispatcher and scenario solvers"}

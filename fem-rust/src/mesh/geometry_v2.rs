@@ -912,6 +912,21 @@ pub fn compile(model: &Value, component_id: Option<&str>) -> Result<CompiledGeom
     }
     crate::mesh::mesh_options::emit(&mut geo, &options, !mesh_size_fields.is_empty(), 2);
     crate::mesh::mesh_items::emit_background_entity_size_fields(&mut geo, 1, &mesh_size_fields);
+    let probe_ids = crate::model_schema::physics_domain_sources(&component["physics"])
+        .filter(|row| row.get("enabled").and_then(Value::as_bool) != Some(false))
+        .map(|row| row.get("selectionId").and_then(Value::as_str).filter(|id| !id.is_empty())
+            .ok_or_else(|| "Enabled domain source requires a selectionId.".to_string()))
+        .collect::<Result<std::collections::BTreeSet<_>>>()?;
+    for (index, id) in probe_ids.iter().enumerate() {
+        let variable = format!("domainProbe{index}");
+        emit_domain_selection(&mut geo, &variable, id, &selections, &features, &address_primitives, &feature_by_id, tolerance)?;
+        geo.push(format!("Printf(\"FULLMETA_DOMAIN_ENTITY {index} 0\");"));
+        geo.push(format!("If (#{variable}[] > 0)"));
+        geo.push(format!("For domainProbeIndex In {{0:#{variable}[]-1}}"));
+        geo.push(format!("  Printf(\"FULLMETA_DOMAIN_ENTITY {index} %g\", {variable}[domainProbeIndex]);"));
+        geo.push("EndFor".to_string());
+        geo.push("EndIf".to_string());
+    }
     geo.push("Mesh 2;".to_string());
     let geometry_features = features
         .iter()
@@ -943,6 +958,7 @@ pub fn compile(model: &Value, component_id: Option<&str>) -> Result<CompiledGeom
         "primitives":primitives,
         "domainFeatureIds":domain_feature_ids,
         "domainSelections":domain_selections,
+        "domainEntityProbeIds":probe_ids,
         "periodicPairs":periodic_pair_records
     });
     Ok(CompiledGeometry {
@@ -958,11 +974,15 @@ mod tests {
     use serde_json::json;
 
     fn model(features: serde_json::Value) -> serde_json::Value {
+        let registry: serde_json::Value = serde_json::from_str(include_str!("../scenarios/registry.json")).unwrap();
+        let profile = registry["packages"].as_array().unwrap().iter()
+            .filter_map(|package| package["id"].as_str())
+            .find(|id| id.ends_with("-2d")).expect("a two-dimensional test profile");
         json!({
             "modelFormat": "fem-model/2",
             "x-fullmeta-schema": "../fem.schema.json",
             "metadata": {"id": "lower-feature-test", "name": "Lower feature test"},
-            "scenario": {"dimension": 2, "profileId": "acoustic-2d"},
+            "scenario": {"dimension": 2, "profileId": profile},
             "model": {
                 "parameters": [],
                 "geometry": {

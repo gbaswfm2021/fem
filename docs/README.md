@@ -35,13 +35,14 @@ The application currently registers these profiles:
 | `acoustic-3d` | [3D pressure acoustics](../fem-rust/docs/notes_acoustic3d.md) | `pressure` | Frequency domain |
 | `em-2d` | [2D electromagnetics](../fem-rust/docs/notes_em2d.md) | `Ez`, `Hz` | Frequency domain |
 | `em-3d` | [3D electromagnetics](../fem-rust/docs/notes_em3d.md) | `electric` | Frequency domain |
+| `elastic-2d` | [2D elasticity](../fem-rust/docs/notes_elastic2d.md) | `planeStress`, `planeStrain` | Frequency domain |
 | `elastic-3d` | [3D elasticity](../fem-rust/docs/notes_elastic3d.md) | `displacement` | Frequency domain |
 | `thermal-2d` | [2D heat conduction](../fem-rust/docs/notes_thermal2d.md) | `T` | Stationary |
 | `thermal-3d` | [3D heat conduction](../fem-rust/docs/therm3d.md) | `T` | Stationary |
 
 Thermal 3D uses first-order tetrahedra, material-wise constant isotropic
-conductivity, and prescribed temperature or heat flux. Periodic conditions,
-spatially varying coefficients and volumetric heat sources are not supported.
+conductivity, prescribed temperature or heat flux, and optional Domain Sources.
+Periodic conditions and spatially varying conductivity are not supported.
 
 The scenario registry selects `em-3d` as the default for new projects; an
 existing model keeps its stored profile ID. A declared option is not by itself
@@ -81,6 +82,13 @@ offer the mesh-enabled pairs; enable that list in Mesh Settings. Saved
 unavailable targets remain visible for repair. Material Settings show the
 profile's Material properties group, including optional display defaults;
 opening it leaves omitted properties absent.
+
+Right-click **PHYSICS** and choose **Add Domain Source** to prescribe a load
+within a selected domain. Each source has its own selection and expressions;
+multiple sources add where their selections overlap. With no enabled Domain
+Source, the domain load is zero. The scenario and formulation determine the
+component labels, units, and physical meaning; see the scenario manuals below.
+Spatial expressions are sampled at the Study's volume quadrature points.
 
 **Save As** creates a same-folder copy with a fresh Model ID while retaining
 the display name and other data. It checks the folder's existing names and IDs;

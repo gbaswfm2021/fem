@@ -1,5 +1,8 @@
 # Elastic2D: implementation instruction
 
+> Historical instruction: its scenario-specific Rust module requirement has
+> been superseded by the [scenario-neutral assembler migration](implement_scenario_neutral_assembler.md).
+
 ## Status and intent
 
 This document records the implementation instruction. The `elastic-2d` scenario and in-plane examples have since been added. Consult the [Elastic2D note](notes_elastic2d.md) and [plane-stress](../../examples/elastic_plane_stress_2d/README.md) and [plane-strain](../../examples/elastic_plane_strain_2d/README.md) example READMEs for implemented behavior and verification limitations. The requirements below are design targets, not a claim that every suggested extension has been implemented. The [Elastic3D implementation instruction](implement_elastic3d.md) and [Elastic3D note](notes_elastic3d.md) describe related 3D work.
@@ -14,13 +17,13 @@ Before coding, read the [FEM application instructions](../../AGENTS.md), [FEM Ru
 
 Expected scenario work:
 
-- Add `src/scenarios/elastic2d.rs` with the documented scenario runner entry point.
-- Add `src/scenarios/elastic2d.json`, declaring a versioned `elastic-2d` package with `schemaDocument.x-fem-scenario.solverModule = "elastic2d"`, both formulations and their actual capabilities.
+- Declare both formulations and their numerical capabilities in the
+  `src/scenarios/elastic2d.json` package, using the shared vector execution path.
 - Register the package in `src/scenarios/registry.json`, preserving other scenarios and their defaults.
 - Add a runnable in-plane example under `applications/fem/examples/`; provide a documented way to exercise each formulation and compare their responses.
 - Add meaningful verification and update the design note and applicable documentation to report only implemented, tested behavior.
 
-The Rust and JSON files alone do not establish an executable scenario. Use scenario discovery and the existing application-owned interfaces. Do not add a separate binary, hand-maintained registry module, Cargo target, profile-ID branch in shared Rust, or scenario-specific data in the base `fem.schema.json`. If an essential shared capability is missing, identify the smallest cross-scenario change and its owner, reconcile the public-format and specification documentation as needed, and report fixed-dependency blockers with evidence. Do not assume that copying Elastic3D or a scalar 2D solver establishes a supported interface or correct physics.
+The JSON package alone does not establish an executable scenario. Use scenario discovery and the existing application-owned interfaces. Do not add a separate binary, hand-maintained registry module, Cargo target, profile-ID branch in shared Rust, or scenario-specific data in the base `fem.schema.json`. If an essential shared capability is missing, identify the smallest cross-scenario change and its owner, reconcile the public-format and specification documentation as needed, and report fixed-dependency blockers with evidence. Do not assume that copying another package establishes a supported interface or correct physics.
 
 ## Formulation and field contract
 

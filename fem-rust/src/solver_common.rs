@@ -14,7 +14,6 @@ use rivrs_sparse::symmetric::{AnalyzeOptions, FactorOptions, OrderingStrategy, S
 use std::collections::BTreeMap;
 use std::time::Instant;
 
-pub(crate) const MU0: f64 = 1.256_637_062_12e-6;
 pub(crate) const TET_Q: [[f64; 5]; 11] = [
     [0.25, 0.25, 0.25, 0.25, -0.0131555555555556],
     [
@@ -385,6 +384,7 @@ struct RivrsCache {
 
 #[derive(Default)]
 pub(crate) struct SolverCache {
+    pub(crate) assembly: crate::assembler::SparseAssemblyWorkspace,
     faer: Option<SymbolicCache>,
     #[cfg(feature = "rivrs-backend")]
     rivrs: Option<RivrsCache>,

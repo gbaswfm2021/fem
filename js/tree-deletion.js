@@ -1,5 +1,5 @@
 import { modelAfterTreeDeletion } from '../../../platform/js/services.js';
-import { inspectExpression } from '../../../platform/core-rust/js/api.js';
+import { inspectExpression } from './runtime/core-api.js';
 import { projectModel } from './model-projection.js';
 import { duplicateArrayAvailability } from './physics-tree.js';
 

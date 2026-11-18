@@ -1,6 +1,6 @@
 # 2D linear elasticity: plane strain and plane stress
 
-This note describes the `elastic-2d` scenario, including its plane-stress and plane-strain displacement formulations. See the [implementation instruction](implement_elastic2d.md), [scenario contract](../src/scenarios/elastic2d.json), [solver](../src/scenarios/elastic2d.rs), and [plane-stress](../../examples/elastic_plane_stress_2d/README.md) and [plane-strain](../../examples/elastic_plane_strain_2d/README.md) examples. A successful Study is not by itself a guarantee of accuracy; check mesh and frequency convergence for the model being studied.
+This note describes the `elastic-2d` scenario, including its plane-stress and plane-strain displacement formulations. See the [implementation instruction](implement_elastic2d.md), [scenario contract](../src/scenarios/elastic2d.json), [solver](../src/prepared_vector_model.rs), and [plane-stress](../../examples/elastic_plane_stress_2d/README.md) and [plane-strain](../../examples/elastic_plane_strain_2d/README.md) examples. A successful Study is not by itself a guarantee of accuracy; check mesh and frequency convergence for the model being studied.
 
 ## 1. Physical model and fields
 
@@ -20,7 +20,7 @@ With indices `i,j` in `{x,y}`, the in-plane strain and momentum balance are
 \partial_j\sigma_{ij}+f_i=\rho\,\partial_t^2 u_i.
 ```
 
-Here `f` is a body-force density in N/m³ and `rho` is the 3D mass density in kg/m³. Repeated in-plane indices are summed. These equations describe the physical continuum; the implemented scenario does not declare a body-force input.
+Here `f` is a body-force density in N/m³ and `rho` is the 3D mass density in kg/m³. Repeated in-plane indices are summed. Domain Source supplies the in-plane components of `f` on the selected domains.
 
 ### Plane strain and plane stress
 
@@ -146,7 +146,7 @@ Let `h > 0` be a constant out-of-plane thickness or representative depth in metr
 \end{aligned}
 ```
 
-The bar denotes complex conjugation. The body-force term is shown for continuum completeness and is not implemented. For constant `h`, using physical traction and body-force density throughout lets the common `h` cancel from the displacement equation. The solver works per unit out-of-plane depth; it does not store a physical thickness. A chosen thickness still matters for **total** mass, force, energy and power. Variable thickness is not implemented.
+The bar denotes complex conjugation. Domain Source supplies the body-force term. For constant `h`, using physical traction and body-force density throughout lets the common `h` cancel from the displacement equation. The solver works per unit out-of-plane depth; it does not store a physical thickness. A chosen thickness still matters for **total** mass, force, energy and power. Variable thickness is not implemented.
 
 The displacement and test spaces are `[H1(Omega)]^2`. On a straight triangle, the solver uses three barycentric linear Lagrange functions `N_a`:
 
@@ -215,3 +215,55 @@ Before treating an implementation as verified, check:
 - **Numerical accuracy:** refine mesh and frequency sampling, compare observed response peaks and mode shapes with a stated reference, and investigate locking or bending error. Record geometry, thickness convention, constraints, loss and reference assumptions.
 
 Plane strain, plane stress, generalized plane strain, a plate/shell model, and full 3D elasticity answer different physical questions. Formulation selection must follow the geometry and expected motion, while the primary field and weak form determine the compatible element family.
+
+## Future eigenfrequency study
+
+An eigenfrequency Study is not implemented. With no body force or boundary drive, zero density loss, and frequency-independent elastic properties and density, the in-plane momentum equation in section 1 becomes
+
+```math
+-\nabla\cdot\boldsymbol\sigma(\mathbf u)=\lambda\rho\mathbf u,
+\qquad \boldsymbol\sigma(\mathbf u)=C_{2D}:\varepsilon(\mathbf u),
+\qquad \lambda=\omega^2.
+```
+
+The left operator represents elastic stiffness and the right operator multiplies displacement by mass density. Use the selected plane-stress or plane-strain law for `C_2D`. With homogeneous fixed boundaries (`u = 0`) and/or free boundaries (`sigma n = 0`), testing by `w` and integrating by parts yields
+
+```math
+\int_\Omega\varepsilon(\overline{\mathbf w}):C_{2D}:\varepsilon(\mathbf u)\,dA
+=\lambda\int_\Omega\rho\,\overline{\mathbf w}\cdot\mathbf u\,dA.
+```
+
+`w` vanishes on fixed boundaries and the bar denotes complex conjugation. Expanding displacement and test functions in the real vector nodal basis gives
+
+```math
+K\mathbf u=\omega^2M\mathbf u,\qquad
+K_{ij}=\int_\Omega\varepsilon(\mathbf N_i):C_{2D}:\varepsilon(\mathbf N_j)\,dA,\qquad
+M_{ij}=\int_\Omega\rho\,\mathbf N_i\cdot\mathbf N_j\,dA.
+```
+
+The vector basis functions `N_i` describe in-plane displacement; `M` is the consistent density-weighted mass matrix. These integrals are per unit thickness. Apply homogeneous displacement constraints to both matrices; a free connected body has three rigid-body zero modes. A nonzero eigenvector is a mode shape, and for positive eigenvalues `f = sqrt(lambda)/(2 pi)`. Loss, impedance or frequency-dependent coefficients require a more general eigenproblem.
+
+## Domain Source
+
+The current implementation supports multiple Domain Source entries under PHYSICS, each with an existing domain selection and expressions in spatial coordinates. Overlapping entries add; no entry means zero source. The project model stores selections and expressions, while the scenario contract declares their physical interpretation and weak-form contribution. This implementation is undergoing verification; its availability in a deployed installation depends on compatible FEM and platform runtimes.
+
+The source is an in-plane body-force density in N/m³. It contributes `integral(test · f) dA` per unit out-of-plane thickness, for either plane stress or plane strain.
+
+For example, model the in-plane response of a rectangular plate with a Domain Source whose selection is the plate domain. Define parameters `F0` in N/m³ and `L` in m, then enter `0` for the x component and `F0*x/L` for the y component. The load grows linearly from zero at `x = 0` to `F0` at `x = L`. The corresponding Physics entry in the project model has this shape:
+
+```json
+{
+  "id": "plate_drive",
+  "name": "Plate drive",
+  "type": "domainSource",
+  "selectionId": "plate_domain",
+  "values": [
+    { "expression": "0", "unit": "N/m^3" },
+    { "expression": "F0*x/L", "unit": "N/m^3" }
+  ]
+}
+```
+
+Here `plate_domain` is the ID of an existing domain selection, and `F0` and `L` must be defined in PARAMETERS. This is a force per unit volume applied throughout that selection. A traction boundary condition instead applies force per unit area on a selected boundary. The in-plane 2D formulation does not model out-of-plane plate bending; use an appropriate model for that motion.
+
+See the [implementation plan](implement_domain_sources.md) for expression evaluation, generic assembly and verification requirements.

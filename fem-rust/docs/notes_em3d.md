@@ -1,6 +1,6 @@
 # 3D electromagnetics: model and implementation
 
-This manual relates the `em-3d` model tree to the Maxwell equations and tetrahedral solver. It is intended for users, scientists and developers; the development status in the [project guide](../../docs/README.md) still applies. The [Model 2 reference](../../docs/fullmeta-model-2.md), [scenario contract](../src/scenarios/em3d.json) and [solver](../src/scenarios/em3d.rs) are the detailed references.
+This manual relates the `em-3d` model tree to the Maxwell equations and tetrahedral solver. It is intended for users, scientists and developers; the development status in the [project guide](../../docs/README.md) still applies. The [Model 2 reference](../../docs/fullmeta-model-2.md), [scenario contract](../src/scenarios/em3d.json) and [generic edge solver](../src/prepared_edge_execution.rs) are the detailed references.
 
 ## 1. Physics and fields
 
@@ -113,3 +113,37 @@ An enabled `periodicCondition` references a matching enabled mesh pair. Translat
 Verify against an appropriate analytic wave or cavity case, energy/phase conventions, and mesh/order convergence. Output plots and field samples do not alone establish numerical accuracy.
 
 For example, in a homogeneous lossless medium a +x plane wave with `E = E0 exp(-i k x) z_hat` has `H = -(E0/eta) exp(-i k x) y_hat`, where `k = omega sqrt(mu epsilon)` and `eta = sqrt(mu/epsilon)`. With compatible boundary and periodic data, compare the complex field signs and phase with this reference as the mesh and approximation order are refined.
+
+## Future eigenfrequency study
+
+An eigenfrequency Study is not implemented. For a source-free cavity with zero conductivity and positive frequency-independent `epsilon` and `mu`, the electric wave equation in section 1 becomes
+
+```math
+\nabla\times(\mu^{-1}\nabla\times\mathbf E)
+=\lambda\epsilon\mathbf E,\qquad \lambda=\omega^2.
+```
+
+The left operator is the magnetic-permeability-weighted curl–curl operator; the right operator multiplies the electric field by permittivity. With homogeneous PEC (`n × E = 0`) and/or homogeneous natural PMC (`n × mu^-1 curl(E) = 0`) boundaries, testing by `v` and integrating by parts gives
+
+```math
+\int_\Omega\mu^{-1}(\nabla\times\overline{\mathbf v})\cdot(\nabla\times\mathbf E)\,dV
+=\lambda\int_\Omega\epsilon\,\overline{\mathbf v}\cdot\mathbf E\,dV.
+```
+
+The tangential trace of `v` vanishes on PEC boundaries, and the bar denotes complex conjugation. Expanding the fields in the real Nédélec basis gives
+
+```math
+K\mathbf e=\omega^2M\mathbf e,\qquad
+K_{ij}=\int_\Omega\mu^{-1}(\nabla\times\mathbf W_i)\cdot(\nabla\times\mathbf W_j)\,dV,\qquad
+M_{ij}=\int_\Omega\epsilon\,\mathbf W_i\cdot\mathbf W_j\,dV.
+```
+
+Here `W_i` are the Nédélec basis functions and `M` discretizes the permittivity-weighted field operator. Homogeneous PEC constraints apply to both matrices. A nonzero eigenvector is a mode shape, and for positive eigenvalues `f = sqrt(lambda)/(2 pi)`. The curl–curl operator has a gradient-field nullspace, so a future solver must distinguish zero and spurious modes from physical modes; magnetic-field recovery divides by `omega` and does not apply at zero. Conductivity, impedance or frequency-dependent coefficients require a more general eigenproblem.
+
+## Domain Source
+
+The current implementation supports multiple Domain Source entries under PHYSICS, each with an existing domain selection and expressions in spatial coordinates. Overlapping entries add; no entry means zero source. The project model stores selections and expressions, while the scenario contract declares their physical interpretation and weak-form contribution. This implementation is undergoing verification; its availability in a deployed installation depends on compatible FEM and platform runtimes.
+
+For the electric-field formulation, electric current density J has three components in A/m^2 and contributes `-i omega integral(test · J) dV` under the stated phasor convention. The load is assembled against the declared edge-element test basis.
+
+See the [implementation plan](implement_domain_sources.md) for expression evaluation, generic assembly and verification requirements.

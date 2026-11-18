@@ -1,7 +1,7 @@
 // Development runtime package. Full visible, native and numerical acceptance
 // remains tracked separately from catalog registration and declaration checks.
 import { createSchemaProjectPackage } from '../../platform/ui/widgets/model-editor/widget.js';
-import { bindRuntimePolicy, schemaAtPath, validateModelRules, validateModelWithRules } from '../../platform/model-rust/js/api.js';
+import { bindRuntimePolicy, schemaAtPath, validateModelRules, validateModelWithRules } from './js/runtime/model-api.js';
 import { loadWorkspaceJson, modelWithArrayItemDraft } from '../../platform/js/services.js';
 import { createSchemaTreeActionPlans, resolveTreeDescriptor } from '../../platform/ui/widgets/tree/widget.js';
 import { activeModelSchema,activateModelSchema,loadModelSchema } from './schema-documents.js';
@@ -24,6 +24,7 @@ import { modelEditorActionBindings } from '../../platform/ui/widgets/model-edito
 import { parseMeshArtifact } from './js/mesh-artifact.js';
 import { renderPreview } from './ui/preview.js';
 import { mountEditorPanels,renderResultSettings,renderStudyHistory } from './ui/panels.js';
+import { mountParameterValues } from './ui/parameter-values.js';
 import { selectionAdapter } from './ui/selection-adapter.js';
 import { integrationTreeItem, meshSizeTreeItem, periodicPairTreeItem, selectionTreeItem } from './js/selection-tree.js';
 import { studyTreeItem, sweepTreeItem } from './js/study-tree.js';
@@ -161,11 +162,19 @@ function uiProfilesFrom(entries, declarations) {
 }
 
 function quantityVectorComponentsFor(entries, { source, model, component } = {}) {
-  if (source !== 'primaryFieldVariables') return [];
   const entry = profileEntryForModel(entries, model);
   const physics = model?.model?.physics || component?.physics || component;
   const formulation = physics?.formulation;
   if (!entry || typeof formulation !== 'string' || !entry.profile.formulations?.includes(formulation)) return [];
+  if (source === 'domainSource') {
+    const declaration = entry.document?.['x-fem-physics'];
+    const layout = declaration?.domainSourceLayout;
+    const labels = layout?.labelsByFormulation?.[formulation] || layout?.componentLabels;
+    const values = declaration?.boundaryDefaultsByFormulation?.[formulation]?.domainSource?.values;
+    if (!Array.isArray(labels) || !Array.isArray(values) || labels.length !== values.length) return [];
+    return labels.map((label, index) => ({ symbol: label, label, unit: values[index]?.unit }));
+  }
+  if (source !== 'primaryFieldVariables') return [];
   const variables = entry.document?.['x-fem-scenario']?.fields?.formulations?.[formulation]?.fieldVariables;
   if (!Array.isArray(variables)) return [];
   return variables.map(variable => {
@@ -235,6 +244,7 @@ export async function createApplicationPackage(options = {}) {
   };
   const definitionSymbol = (document, prefix) => uniqueDefinitionSymbol(document, prefix,
     profileEntryForModel(profileEntries, document)?.document?.['x-fem-scenario'], schema['x-fem-capabilities']);
+  const editorDomain = createEditorDomain({ schema, validate: value => modelEditorSchema.validateFullMetaModelWithRules(value) });
   const {validateDocument: _draftValidation, ...editingBase}=base;
   const actionBindings=modelEditorActionBindings(schema['x-fullmeta-ui-modelEditor'],schema['x-fullmeta-ui-graphicsInterfaces']);
   let actionServices;
@@ -262,7 +272,7 @@ export async function createApplicationPackage(options = {}) {
     renderPreview(context) {
       return renderPreview({ ...context, expressionPolicy: bindRuntimePolicy(context?.model ?? null, {}, schema['x-fullmeta-expressionRuntime'].real, schema) });
     },
-    mountEditorPanels(context){const dispose=mountEditorPanels(context);historyHost=context.settingsView.querySelector('[data-fem-study-history]');return ()=>{resultRecipeRefresh.reset();history.dispose();historyHost=null;dispose();};},
+    mountEditorPanels(context){const dispose=mountEditorPanels(context);const table=context.settingsTable||context.settingsView.querySelector('#settings-table');const disposeParameters=table?mountParameterValues(table,editorDomain.resolveModelParameters):()=>{};historyHost=context.settingsView.querySelector('[data-fem-study-history]');return ()=>{resultRecipeRefresh.reset();history.dispose();historyHost=null;disposeParameters();dispose();};},
     renderResultSettings(context){
       checkedFieldState=context.fieldPlotState;if(updateCheckedFieldView(context.model,checkedFieldState))context.drawPreview();renderResultSettings(context);
       const selectedResult=context.isResultPath(context.selectedPath)?context.valueAt(context.selectedPath):null;
@@ -277,7 +287,7 @@ export async function createApplicationPackage(options = {}) {
       return femReferenceOptions({...context, physicsMetadata},base.referenceOptions);
     },
     modelEditorSchema,
-    editorDomain: createEditorDomain({ schema, validate: value => modelEditorSchema.validateFullMetaModelWithRules(value) }),
+    editorDomain,
     uiProfileSchema,
     uiProfiles,
     scenarioMetadata: { profiles: profileMetadata },

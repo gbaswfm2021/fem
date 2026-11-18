@@ -713,8 +713,8 @@ pub(super) fn evaluate_variables_with_sampler(
     Ok(output)
 }
 
-/// Model 2 wrapper for nodal-field solvers. EM3D uses the same evaluator with
-/// its Nedelec basis sampler through `evaluate_variables_with_sampler`.
+/// Model 2 wrapper for nodal-field solvers; oriented-element solvers use the
+/// same evaluator with their sampler through `evaluate_variables_with_sampler`.
 pub(super) fn evaluate_model_variables(
     model: &Value,
     component: &Value,
@@ -725,6 +725,27 @@ pub(super) fn evaluate_model_variables(
     boundary_cells: &[Simplex],
     fields: &HashMap<String, Vec<C>>,
     frequency_hz: f64,
+) -> Result<Map<String, Value>, String> {
+    let sampler = |cell: &Simplex, barycentric: &[f64], _point: [f64; 3]| {
+        interpolate_fields(fields, cell, barycentric)
+    };
+    evaluate_model_variables_with_field_sampler(model, component, map, dimension, nodes,
+        domain_cells, boundary_cells, frequency_hz, &sampler)
+}
+
+/// Evaluate the same model declarations with a caller-provided physical field
+/// sampler. `nodes` and the point passed to the sampler use model coordinates.
+/// This permits higher-order and oriented bases without nodal interpolation.
+pub(super) fn evaluate_model_variables_with_field_sampler(
+    model: &Value,
+    component: &Value,
+    map: &Value,
+    dimension: usize,
+    nodes: &[[f64; 3]],
+    domain_cells: &[Simplex],
+    boundary_cells: &[Simplex],
+    frequency_hz: f64,
+    field_sampler: &(dyn Fn(&Simplex, &[f64], [f64; 3]) -> Result<HashMap<String, ComplexValue>, String> + '_),
 ) -> Result<Map<String, Value>, String> {
     let operators = parse_operators(model, component, map)?;
     let mut variables = Vec::new();
@@ -813,9 +834,6 @@ pub(super) fn evaluate_model_variables(
             im: 0.0,
         },
     );
-    let sampler = |cell: &Simplex, barycentric: &[f64], _point: [f64; 3]| {
-        interpolate_fields(fields, cell, barycentric)
-    };
     let assignments = crate::material::assignments_by_physical_tag(model, map)?;
     let profile_id = model
         .pointer("/scenario/profileId")
@@ -858,7 +876,7 @@ pub(super) fn evaluate_model_variables(
         domain_cells,
         boundary_cells,
         environment,
-        &sampler,
+        field_sampler,
         &material_sampler,
         [0, 1, 2],
         [0.0; 3],

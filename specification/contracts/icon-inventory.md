@@ -43,6 +43,7 @@ This catalog is a normative visual specification for the target application inte
 | Union feature | ICON-035 |
 | Document or project root | ICON-036 |
 | Definition collection group | ICON-037 |
+| Domain Source | ICON-038 |
 
 ## Schema Editor tree bindings
 
@@ -65,6 +66,7 @@ Bind the SVG to the declaration that the Schema Editor projects for each row. St
 | Materials and each material variant | Model `materials` property and each concrete material declaration | ICON-019 |
 | Physics | The resolved Physics declaration bound to the `physics` property | ICON-032 |
 | Dirichlet, Neumann, Impedance, Periodic condition | Each concrete condition declaration as projected from Physics | ICON-028, ICON-030, ICON-029, ICON-031 respectively |
+| Domain Source | Concrete Domain Source condition declaration as projected from Physics | ICON-038 |
 | Mesh | Resolved Mesh declaration | ICON-018 |
 | Mesh size control, Periodic pair | Each concrete Mesh item declaration | ICON-016, ICON-017 respectively |
 | Study | Model `study` property | ICON-023 |
@@ -354,6 +356,12 @@ Exercise the Model Editor with disposable documents written from the specificati
 
 ```svg
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#8bdacb" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"><circle cx="3.3" cy="3.2" r="1.25"/><path d="M6 3.2h8M6 8h8M6 12.8h8"/><path d="m3.3 6.6 1.4 1.4-1.4 1.4-1.4-1.4z"/><circle cx="3.3" cy="12.8" r="1.25"/></svg>
+```
+
+### ICON-038
+
+```svg
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#8bdacb" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="m8 1.5 6 3.3v6.4L8 14.5l-6-3.3V4.8z"/><circle cx="8" cy="8" r="1.2" fill="#8bdacb" stroke="none"/><path d="M8 4v1.3M8 10.7V12M4 8h1.3M10.7 8H12"/></svg>
 ```
 
 

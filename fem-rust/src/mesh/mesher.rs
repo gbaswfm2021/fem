@@ -13,10 +13,14 @@ struct Mesh {
     nodes: Vec<V3>,
     tetrahedra: Vec<[usize; 4]>,
     materials: Vec<usize>,
+    /// Gmsh elementary volume for each tetrahedron, distinct from material tag.
+    tetrahedron_entities: Vec<Option<usize>>,
     boundary_triangles: Vec<SurfaceTriangle>,
     material_interface_triangles: Vec<MaterialInterfaceTriangle>,
     triangles: Vec<[usize; 3]>,
     triangle_materials: Vec<usize>,
+    /// Gmsh elementary surface for each triangle, distinct from material tag.
+    triangle_entities: Vec<Option<usize>>,
     boundary_edges: Vec<BoundaryEdge>,
     integration_edges: Vec<BoundaryEdge>,
     material_interface_edges: Vec<MaterialInterfaceEdge>,
@@ -43,6 +47,67 @@ struct MaterialInterfaceEdge {
     nodes: [usize; 2],
     first_material: usize,
     second_material: usize,
+}
+
+/// Translate CAD entity selections to the corresponding exported cell IDs.
+/// Entity IDs and cell IDs are both local to this particular mesh; a remesh
+/// must rebuild this mapping. Material tags play no part in this translation.
+fn cells_for_domain_entities(
+    cell_entities: &[Option<usize>],
+    selections: &HashMap<String, Vec<usize>>,
+) -> Result<HashMap<String, Vec<usize>>, String> {
+    let mut by_entity = HashMap::<usize, Vec<usize>>::new();
+    for (cell, entity) in cell_entities.iter().enumerate() {
+        let entity = entity.ok_or_else(|| format!("Mesh cell {cell} has no geometric entity ID."))?;
+        by_entity.entry(entity).or_default().push(cell);
+    }
+    let mut result = HashMap::new();
+    for (id, entities) in selections {
+        let mut cells = Vec::new();
+        let mut seen = HashSet::new();
+        for entity in entities {
+            if !seen.insert(*entity) { continue; }
+            if let Some(members) = by_entity.get(entity) { cells.extend_from_slice(members); }
+        }
+        cells.sort_unstable();
+        result.insert(id.clone(), cells);
+    }
+    Ok(result)
+}
+
+/// Persist cell membership only when the geometry contains domain probes.
+/// Probes are emitted by the geometry compiler and report entity IDs on Gmsh
+/// stdout; indices refer to `domainEntityProbeIds` in the same mesh map.
+fn record_domain_cell_selections(mesh: &Mesh, map_path: &Path, stdout: &[u8]) -> Result<(), String> {
+    let bytes = match fs::read(map_path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("Could not read mesh map: {error}")),
+    };
+    let mut map: Value = serde_json::from_slice(&bytes).map_err(|error| format!("Invalid mesh map: {error}"))?;
+    let Some(probes) = map.get("domainEntityProbeIds").and_then(Value::as_array) else { return Ok(()); };
+    if probes.is_empty() { return Ok(()); }
+    let ids = probes.iter().map(|value| value.as_str().filter(|id| !id.is_empty())
+        .ok_or("Invalid domain entity probe selection ID.").map(str::to_owned)).collect::<Result<Vec<_>, _>>()?;
+    let mut entities = vec![Vec::new(); ids.len()];
+    let mut seen = vec![false; ids.len()];
+    for line in String::from_utf8_lossy(stdout).lines() {
+        let Some(record) = line.trim().strip_prefix("FULLMETA_DOMAIN_ENTITY ") else { continue; };
+        let fields = record.split_whitespace().collect::<Vec<_>>();
+        if fields.len() != 2 { return Err("Malformed domain entity probe record.".into()); }
+        let index = fields[0].parse::<usize>().map_err(|_| "Invalid domain entity probe index.")?;
+        let entity = fields[1].parse::<usize>().map_err(|_| "Invalid domain entity ID.")?;
+        if index >= ids.len() { return Err("Domain entity probe index is out of range.".into()); }
+        seen[index] = true;
+        if entity > 0 { entities[index].push(entity); }
+    }
+    if seen.iter().any(|seen| !seen) { return Err("Gmsh did not report every domain selection probe.".into()); }
+    let selections = ids.into_iter().zip(entities).collect::<HashMap<_, _>>();
+    let cell_entities = if mesh.dimension == 2 { &mesh.triangle_entities } else { &mesh.tetrahedron_entities };
+    let membership = cells_for_domain_entities(cell_entities, &selections)?;
+    map["domainCellSelections"] = serde_json::to_value(membership).map_err(|error| error.to_string())?;
+    fs::write(map_path, serde_json::to_vec_pretty(&map).map_err(|error| error.to_string())?)
+        .map_err(|error| format!("Could not write mesh selection map: {error}"))
 }
 
 fn configured_gmsh_path() -> Result<PathBuf, String> {
@@ -442,9 +507,11 @@ fn parse_msh2(path: &Path) -> Result<Mesh, Box<dyn Error>> {
     let mut node_map = HashMap::new();
     let mut tetrahedra = Vec::new();
     let mut materials = Vec::new();
+    let mut tetrahedron_entities = Vec::new();
     let mut boundary_triangles = Vec::new();
     let mut triangles = Vec::new();
     let mut triangle_materials = Vec::new();
+    let mut triangle_entities = Vec::new();
     let mut boundary_edges = Vec::new();
     let mut integration_edges = Vec::new();
     let mut point_selection_nodes = Vec::new();
@@ -525,6 +592,7 @@ fn parse_msh2(path: &Path) -> Result<Mesh, Box<dyn Error>> {
                         }
                         tetrahedra.push(tet);
                         materials.push(physical_tag);
+                        tetrahedron_entities.push(if tag_count > 1 { Some(fields[4].parse()?) } else { None });
                     } else if element_type == 2 {
                         if fields.len() < node_start + 3 {
                             return Err("Malformed linear triangle in MSH2 file".into());
@@ -543,6 +611,7 @@ fn parse_msh2(path: &Path) -> Result<Mesh, Box<dyn Error>> {
                         }
                         triangles.push(triangle);
                         triangle_materials.push(physical_tag);
+                        triangle_entities.push(if tag_count > 1 { Some(fields[4].parse()?) } else { None });
                     } else if element_type == 1 {
                         if fields.len() < node_start + 2 {
                             return Err("Malformed linear line in MSH2 file".into());
@@ -648,10 +717,12 @@ fn parse_msh2(path: &Path) -> Result<Mesh, Box<dyn Error>> {
         nodes,
         tetrahedra,
         materials,
+        tetrahedron_entities,
         boundary_triangles,
         material_interface_triangles,
         triangles,
         triangle_materials,
+        triangle_entities,
         boundary_edges,
         integration_edges,
         material_interface_edges,
@@ -1311,6 +1382,42 @@ mod gmsh_log_tests {
     use std::path::Path;
 
     #[test]
+    fn msh_parser_retains_elementary_entities_separately_from_materials() {
+        let path = std::env::temp_dir().join(format!("fullmeta-entities-{}.msh", std::process::id()));
+        let mesh = "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n$Nodes\n4\n1 0 0 0\n2 1 0 0\n3 0 1 0\n4 0 0 1\n$EndNodes\n$Elements\n2\n1 2 2 9 41 1 2 3\n2 4 2 3 52 1 2 3 4\n$EndElements\n";
+        std::fs::write(&path, mesh).unwrap();
+        let parsed = super::parse_msh2(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(parsed.triangle_materials, [9]);
+        assert_eq!(parsed.triangle_entities, [Some(41)]);
+        assert_eq!(parsed.materials, [3]);
+        assert_eq!(parsed.tetrahedron_entities, [Some(52)]);
+        let map_path = path.with_extension("json");
+        std::fs::write(&map_path, r#"{"domainEntityProbeIds":["volume","empty"]}"#).unwrap();
+        super::record_domain_cell_selections(&parsed, &map_path,
+            b"FULLMETA_DOMAIN_ENTITY 0 52\nFULLMETA_DOMAIN_ENTITY 1 0\n").unwrap();
+        let map: serde_json::Value = serde_json::from_slice(&std::fs::read(&map_path).unwrap()).unwrap();
+        std::fs::remove_file(map_path).unwrap();
+        assert_eq!(map["domainCellSelections"]["volume"], serde_json::json!([0]));
+        assert_eq!(map["domainCellSelections"]["empty"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn domain_entities_resolve_to_cells_with_overlapping_selections() {
+        let entities = [Some(7), Some(8), Some(7), Some(9)];
+        let selections = std::collections::HashMap::from([
+            ("all".to_string(), vec![7, 8, 9]),
+            ("subset".to_string(), vec![7, 7]),
+            ("other".to_string(), vec![8]),
+        ]);
+        let cells = super::cells_for_domain_entities(&entities, &selections).unwrap();
+        assert_eq!(cells["all"], [0, 1, 2, 3]);
+        assert_eq!(cells["subset"], [0, 2]);
+        assert_eq!(cells["other"], [1]);
+        assert!(super::cells_for_domain_entities(&[None], &selections).is_err());
+    }
+
+    #[test]
     fn quiet_success_retains_the_actual_invocation_and_status() {
         let log = gmsh_process_log(
             Path::new("gmsh.exe"),
@@ -1433,6 +1540,7 @@ pub fn run(geometry_input: &str, gmsh_override: Option<&str>) -> Result<Value, B
 
     let msh_path = parent.join(&msh_name);
     let mut mesh = parse_msh2(&msh_path)?;
+    record_domain_cell_selections(&mesh, &parent.join(&map_name), &run.stdout)?;
     let geo_name = geo_name
         .to_str()
         .ok_or("Geometry filename is not valid UTF-8")?;

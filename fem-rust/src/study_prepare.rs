@@ -673,6 +673,9 @@ pub(crate) fn prepare_validated_study(envelope: &Value, capabilities: &Value) ->
         impedance_boundaries.push(prepared);
     }
     let periodic_request = periodic_pairs_for_symbols(component, physics, &symbols)?;
+    let domain_sources = crate::model_schema::physics_domain_sources(physics)
+        .filter(|source| source.get("enabled").and_then(Value::as_bool) != Some(false))
+        .cloned().collect::<Vec<_>>();
     let mut assignments = Vec::new();
     for (index, material) in array(field(component, "materials", "model")?, "model.materials")?
         .iter()
@@ -712,7 +715,7 @@ pub(crate) fn prepare_validated_study(envelope: &Value, capabilities: &Value) ->
         .pointer("/metadata/id")
         .and_then(Value::as_str)
         .unwrap_or("model");
-    let request = json!({"schema":"fem-solver-request/1","solver":profile_id,"studyId":study_id,"meshFile":mesh_file,
+    let mut request = json!({"schema":"fem-solver-request/1","solver":profile_id,"studyId":study_id,"meshFile":mesh_file,
         "elementOrder":order,"fieldFormulation":formulation,"constitutiveQuadrature":constitutive_quadrature,
         "solverBackend":backend,"solverOrdering":ordering,"solverThreads":threads,"frequencyCases":frequency_cases,
         "outputDirectory":"output","sweepCsv":csv_name,"debugCsv":debug_csv,"fieldFilePrefix":format!("{metadata_id}_{study_id}_field"),
@@ -721,6 +724,7 @@ pub(crate) fn prepare_validated_study(envelope: &Value, capabilities: &Value) ->
             "periodicPairIds":periodic_request.iter().map(|entry|entry.get("id")).collect::<Vec<_>>(),"periodicPairs":periodic_request,
             "impedanceBoundaries":impedance_boundaries,"prescribedBoundaries":prescribed_boundaries,"materialAssignments":assignments,"variables":variables,"pointwiseVariables":pointwise_variables,
             "integrationOperators":integration_operators,"fieldFiles":field_files}});
+    if !domain_sources.is_empty() { request["modelConfiguration"]["domainSources"] = json!(domain_sources); }
     // Configured requests need a materialized configuration for every sweep
     // case. Keep this in the shared preparer so the coordinator can prepare a
     // whole sweep in one dispatcher call. Only periodic quantities currently

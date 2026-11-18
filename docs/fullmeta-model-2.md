@@ -51,7 +51,10 @@ Use closed objects for the envelope, `metadata`, `scenario`, `model`, `geometry`
 | `acoustic-3d` | 3 | `acoustics` | `pressure` | `tetrahedron` | `frequencyDomain` |
 | `em-2d` | 2 | `electromagnetics` | `Ez` or `Hz` | `triangle` | `frequencyDomain` |
 | `em-3d` | 3 | `electromagnetics` | `electric` | `tetrahedron` | `frequencyDomain` |
+| `elastic-2d` | 2 | `elasticity` | `planeStress` or `planeStrain` | `triangle` | `frequencyDomain` |
+| `elastic-3d` | 3 | `elasticity` | `displacement` | `tetrahedron` | `frequencyDomain` |
 | `thermal-2d` | 2 | `thermal` | `T` | `triangle` | `stationary` |
+| `thermal-3d` | 3 | `thermal` | `T` | `tetrahedron` | `stationary` |
 
 ## Model object
 
@@ -154,6 +157,20 @@ Each material requires `id`, `name`, and `selectionId`. `selectionId` refers to 
 
 Each additional Physics member is a condition object keyed by its own `id`. It requires `id`, `name`, `type`, and the fields below. Optional `enabled` is a boolean with effective default `true`. Disable a condition by saving `false`. Conditions are named object members, so their stable keys remain separate from the user-editable `name`.
 
+A `domainSource` condition selects an existing domain through `selectionId` and stores its ordered component quantities in `values`. The active scenario and formulation declare the component count, labels, units, real or complex evaluation, and weak-form coefficient. Expressions can use declared parameters and spatial coordinates; harmonic sources also resolve the frequency for each sweep point. Multiple enabled sources contribute additively, including on overlapping selections. An absent or disabled source contributes zero. Invalid or stale domain references must be reported rather than treated as the whole model.
+
+| Profile/formulation | Source components | Unit |
+| --- | --- | --- |
+| Thermal 2D/3D `T` | `Q` | `W/m^3` |
+| Acoustic 2D/3D `pressure` | `Q` | `Hz` |
+| Elastic 2D `planeStress`, `planeStrain` | `fx`, `fy` | `N/m^3` |
+| Elastic 3D `displacement` | `fx`, `fy`, `fz` | `N/m^3` |
+| EM 2D `Ez` | `Jz` | `A/m^2` |
+| EM 2D `Hz` | `Mz` | `V/m^2` |
+| EM 3D `electric` | `Jx`, `Jy`, `Jz` | `A/m^2` |
+
+The scenario notes specify the PDE, signs, phasor convention and 2D reduction. Volume quadrature controls the accuracy of spatial expressions.
+
 The shared boundary schema permits an optional flat `fieldValues` array of quantity expressions for scenarios that declare a field layout. The scenario declares whether the field is primary or derived, its shape, and the component labels; multidimensional layouts use row-major component order. Only declared scenario layouts enable the property. A future tensor layout is a format capability, not a claim that a tensor solver is implemented.
 
 For EM3D `electric`, Dirichlet and Neumann conditions keep the shared scalar `value` as zero and may also contain `fieldValues`, exactly three x/y/z quantity expressions. Dirichlet components describe E in `V/m`; Neumann components describe H in `A/m`. The legacy scalar Neumann zero retains its `V/m^2` unit. With no `fieldValues`, scalar zero means the zero vector. Nonzero scalar values have no direction and are rejected by the solver. See [EM3D boundary equations](../fem-rust/docs/notes_em3d.md) for projection and signs.
@@ -166,6 +183,7 @@ For thermal2D, Dirichlet `value` is temperature in `K`. Neumann may supply two h
 
 | `type` | Required additional fields | Optional fields and rules |
 | --- | --- | --- |
+| `domainSource` | `selectionId`, `values` quantity array | References a domain selection; components and units are declared by the scenario and formulation. |
 | `dirichlet` | `selectionId`, `value` quantity | Value is a prescribed field in the profile/formulation unit. |
 | `neumann` | `selectionId`, `value` quantity | Value is the declared outward flux or load. |
 | `impedance` | `selectionId`, `impedance` quantity | Optional `incidentField` and `polarization` occur together. `incidentField` is a dimensionless quantity with default `1`. `polarization` is an ordered vector with one quantity per primary field component. Wave profiles expose this condition. |

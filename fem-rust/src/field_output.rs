@@ -173,18 +173,6 @@ pub(crate) fn p1_complex_gradient(
     })
 }
 
-pub(crate) fn acoustic_particle_velocity(
-    pressure_gradient: [C; 3],
-    omega: f64,
-    density: f64,
-) -> [C; 3] {
-    let scale = 1.0 / (omega * density);
-    std::array::from_fn(|axis| C {
-        re: -pressure_gradient[axis].im * scale,
-        im: pressure_gradient[axis].re * scale,
-    })
-}
-
 /// Accumulate a constant cell vector at its incident nodes for nodal recovery.
 pub(crate) fn accumulate_cell_vector(
     sums: &mut [[C; 3]],
@@ -212,7 +200,7 @@ pub(crate) fn accumulate_cell_vector(
     Ok(())
 }
 
-/// Match EM3D's arithmetic mean of incident-cell values at each mesh node.
+/// Average incident-cell vectors at each mesh node.
 pub(crate) fn average_nodal_vectors(sums: &mut [[C; 3]], counts: &[usize]) {
     for (node, count) in counts.iter().copied().enumerate() {
         if count == 0 {

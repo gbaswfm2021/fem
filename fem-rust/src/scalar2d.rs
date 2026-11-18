@@ -1,5 +1,5 @@
 use crate::model_expression::{self, Scalar};
-use crate::solver_common::{PhaseUnionFind, c_abs, c_conj, c_mul, floquet_factor};
+use crate::solver_common::{PhaseUnionFind, c_abs, c_mul, floquet_factor};
 use crate::{C, c_add};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -419,34 +419,7 @@ pub(super) fn reduce_system(
     {
         return Err("Periodic DOF mapping does not match the assembled 2D system size.".into());
     }
-    let mut reduced = vec![BTreeMap::<usize, C>::new(); dofs.dof_count];
-    let mut reduced_re = vec![0.0; dofs.dof_count];
-    let mut reduced_im = vec![0.0; dofs.dof_count];
-    for old_row in 0..matrix.len() {
-        let row = dofs.node_to_dof[old_row];
-        let test_weight = c_conj(dofs.node_weights[old_row]);
-        let source = c_mul(
-            test_weight,
-            C {
-                re: rhs_re[old_row],
-                im: rhs_im[old_row],
-            },
-        );
-        reduced_re[row] += source.re;
-        reduced_im[row] += source.im;
-        for (&old_column, &value) in &matrix[old_row] {
-            let column = *dofs
-                .node_to_dof
-                .get(old_column)
-                .ok_or("Assembled matrix references a node outside the periodic DOF mapping.")?;
-            let entry = reduced[row].entry(column).or_default();
-            *entry = c_add(
-                *entry,
-                c_mul(test_weight, c_mul(value, dofs.node_weights[old_column])),
-            );
-        }
-    }
-    Ok((reduced, reduced_re, reduced_im))
+    crate::constraints::reduce_weighted(matrix, rhs_re, rhs_im, &dofs.node_to_dof, &dofs.node_weights, dofs.dof_count)
 }
 
 pub(super) fn apply_dirichlet(
@@ -553,24 +526,7 @@ pub(super) fn expand_complex_solution(
     {
         return Err("Solved vector does not match the periodic DOF count.".into());
     }
-    let values = dofs
-        .node_to_dof
-        .iter()
-        .zip(&dofs.node_weights)
-        .map(|(&dof, &weight)| {
-            let re = *real
-                .get(dof)
-                .ok_or("Periodic DOF mapping references a missing solved value.")?;
-            let im = *imaginary
-                .get(dof)
-                .ok_or("Periodic DOF mapping references a missing solved value.")?;
-            Ok(c_mul(weight, C { re, im }))
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    Ok((
-        values.iter().map(|value| value.re).collect(),
-        values.iter().map(|value| value.im).collect(),
-    ))
+    crate::constraints::expand_weighted(real, imaginary, &dofs.node_to_dof, &dofs.node_weights, dofs.dof_count)
 }
 
 #[cfg(test)]

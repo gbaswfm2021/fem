@@ -39,6 +39,18 @@ enum StudyRoute {
     ConfiguredFrequency,
 }
 
+/// Return the historical module label separately from the actual execution
+/// capability. Generic labels exist solely for run-record compatibility and
+/// must never influence routing or cause a scenario module to be loaded.
+fn run_record_provenance(scenario: &Value) -> Result<(Value, Option<Value>)> {
+    if let Some(kind) = crate::generic_scenario_runtime::declared_kind(scenario)? {
+        let label = crate::generic_scenario_runtime::record_module_label(scenario)?;
+        return Ok((json!(label), Some(json!({"kind":kind,
+            "moduleRole":if label.is_some() { "compatibilityLabel" } else { "none" }}))));
+    }
+    Ok((scenario.get("solverModule").cloned().unwrap_or(Value::Null), None))
+}
+
 fn study_route(study_type: &str, preparation: &str) -> Result<StudyRoute> {
     match (study_type, preparation) {
         ("stationary", "stationaryPlan") => Ok(StudyRoute::Stationary),
@@ -903,6 +915,7 @@ fn run_stationary_study(
         .get("elementOrder")
         .and_then(Value::as_u64)
         .ok_or("Prepared solver settings omit elementOrder.")?;
+    let (record_module, execution_provenance) = run_record_provenance(&scenario)?;
     let record = json!({
         "schema":"fullmeta-run/1","kind":"study","runId":run_id,"state":"running",
         "startedAt":timestamp(),"completedAt":null,
@@ -910,7 +923,7 @@ fn run_stationary_study(
             "modelFormat":MODEL_FORMAT_V2,"sha256":model_hash,"snapshot":model},
         "study":{"id":study_id,"name":study.get("name").and_then(Value::as_str).unwrap_or("Study"),
             "type":"stationary","snapshot":study},
-        "solver":{"executable":"fullmeta-fem","module":scenario.get("solverModule"),
+        "solver":{"executable":"fullmeta-fem","module":record_module,
             "formulation":formulation,"studyType":"stationary","requestFile":"request.json",
             "backend":request["solverBackend"],"ordering":request["solverOrdering"],
             "threads":request["solverThreads"],"elementOrder":element_order,
@@ -923,6 +936,7 @@ fn run_stationary_study(
         "progress":{"stage":"geometry","totalPoints":1,"completedPoints":0},"error":null
     });
     let mut record = record;
+    if let Some(execution) = execution_provenance { record["solver"]["execution"] = execution; }
     let adopted = run_artifacts::adopt_server_record(&run_path, &mut record)?;
     if adopted {
         write_json_replace(&run_path, &record)?;
@@ -1395,6 +1409,11 @@ fn run_frequency_plan_study(
         "artifacts":{"csv":format!("output/{csv_name}"),"debugCsv":format!("output/{debug_csv}"),"fields":format!("output/{field_prefix}<frequency-Hz-to-6-decimals>Hz.json"),"stdout":"logs/solver.stdout.log","stderr":"logs/solver.stderr.log","meshLog":run_relative_reference(&run_dir, &primary_case.paths.gmsh_log)?},
         "progress":{"totalPoints":total_points,"completedPoints":0,"currentFrequencyHz":null},"error":null
     });
+    let (module, execution) = run_record_provenance(&scenario)?;
+    if let Some(execution) = execution {
+        if !module.is_null() { record["solver"]["module"] = module; }
+        record["solver"]["execution"] = execution;
+    }
     if run_artifacts::adopt_server_record(&run_path, &mut record)? {
         write_json_replace(&run_path, &record)?;
     } else {
@@ -1556,9 +1575,19 @@ fn run_configured_frequency_study(
     cli: bool,
 ) -> Result<()> {
     let scenario = crate::model_schema::scenario_metadata_for_profile(profile_id)?;
-    let solver_module = scenario.get("solverModule").and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| Failure(format!("Scenario {profile_id:?} must declare its solver module.")))?;
+    let generic_kind = crate::generic_scenario_runtime::declared_kind(scenario)?;
+    if let Some(kind) = generic_kind {
+        if kind != "orientedTetrahedronNedelec" {
+            return Err(Failure(format!("Generic execution kind {kind:?} does not support configured frequency requests.")));
+        }
+    }
+    let solver_label = if generic_kind.is_some() {
+        crate::generic_scenario_runtime::record_module_label(scenario)?.unwrap_or(profile_id)
+    } else {
+        scenario.get("solverModule").and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| Failure(format!("Scenario {profile_id:?} must declare its solver module.")))?
+    };
     let cell_key = match scenario.pointer("/profile/dimension").and_then(Value::as_u64) {
         Some(2) => "triangles",
         Some(3) => "tetrahedra",
@@ -1730,13 +1759,16 @@ fn run_configured_frequency_study(
         "schema":"fullmeta-run/1","kind":"study","runId":run_id,"state":"running","startedAt":timestamp(),"completedAt":null,
         "model":{"file":relative_model_path(model_folder, model_filename),"id":model_id,"modelFormat":model.get("modelFormat").and_then(Value::as_str).unwrap_or(MODEL_FORMAT_V2),"sha256":model_hash,"snapshot":model},
         "study":{"id":study_id,"name":study_snapshot.get("name").and_then(Value::as_str).unwrap_or("Study"),"snapshot":study_snapshot},
-        "solver":{"executable":solver_module,"formulation":formulation,"requestFile":"request.json","fieldFilePrefix":field_prefix,"fieldFiles":field_files,
+        "solver":{"executable":solver_label,"formulation":formulation,"requestFile":"request.json","fieldFilePrefix":field_prefix,"fieldFiles":field_files,
             "backend":solver_backend,"ordering":request["solverOrdering"],"threads":request["solverThreads"],
             "elementOrder":request["elementOrder"],"constitutiveQuadrature":request["constitutiveQuadrature"]},
         "geometry":{"geometryHash":primary_case.compiled.geometry_hash,"source":run_relative_reference(&run_dir,&primary_case.paths.source)?,"msh":run_relative_reference(&run_dir,&primary_case.paths.msh)?,"mesh":run_relative_reference(&run_dir,&primary_case.paths.mesh)?,"report":run_relative_reference(&run_dir,&primary_case.paths.report)?,"map":run_relative_reference(&run_dir,&primary_case.paths.map)?,"cache":run_relative_reference(&run_dir,&primary_case.paths.cache)?,"files":null,"cases":geometry_case_records},
         "artifacts":{"csv":format!("output/{sweep_csv}"),"debugCsv":format!("output/{debug_csv}"),"stdout":"logs/solver.stdout.log","stderr":"logs/solver.stderr.log","meshLog":run_relative_reference(&run_dir, &primary_case.paths.gmsh_log)?},
         "progress":{"totalPoints":total_points,"completedPoints":0,"currentFrequencyHz":null},"error":null
     });
+    if let (_, Some(execution)) = run_record_provenance(scenario)? {
+        record["solver"]["execution"] = execution;
+    }
     if field_files {
         record["artifacts"]["fields"] =
             json!("output/<field-prefix>_<frequency-Hz-to-6-decimals>Hz.json");
@@ -1970,6 +2002,14 @@ fn solver_runtime(root: &Path, profile_id: &str, backend: &str) -> Result<super:
         .and_then(Value::as_str)
         .ok_or("Solver runtime is missing its registered program ID")?;
     let scenario = crate::model_schema::scenario_metadata_for_profile(profile_id)?;
+    if let Some(kind) = crate::generic_scenario_runtime::declared_kind(scenario)? {
+        let registered = crate::model_schema::external_program_path(program_id)?;
+        let current = std::env::current_exe()?;
+        if !crate::same_executable_path(&registered, &current) {
+            return Err(Failure(format!("Scenario {profile_id:?} declares a generic in-process runtime, but its registered executable is not this FEM dispatcher.")));
+        }
+        return Ok(super::SolverRuntime::Generic { kind: kind.to_string(), profile: profile_id.to_string() });
+    }
     if let Some(module) = scenario
         .get("solverModule")
         .and_then(Value::as_str)
@@ -3145,6 +3185,8 @@ fn make_run_id(study: &str) -> String {
 #[cfg(test)]
 mod study_route_tests {
     use super::*;
+
+    
 
     #[test]
     fn routes_by_study_and_declared_preparation() {

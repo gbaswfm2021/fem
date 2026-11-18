@@ -3,7 +3,7 @@ import { drawPlot2d } from '../../../platform/ui/widgets/plot-2d/widget.js';
 import { drawPlot3d } from '../../../platform/ui/widgets/plot-3d/widget.js';
 import { drawColorbar } from '../../../platform/ui/widgets/colorbar/widget.js';
 import { fieldColor } from '../../../platform/ui/widgets/shared/plots/field-color.js';
-import { getCoreUnit } from '../../../platform/core-rust/js/api.js';
+import { getCoreUnit } from '../js/runtime/core-api.js';
 import { fieldQuantityLabel } from './field-surfaces.js';
 import { buildApplicationScene,createGeometryProjector,geometryPrimitives,meshPrimitives } from './geometry-scene.js';
 import { meshPreviewSurfaces,meshForField } from '../js/mesh-artifact.js';
