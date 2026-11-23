@@ -35,9 +35,9 @@ pub(crate) struct BoundaryPoint<'a, const D: usize> {
     pub(crate) sources: HashMap<String, Vec<C>>,
 }
 
-pub(crate) struct EssentialPoint<const D: usize> {
+pub(crate) struct EssentialPoint<const FC: usize> {
     pub(crate) node: usize,
-    pub(crate) values: [C; D],
+    pub(crate) values: [C; FC],
 }
 
 /// Node identification with one complex phase shared by all Cartesian DOFs.
@@ -47,12 +47,12 @@ pub(crate) struct PeriodicMap<'a> {
     pub(crate) count: usize,
 }
 
-pub(crate) struct Problem<'a, const D: usize, const N: usize> {
+pub(crate) struct Problem<'a, const D: usize, const FC: usize, const N: usize> {
     pub(crate) nodes: &'a [[f64; D]],
     pub(crate) cells: &'a [Cell<'a, N>],
     pub(crate) form: &'a FormPlan,
     pub(crate) boundaries: &'a [BoundaryPoint<'a, D>],
-    pub(crate) essential: &'a [EssentialPoint<D>],
+    pub(crate) essential: &'a [EssentialPoint<FC>],
     pub(crate) periodic: Option<PeriodicMap<'a>>,
     pub(crate) essential_plan: &'a EssentialFormPlan,
     pub(crate) recovery: &'a TensorRecoveryPlan,
@@ -97,7 +97,7 @@ fn geometry<const D: usize, const N: usize>(points: [[f64; D]; N]) -> Result<(f6
     Ok((measure, gradient))
 }
 
-impl<const D: usize, const N: usize> Problem<'_, D, N> {
+impl<const D: usize, const FC: usize, const N: usize> Problem<'_, D, FC, N> {
     pub(crate) fn assemble(&self) -> Result<LinearSystem, String> {
         self.assemble_with_workspace(&mut crate::assembler::SparseAssemblyWorkspace::default())
     }
@@ -114,22 +114,31 @@ impl<const D: usize, const N: usize> Problem<'_, D, N> {
         workspace: &mut crate::assembler::SparseAssemblyWorkspace,
         loads: Option<(&crate::weak_form::VolumeLoadPlan, &[Vec<Vec<C>>])>,
     ) -> Result<LinearSystem, String> {
-        if let Some((_, samples)) = loads {
+        let routes = loads.into_iter().collect::<Vec<_>>();
+        self.assemble_with_volume_load_routes(workspace, &routes)
+    }
+
+    pub(crate) fn assemble_with_volume_load_routes(
+        &self,
+        workspace: &mut crate::assembler::SparseAssemblyWorkspace,
+        loads: &[crate::weak_form::VolumeLoadSamples<'_>],
+    ) -> Result<LinearSystem, String> {
+        for (_, samples) in loads {
             if samples.len() != self.cells.len() || samples.iter().zip(self.cells).any(|(row, cell)| row.len() != cell.quadrature.len()) {
                 return Err("Volume load samples must match the cell quadrature.".into());
             }
         }
-        if self.nodes.is_empty() || self.cells.is_empty() || N != D + 1 || !(D == 2 || D == 3) {
+        if self.nodes.is_empty() || self.cells.is_empty() || N != D + 1 || !(D == 2 || D == 3) || !(1..=3).contains(&FC) {
             return Err("Vector P1 problem requires nonempty 2D triangles or 3D tetrahedra.".into());
         }
-        self.form.require_shape(D, D)?;
+        self.form.require_shape(D, FC)?;
         let cell_type = if D == 2 { crate::discretization::Cell::Triangle } else { crate::discretization::Cell::Tetrahedron };
-        self.form.require_discretization(cell_type, crate::discretization::Family::Lagrange, D, 1)?;
-        self.essential_plan.require_shape(D, D)?;
-        self.recovery.require_shape(D, D)?;
-        let n = self.nodes.len().checked_mul(D).ok_or("Vector P1 DOF count overflow.")?;
+        self.form.require_discretization(cell_type, crate::discretization::Family::Lagrange, FC, 1)?;
+        self.essential_plan.require_shape(D, FC)?;
+        self.recovery.require_shape(D, FC)?;
+        let n = self.nodes.len().checked_mul(FC).ok_or("Vector P1 DOF count overflow.")?;
         let element_dofs: Vec<Vec<usize>> = self.cells.iter().map(|cell| {
-            cell.nodes.iter().flat_map(|node| (0..D).map(move |component| D * node + component)).collect()
+            cell.nodes.iter().flat_map(|node| (0..FC).map(move |component| FC * node + component)).collect()
         }).collect();
         workspace.prepare(n, &element_dofs)?;
         let mut system = LinearSystem { matrix: Vec::new(), rhs_re: vec![0.; n], rhs_im: vec![0.; n] };
@@ -139,22 +148,22 @@ impl<const D: usize, const N: usize> Problem<'_, D, N> {
             }
             let (measure, gradients) = geometry(cell.nodes.map(|node| self.nodes[node]))?;
             for (point_index, point) in cell.quadrature.iter().enumerate() {
-                crate::vector_form::add_declared_p1_quadrature(
+                crate::vector_form::add_declared_p1_quadrature_with_space::<D,FC,N,_>(
                     self.form, workspace, cell.nodes, gradients,
                     point.basis, measure * point.weight, &point.coefficients,
                 )?;
-                if let Some((plan, samples)) = loads {
-                    let mut values = vec![vec![0.; D]; N * D];
-                    let mut derivatives = vec![vec![0.; D * D]; N * D];
-                    for a in 0..N { for component in 0..D {
-                        values[D*a + component][component] = point.basis[a];
-                        for axis in 0..D { derivatives[D*a + component][component*D + axis] = gradients[a][axis]; }
+                for (plan, samples) in loads {
+                    let mut values = vec![vec![0.; FC]; N * FC];
+                    let mut derivatives = vec![vec![0.; FC * D]; N * FC];
+                    for a in 0..N { for component in 0..FC {
+                        values[FC*a + component][component] = point.basis[a];
+                        for axis in 0..D { derivatives[FC*a + component][component*D + axis] = gradients[a][axis]; }
                     } }
-                    let basis: Vec<_> = (0..N*D).map(|i| crate::weak_form::BasisSample { value: &values[i], gradient: &derivatives[i], curl: &[] }).collect();
-                    let mut local = vec![C::default(); N * D];
+                    let basis: Vec<_> = (0..N*FC).map(|i| crate::weak_form::BasisSample { value: &values[i], gradient: &derivatives[i], curl: &[] }).collect();
+                    let mut local = vec![C::default(); N * FC];
                     plan.accumulate(&basis, &samples[cell_index][point_index], measure * point.weight, &mut local)?;
                     for (i, value) in local.into_iter().enumerate() {
-                        let dof = D * cell.nodes[i / D] + i % D;
+                        let dof = FC * cell.nodes[i / FC] + i % FC;
                         system.rhs_re[dof] += value.re; system.rhs_im[dof] += value.im;
                         if !system.rhs_re[dof].is_finite() || !system.rhs_im[dof].is_finite() { return Err(format!("Volume load accumulation is non-finite at DOF {dof}.")); }
                     }
@@ -162,18 +171,20 @@ impl<const D: usize, const N: usize> Problem<'_, D, N> {
             }
         }
         for point in self.boundaries {
-            if point.nodes.len() != D || point.basis.len() != D || point.nodes.iter().any(|&node| node >= self.nodes.len()) {
+            if point.nodes.len() != D || point.nodes.iter().any(|&node| node >= self.nodes.len()) {
                 return Err("Vector P1 boundary quadrature has invalid nodes or basis values.".into());
             }
-            point.plan.require_shape(D, D)?;
-            let mut values = vec![vec![0.; D]; D * D];
-            for a in 0..D { for component in 0..D { values[D*a+component][component] = point.basis[a]; } }
+            point.plan.require_shape(D, FC)?;
+            let facet_nodes = point.nodes.len();
+            if point.basis.len()!=facet_nodes {return Err("Vector P1 boundary basis differs from its facet nodes.".into());}
+            let mut values = vec![vec![0.; FC]; facet_nodes * FC];
+            for a in 0..facet_nodes { for component in 0..FC { values[FC*a+component][component] = point.basis[a]; } }
             let basis: Vec<&[f64]> = values.iter().map(Vec::as_slice).collect();
-            let mut local = vec![vec![C::default(); D*D]; D*D];
-            let mut load = vec![C::default(); D*D];
+            let mut local = vec![vec![C::default(); facet_nodes*FC]; facet_nodes*FC];
+            let mut load = vec![C::default(); facet_nodes*FC];
             point.plan.accumulate_matrix(&basis, &point.normal, &point.coefficients, point.weight, &mut local)?;
             point.plan.accumulate_load(&basis, &point.normal, &point.coefficients, &point.sources, point.weight, &mut load)?;
-            let dofs: Vec<usize> = point.nodes.iter().flat_map(|node| (0..D).map(move |component| D*node+component)).collect();
+            let dofs: Vec<usize> = point.nodes.iter().flat_map(|node| (0..FC).map(move |component| FC*node+component)).collect();
             crate::assembler::scatter_local(workspace, &dofs, &local)?;
             for (&dof, value) in dofs.iter().zip(load) { system.rhs_re[dof] += value.re; system.rhs_im[dof] += value.im; }
         }
@@ -185,9 +196,9 @@ impl<const D: usize, const N: usize> Problem<'_, D, N> {
             }
             let mut seen = vec![false; periodic.count]; for &i in periodic.representative { seen[i] = true; }
             if seen.contains(&false) { return Err("Periodic vector map has an unused representative.".into()); }
-            let representative: Vec<_> = periodic.representative.iter().flat_map(|&node| (0..D).map(move |axis| D*node+axis)).collect();
-            let weights: Vec<_> = periodic.weights.iter().flat_map(|&w| (0..D).map(move |_| w)).collect();
-            let count = periodic.count.checked_mul(D).ok_or("Periodic vector DOF count overflow.")?;
+            let representative: Vec<_> = periodic.representative.iter().flat_map(|&node| (0..FC).map(move |axis| FC*node+axis)).collect();
+            let weights: Vec<_> = periodic.weights.iter().flat_map(|&w| (0..FC).map(move |_| w)).collect();
+            let count = periodic.count.checked_mul(FC).ok_or("Periodic vector DOF count overflow.")?;
             (representative, weights, count)
         } else { ((0..n).collect(), vec![C { re:1., im:0. }; n], n) };
         if self.periodic.is_some() {
@@ -201,7 +212,7 @@ impl<const D: usize, const N: usize> Problem<'_, D, N> {
             if point.node >= self.nodes.len() { return Err("Vector essential point references a missing node.".into()); }
             let values = self.essential_plan.point_values(C::default(), Some(&point.values), "vector essential point")?;
             for (component, &value) in values.iter().enumerate() {
-                let raw = D*point.node+component;
+                let raw = FC*point.node+component;
                 self.essential_plan.insert_dof(&mut prescribed, representative[raw], value, weights[raw], "vector essential point")?;
             }
         }
@@ -225,19 +236,25 @@ impl<const D: usize, const N: usize> Problem<'_, D, N> {
 
     /// Recover each cell's declared tensor components from its constant P1 gradient.
     pub(crate) fn recover(&self, real: &[f64], imaginary: &[f64]) -> Result<Vec<Vec<C>>, String> {
-        if real.len() != self.nodes.len()*D || imaginary.len() != real.len() {
+        if real.len() != self.nodes.len()*FC || imaginary.len() != real.len() {
             return Err("Vector P1 solution does not match the mesh.".into());
         }
-        self.recovery.require_shape(D, D)?;
+        self.recovery.require_shape(D, FC)?;
         self.cells.iter().map(|cell| {
             if cell.nodes.iter().any(|&node| node >= self.nodes.len()) { return Err("Vector P1 cell references a missing node.".into()); }
             let (_, gradients) = geometry(cell.nodes.map(|node| self.nodes[node]))?;
-            let mut gradient = vec![C::default(); D*D];
-            for a in 0..N { for component in 0..D { for axis in 0..D {
-                let dof = D*cell.nodes[a]+component;
-                gradient[D*component+axis].re += real[dof]*gradients[a][axis];
-                gradient[D*component+axis].im += imaginary[dof]*gradients[a][axis];
+            let operator_dimension=self.recovery.operator_dimension();
+            let mut gradient = vec![C::default(); FC*operator_dimension];
+            for a in 0..N { for component in 0..FC { for axis in 0..D {
+                let dof = FC*cell.nodes[a]+component;
+                gradient[operator_dimension*component+axis].re += real[dof]*gradients[a][axis];
+                gradient[operator_dimension*component+axis].im += imaginary[dof]*gradients[a][axis];
             }}}
+            if operator_dimension>D { for component in 0..FC {
+                let mut mean=C::default();
+                for &node in &cell.nodes {let dof=FC*node+component;mean.re+=real[dof]/N as f64;mean.im+=imaginary[dof]/N as f64;}
+                gradient[operator_dimension*component+D]=self.recovery.longitudinal_derivative(mean);
+            }}
             self.recovery.apply(&gradient, &cell.recovery_symbols)
         }).collect()
     }
@@ -248,14 +265,20 @@ impl<const D: usize, const N: usize> Problem<'_, D, N> {
 
     pub(crate) fn solve_with_volume_loads(&self, backend: &str, ordering: &str, threads: usize, tolerance: f64, cache: &mut SolverCache,
         loads: Option<(&crate::weak_form::VolumeLoadPlan, &[Vec<Vec<C>>])>) -> Result<Solution, String> {
-        let system = self.assemble_with_volume_loads(&mut cache.assembly, loads)?;
+        let routes = loads.into_iter().collect::<Vec<_>>();
+        self.solve_with_volume_load_routes(backend, ordering, threads, tolerance, cache, &routes)
+    }
+
+    pub(crate) fn solve_with_volume_load_routes(&self, backend: &str, ordering: &str, threads: usize, tolerance: f64, cache: &mut SolverCache,
+        loads: &[crate::weak_form::VolumeLoadSamples<'_>]) -> Result<Solution, String> {
+        let system = self.assemble_with_volume_load_routes(&mut cache.assembly, loads)?;
         let (real, imaginary, residual) = crate::solver_common::solve_linear_system(
             &system.matrix, &system.rhs_re, &system.rhs_im, tolerance, backend, ordering, threads, cache,
         )?;
         let (real, imaginary) = if let Some(periodic) = &self.periodic {
-            let representative: Vec<_> = periodic.representative.iter().flat_map(|&node| (0..D).map(move |axis| D*node+axis)).collect();
-            let weights: Vec<_> = periodic.weights.iter().flat_map(|&w| (0..D).map(move |_| w)).collect();
-            crate::constraints::expand_weighted(&real, &imaginary, &representative, &weights, periodic.count*D)?
+            let representative: Vec<_> = periodic.representative.iter().flat_map(|&node| (0..FC).map(move |axis| FC*node+axis)).collect();
+            let weights: Vec<_> = periodic.weights.iter().flat_map(|&w| (0..FC).map(move |_| w)).collect();
+            crate::constraints::expand_weighted(&real, &imaginary, &representative, &weights, periodic.count*FC)?
         } else { (real, imaginary) };
         let recovered_cells = self.recover(&real, &imaginary)?;
         Ok(Solution { real, imaginary, residual, recovered_cells })
@@ -295,7 +318,7 @@ mod tests {
                 coefficients: HashMap::from([("stiffness".into(), Coefficient::Scalar(C { re: 2., im: 0. }))]),
             }], recovery_symbols: HashMap::new(),
         }).collect();
-        let essential: Vec<_> = (0..N).map(|node| EssentialPoint {
+        let essential: Vec<_> = (0..N).map(|node| EssentialPoint::<D> {
             node, values: std::array::from_fn(|component| affine(&nodes[node], component)),
         }).collect();
         let problem = Problem { nodes: &nodes, cells: &cells, form: &form, boundaries: &[], essential: &essential,

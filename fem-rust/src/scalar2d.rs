@@ -101,6 +101,14 @@ pub(super) struct PeriodicDofMap {
     pub(super) dof_count: usize,
     pub(super) boundary_tags: HashSet<usize>,
     pub(super) boundary_edges: HashSet<[usize; 2]>,
+    pub(super) pairs: Vec<PeriodicPairNodes>,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct PeriodicPairNodes {
+    pub(super) lower_tag: usize,
+    pub(super) upper_tag: usize,
+    pub(super) node_map: HashMap<usize, usize>,
 }
 
 fn edge_key(mut edge: [usize; 2]) -> [usize; 2] {
@@ -116,6 +124,53 @@ fn coordinate_bin(value: f64, tolerance: f64) -> Result<i64, String> {
     Ok(scaled as i64)
 }
 
+/// Verify that matched nodes also induce a bijection of triangulated facets.
+/// Matching node sets alone admits incompatible diagonals on paired surfaces.
+fn verify_periodic_faces(
+    entities: &[(Vec<usize>, usize)],
+    lower: usize,
+    upper: usize,
+    nodes: &HashMap<usize, usize>,
+) -> Result<(), String> {
+    let mut expected = HashSet::new();
+    let mut actual = HashSet::new();
+    for (face, tag) in entities {
+        if *tag != lower && *tag != upper {
+            continue;
+        }
+        if face.len() != 3 {
+            return Err("A periodic surface must contain triangular faces.".into());
+        }
+        let mut vertices = if *tag == lower {
+            face.iter()
+                .map(|node| {
+                    nodes
+                        .get(node)
+                        .copied()
+                        .ok_or("Periodic face has an unmatched node.")
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            face.clone()
+        };
+        vertices.sort_unstable();
+        let target = if *tag == lower {
+            &mut expected
+        } else {
+            &mut actual
+        };
+        if !target.insert(vertices) {
+            return Err("Periodic surface contains duplicate faces.".into());
+        }
+    }
+    if expected != actual {
+        return Err(
+            "Periodic surface triangulations do not match under the node correspondence.".into(),
+        );
+    }
+    Ok(())
+}
+
 /// Build scalar trace DOF equivalences for a matched 2D edge or 3D face pair.
 /// Gmsh matches the geometric entities, while the exported mesh-map keeps the
 /// selected boundary tags and translation; node correspondence is reconstructed
@@ -127,6 +182,28 @@ pub(super) fn periodic_dof_map_for_entities(
     boundary_entities: &[(Vec<usize>, usize)],
     dimension: usize,
 ) -> Result<PeriodicDofMap, String> {
+    periodic_dof_map_for_entities_with_symbols(
+        model,
+        map,
+        nodes,
+        boundary_entities,
+        dimension,
+        None,
+        false,
+    )
+}
+
+/// An optional resolved case scope lets transient sweeps evaluate each
+/// geometry and periodic phase using that case's actual parameters.
+pub(super) fn periodic_dof_map_for_entities_with_symbols(
+    model: &Value,
+    map: &Value,
+    nodes: &[[f64; 3]],
+    boundary_entities: &[(Vec<usize>, usize)],
+    dimension: usize,
+    case_symbols: Option<&HashMap<String, crate::model_expression::Scalar>>,
+    require_zero_phase: bool,
+) -> Result<PeriodicDofMap, String> {
     if !matches!(dimension, 2 | 3) {
         return Err(format!(
             "Scalar periodic mapping does not support dimension {dimension}."
@@ -136,6 +213,13 @@ pub(super) fn periodic_dof_map_for_entities(
     let mut classes = PhaseUnionFind::new(node_count);
     let mut boundary_tags = HashSet::<usize>::new();
     let mut boundary_edges = HashSet::<[usize; 2]>::new();
+    let mut pairs = Vec::new();
+    if boundary_entities
+        .iter()
+        .any(|(vertices, _)| vertices.iter().any(|&node| node >= node_count))
+    {
+        return Err("Periodic boundary references an out-of-range node.".into());
+    }
     let component = model
         .pointer("/model")
         .ok_or("The periodic model is missing.")?;
@@ -185,7 +269,13 @@ pub(super) fn periodic_dof_map_for_entities(
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
-        let symbols = model_expression::resolve_parameters(&parameters, model)?;
+        let resolved;
+        let symbols = if let Some(symbols) = case_symbols {
+            symbols
+        } else {
+            resolved = model_expression::resolve_parameters(&parameters, model)?;
+            &resolved
+        };
         let map_tolerance = map
             .get("toleranceM")
             .and_then(Value::as_f64)
@@ -236,6 +326,11 @@ pub(super) fn periodic_dof_map_for_entities(
                     &symbols,
                     &format!("periodic condition {pair_id}.phaseVector[{index}]"),
                 )?;
+            }
+            if require_zero_phase && wave_vector.iter().any(|value| *value != 0.) {
+                return Err(format!(
+                    "Transient periodic pair {pair_id:?} requires a zero phase vector."
+                ));
             }
             let lower_id = pair
                 .get("lowerSelectionId")
@@ -323,6 +418,7 @@ pub(super) fn periodic_dof_map_for_entities(
                 bins.entry(key).or_default().push(node);
             }
             let mut matched_upper = HashSet::<usize>::new();
+            let mut matched_nodes = HashMap::new();
             for &lower_node in &lower_nodes {
                 let point = nodes[lower_node];
                 let target = [
@@ -370,6 +466,7 @@ pub(super) fn periodic_dof_map_for_entities(
                         "Periodic pair {pair_id:?} maps more than one lower node to upper node {upper_node}."
                     ));
                 }
+                matched_nodes.insert(lower_node, upper_node);
                 classes
                     .constrain(lower_node, upper_node, factor)
                     .map_err(|error| format!("Periodic pair {pair_id:?}: {error}"))?;
@@ -379,6 +476,14 @@ pub(super) fn periodic_dof_map_for_entities(
                     "Periodic pair {pair_id:?} does not match every upper-side node."
                 ));
             }
+            if dimension == 3 {
+                verify_periodic_faces(boundary_entities, lower_tag, upper_tag, &matched_nodes)?;
+            }
+            pairs.push(PeriodicPairNodes {
+                lower_tag,
+                upper_tag,
+                node_map: matched_nodes,
+            });
             boundary_tags.insert(lower_tag);
             boundary_tags.insert(upper_tag);
         }
@@ -390,6 +495,7 @@ pub(super) fn periodic_dof_map_for_entities(
         dof_count,
         boundary_tags,
         boundary_edges,
+        pairs,
     })
 }
 
@@ -419,7 +525,14 @@ pub(super) fn reduce_system(
     {
         return Err("Periodic DOF mapping does not match the assembled 2D system size.".into());
     }
-    crate::constraints::reduce_weighted(matrix, rhs_re, rhs_im, &dofs.node_to_dof, &dofs.node_weights, dofs.dof_count)
+    crate::constraints::reduce_weighted(
+        matrix,
+        rhs_re,
+        rhs_im,
+        &dofs.node_to_dof,
+        &dofs.node_weights,
+        dofs.dof_count,
+    )
 }
 
 pub(super) fn apply_dirichlet(
@@ -480,31 +593,7 @@ pub(super) fn apply_complex_dirichlet(
     rhs_im: &mut [f64],
     constraints: &HashMap<usize, C>,
 ) -> Result<(), String> {
-    if matrix.len() != rhs_re.len() || matrix.len() != rhs_im.len() {
-        return Err("Dirichlet constraints do not match the scalar system size.".into());
-    }
-    for (&node, &value) in constraints {
-        if node >= matrix.len() || !value.re.is_finite() || !value.im.is_finite() {
-            return Err(
-                "A scalar Dirichlet constraint has an invalid degree of freedom or value.".into(),
-            );
-        }
-        for row in 0..matrix.len() {
-            if row == node {
-                continue;
-            }
-            if let Some(coefficient) = matrix[row].remove(&node) {
-                let product = c_mul(coefficient, value);
-                rhs_re[row] -= product.re;
-                rhs_im[row] -= product.im;
-            }
-        }
-        matrix[node].clear();
-        matrix[node].insert(node, C { re: 1.0, im: 0.0 });
-        rhs_re[node] = value.re;
-        rhs_im[node] = value.im;
-    }
-    Ok(())
+    crate::constraints::apply_essential(matrix, rhs_re, rhs_im, constraints)
 }
 
 pub(super) fn expand_solution(values: &[f64], dofs: &PeriodicDofMap) -> Result<Vec<f64>, String> {
@@ -526,12 +615,40 @@ pub(super) fn expand_complex_solution(
     {
         return Err("Solved vector does not match the periodic DOF count.".into());
     }
-    crate::constraints::expand_weighted(real, imaginary, &dofs.node_to_dof, &dofs.node_weights, dofs.dof_count)
+    crate::constraints::expand_weighted(
+        real,
+        imaginary,
+        &dofs.node_to_dof,
+        &dofs.node_weights,
+        dofs.dof_count,
+    )
 }
 
 #[cfg(test)]
 mod floquet_tests {
     use super::*;
+
+    #[test]
+    fn periodic_surface_matching_checks_face_connectivity() {
+        let map = HashMap::from([(0, 4), (1, 5), (2, 6), (3, 7)]);
+        let valid = vec![
+            (vec![0, 1, 2], 1),
+            (vec![0, 2, 3], 1),
+            (vec![6, 5, 4], 2),
+            (vec![7, 6, 4], 2),
+        ];
+        assert!(verify_periodic_faces(&valid, 1, 2, &map).is_ok());
+        let different_diagonal = vec![
+            (vec![0, 1, 2], 1),
+            (vec![0, 2, 3], 1),
+            (vec![4, 5, 7], 2),
+            (vec![5, 6, 7], 2),
+        ];
+        assert!(verify_periodic_faces(&different_diagonal, 1, 2, &map).is_err());
+        let mut duplicate = valid.clone();
+        duplicate.push((vec![4, 5, 6], 2));
+        assert!(verify_periodic_faces(&duplicate, 1, 2, &map).is_err());
+    }
 
     fn dofs() -> PeriodicDofMap {
         PeriodicDofMap {
@@ -544,6 +661,7 @@ mod floquet_tests {
             dof_count: 2,
             boundary_tags: HashSet::new(),
             boundary_edges: HashSet::new(),
+            pairs: Vec::new(),
         }
     }
 

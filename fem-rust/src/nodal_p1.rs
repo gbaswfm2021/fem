@@ -190,7 +190,16 @@ impl<const N: usize, const D: usize, const F: usize> SimplexProblem<'_, N, D, F>
         workspace: &mut crate::assembler::SparseAssemblyWorkspace,
         loads: Option<(&crate::weak_form::VolumeLoadPlan, &[Vec<Vec<C>>])>,
     ) -> Result<LinearSystem, String> {
-        if let Some((_, samples)) = loads {
+        let routes = loads.into_iter().collect::<Vec<_>>();
+        self.assemble_with_volume_load_routes(workspace, &routes)
+    }
+
+    pub(crate) fn assemble_with_volume_load_routes(
+        &self,
+        workspace: &mut crate::assembler::SparseAssemblyWorkspace,
+        loads: &[crate::weak_form::VolumeLoadSamples<'_>],
+    ) -> Result<LinearSystem, String> {
+        for (_, samples) in loads {
             if samples.len() != self.cells.len() || samples.iter().zip(self.cells).any(|(row, cell)| row.len() != cell.quadrature.len()) {
                 return Err("Volume load samples must match the cell quadrature.".into());
             }
@@ -296,7 +305,7 @@ impl<const N: usize, const D: usize, const F: usize> SimplexProblem<'_, N, D, F>
                     area * point.weight,
                     coefficients,
                 )?;
-                if let Some((plan, samples)) = loads {
+                for (plan, samples) in loads {
                     let values: Vec<[f64; 1]> = point.basis.iter().map(|v| [*v]).collect();
                     let basis: Vec<_> = (0..N).map(|i| crate::weak_form::BasisSample {
                         value: &values[i], gradient: &gradient[i][..D], curl: &[],
@@ -574,7 +583,15 @@ impl<const N: usize, const D: usize, const F: usize> SimplexProblem<'_, N, D, F>
         &self, options: &SolveOptions<'_>, cache: &mut SolverCache,
         loads: Option<(&crate::weak_form::VolumeLoadPlan, &[Vec<Vec<C>>])>,
     ) -> Result<Solution, String> {
-        let system = self.assemble_with_volume_loads(&mut cache.assembly, loads)?;
+        let routes = loads.into_iter().collect::<Vec<_>>();
+        self.solve_with_volume_load_routes(options, cache, &routes)
+    }
+
+    pub(crate) fn solve_with_volume_load_routes(
+        &self, options: &SolveOptions<'_>, cache: &mut SolverCache,
+        loads: &[crate::weak_form::VolumeLoadSamples<'_>],
+    ) -> Result<Solution, String> {
+        let system = self.assemble_with_volume_load_routes(&mut cache.assembly, loads)?;
         let (real, imaginary, residual) = solve_linear_system(
             &system.matrix,
             &system.rhs_re,
@@ -704,6 +721,14 @@ impl<const N: usize, const D: usize, const F: usize> SimplexProblem<'_, N, D, F>
                         };
                         field_gradient[axis] = c_add(field_gradient[axis], value);
                     }
+                }
+                if D == 2 && recovery.has_longitudinal_operator() {
+                    let mut cell_value = C::default();
+                    for &node in &cell.nodes {
+                        cell_value.re += solution.real[node] / N as f64;
+                        cell_value.im += solution.imaginary[node] / N as f64;
+                    }
+                    field_gradient[2] = recovery.longitudinal_derivative(cell_value);
                 }
                 recovery.apply(field_gradient, symbols)
             })

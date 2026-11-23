@@ -35,7 +35,11 @@ fn inputs(
         .as_array()?
         .iter()
         .find(|entry| entry["id"] == study_id)?;
-    let physics = physics_inputs(component.get("physics")?, study.get("physicsId")?.as_str()?)?;
+    let mut physics = physics_inputs(component.get("physics")?, study.get("physicsId")?.as_str()?)?;
+    if study.get("type").and_then(Value::as_str)==Some("transient") {
+        physics.as_object_mut()?.remove("frequency");
+        physics.as_object_mut()?.remove("phasorConvention");
+    }
     let study = study_inputs(study, &physics, profile, capabilities)?;
     let geometry = component.get("geometry")?;
     let features = geometry
@@ -54,6 +58,12 @@ fn inputs(
     let mut materials = component.get("materials")?.as_array()?.clone();
     let mut expressions = BTreeSet::from(["expression", "coordinateExpression"]);
     for property in material_properties {
+        if property.get("studyTypes").and_then(Value::as_array).is_some_and(|types|
+            !types.iter().any(|kind|kind.as_str()==study.get("type").and_then(Value::as_str))) {
+            let key=property.get("key")?.as_str()?;
+            for material in &mut materials {material.as_object_mut()?.remove(key);}
+            continue;
+        }
         if property.get("representation").and_then(Value::as_str) != Some("expression") {
             continue;
         }
@@ -336,6 +346,10 @@ fn study_inputs(
     result["discretization"] = json!({"elementOrder":order,"fieldFormulation":formulation});
     result["solver"] = Value::Object(solver);
     result["output"] = json!({"csvFilename":csv,"fieldFiles":field_files});
+    if study.get("type").and_then(Value::as_str)==Some("transient") {
+        result["time"]=study.get("time")?.clone();
+        result["initialFields"]=study.get("initialFields").cloned().unwrap_or_else(||json!({}));
+    }
     if let Some(properties) = fingerprint_declaration
         .and_then(|declaration| declaration.get("studyProperties"))
         .and_then(Value::as_object)
@@ -461,6 +475,31 @@ pub(super) mod tests {
         edited["model"]["study"][1]["output"] = json!({"fieldFiles":false});
         edited["model"]["results"][0]["name"] = json!("Renamed result");
         assert_eq!(fingerprint(&edited, "study"), Some(expected));
+    }
+
+    #[test]
+    fn transient_fingerprint_tracks_time_initial_values_and_their_parameters() {
+        let mut original=specimen();
+        original["model"]["study"][0]["type"]=json!("transient");
+        original["model"]["study"][0]["time"]=json!({"endTime":{"expression":"unused","unit":"s"}});
+        original["model"]["study"][0]["initialFields"]=json!({"electric":[{"expression":"1","unit":"V/m"}]});
+        let expected=fingerprint(&original,"study").expect("transient study input projection");
+        let mut irrelevant=original.clone();irrelevant["model"]["physics"]["frequency"]["expression"]=json!("999");
+        assert_eq!(fingerprint(&irrelevant,"study"),Some(expected.clone()));
+        let mut changed=original.clone();changed["model"]["study"][0]["time"]["endTime"]["expression"]=json!("3");
+        assert_ne!(fingerprint(&changed,"study"),Some(expected.clone()));
+        let mut changed=original.clone();changed["model"]["study"][0]["initialFields"]["electric"][0]["expression"]=json!("2");
+        assert_ne!(fingerprint(&changed,"study"),Some(expected.clone()));
+        let mut changed=original;changed["model"]["parameters"][5]["expression"]=json!("9");
+        assert_ne!(fingerprint(&changed,"study"),Some(expected));
+    }
+    #[test]
+    fn stationary_fingerprint_ignores_transient_only_material_property() {
+        let mut model:Value=serde_json::from_str(include_str!("../../examples/thermal_square_insulated/fem_model.json")).unwrap();
+        let study=model["model"]["study"][0]["id"].as_str().unwrap().to_string();
+        let original=fingerprint(&model,&study).expect("valid stationary thermal projection");
+        model["model"]["materials"][0]["volumetricHeatCapacity"]=json!({"expression":"1+t","unit":"W*s/(m^3*K)"});
+        assert_eq!(fingerprint(&model,&study),Some(original));
     }
 
     #[test]

@@ -53,7 +53,8 @@ fn regular_field_file(path: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod completion_output_tests {
-    use super::completion_solver_log_files;
+    use super::{completion_solver_log_files, register_time_field_file};
+    use serde_json::json;
 
     #[test]
     fn completion_log_paths_are_bound_to_the_run_directory() {
@@ -65,6 +66,39 @@ mod completion_output_tests {
                 "projects/example/fem_runs/run-1/logs/solver-stage-timings.csv",
             ]
         );
+    }
+
+    #[test]
+    fn time_artifacts_preserve_case_and_physical_sample_identity() {
+        let name = format!(
+            "fullmeta-transient-artifact-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let directory = std::env::temp_dir().join(name);
+        std::fs::create_dir(&directory).unwrap();
+        std::fs::write(directory.join("field.json"), "{}").unwrap();
+        let registered = register_time_field_file(
+            &directory,
+            "field.json",
+            2,
+            3,
+            0.25,
+            &json!({"studyId":"study-a"}),
+        );
+        let invalid =
+            register_time_field_file(&directory, "field.json", 2, 3, f64::NAN, &json!({}));
+        std::fs::remove_file(directory.join("field.json")).unwrap();
+        std::fs::remove_dir(directory).unwrap();
+        let value = registered.unwrap();
+        assert_eq!(value["caseIndex"], 2);
+        assert_eq!(value["sampleIndex"], 3);
+        assert_eq!(value["timeSeconds"], 0.25);
+        assert_eq!(value["studyId"], "study-a");
+        assert!(invalid.is_err());
     }
 }
 
@@ -83,6 +117,29 @@ pub(super) fn register_case_field_file(
     artifact.insert("name".into(), json!(name));
     artifact.insert("caseIndex".into(), json!(case_index));
     Ok(Value::Object(artifact))
+}
+
+/// Register one time sample within a parameter-sweep case. The run remains
+/// associated with its Study through the existing run manifest; this metadata
+/// identifies the independent case and its physical time, not a frequency.
+pub(super) fn register_time_field_file(
+    output_directory: &Path,
+    name: &str,
+    case_index: usize,
+    sample_index: usize,
+    time_seconds: f64,
+    metadata: &Value,
+) -> Result<Value> {
+    if !time_seconds.is_finite() {
+        return Err("A time field artifact requires a finite time in seconds.".into());
+    }
+    let mut artifact = register_case_field_file(output_directory, name, case_index, metadata)?;
+    let object = artifact
+        .as_object_mut()
+        .ok_or("Internal field artifact metadata is invalid.")?;
+    object.insert("sampleIndex".into(), json!(sample_index));
+    object.insert("timeSeconds".into(), json!(time_seconds));
+    Ok(artifact)
 }
 
 pub(super) fn collect_case_field_files(

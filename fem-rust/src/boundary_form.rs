@@ -17,6 +17,8 @@ enum Trace {
     Tangential,
     NormalCross,
     Tangent2d,
+    ZComponentScalar,
+    NormalCrossZScalar,
 }
 
 impl Trace {
@@ -27,6 +29,8 @@ impl Trace {
             "tangential" => Ok(Self::Tangential),
             "normalCross" => Ok(Self::NormalCross),
             "tangent2d" => Ok(Self::Tangent2d),
+            "zComponentScalar" => Ok(Self::ZComponentScalar),
+            "normalCrossZScalar" => Ok(Self::NormalCrossZScalar),
             _ => Err(format!("Unsupported boundary trace operator {value:?}.")),
         }
     }
@@ -39,7 +43,19 @@ impl Trace {
         if matches!(self, Self::Value) {
             return Ok(input.to_vec());
         }
-        if input.len() != dim {
+        if matches!(self, Self::ZComponentScalar | Self::NormalCrossZScalar) {
+            if dim != 3 || input.len() != 1 {
+                return Err(format!("Boundary {self:?} trace requires one scalar and a three-dimensional operator."));
+            }
+            return Ok(match self {
+                Self::ZComponentScalar => vec![C::default(), C::default(), input[0]],
+                Self::NormalCrossZScalar => vec![c_scale(input[0], normal[1]), c_scale(input[0], -normal[0]), C::default()],
+                _ => unreachable!(),
+            });
+        }
+        let planar_trace_from_spatial_vector =
+            matches!(self, Self::Tangent2d) && dim == 2 && input.len() == 3;
+        if input.len() != dim && !planar_trace_from_spatial_vector {
             return Err(format!(
                 "Boundary {self:?} trace requires {dim} vector components."
             ));
@@ -67,6 +83,7 @@ impl Trace {
             )]),
             Self::NormalCross => Err("The normal-cross trace requires dimension 3.".into()),
             Self::Tangent2d => Err("The tangent2d trace requires dimension 2.".into()),
+            Self::ZComponentScalar | Self::NormalCrossZScalar => unreachable!(),
         }
     }
 }
@@ -85,10 +102,65 @@ struct LoadTerm {
 
 pub(crate) struct BoundaryFormPlan {
     dimension: usize,
+    operator_dimension: usize,
     components: usize,
     matrix_terms: Vec<MatrixTerm>,
     load_terms: Vec<LoadTerm>,
     expressions: CoefficientExpressions,
+}
+
+/// One declared boundary coupling between two possibly different fields.
+pub(crate) struct CoupledBoundaryForm {
+    dimension:usize,
+    test_components:usize,
+    trial_components:usize,
+    test:Trace,
+    trial:Trace,
+}
+impl CoupledBoundaryForm {
+    pub(crate) fn from_json(value:&Value)->Result<Self,String> {
+        let integer=|key:&str|value.get(key).and_then(Value::as_u64).and_then(|v|usize::try_from(v).ok())
+            .ok_or_else(||format!("Coupled boundary {key} must be an integer."));
+        let trace=|key:&str|value.get(key).and_then(Value::as_str)
+            .ok_or_else(||format!("Coupled boundary {key} must be a trace."))
+            .and_then(Trace::parse);
+        let plan=Self {dimension:integer("dimension")?,test_components:integer("testComponents")?,
+            trial_components:integer("trialComponents")?,test:trace("test")?,trial:trace("trial")?};
+        if !(2..=3).contains(&plan.dimension) || !(1..=3).contains(&plan.test_components)
+            || !(1..=3).contains(&plan.trial_components) {
+            return Err("Coupled boundary dimensions or field components are invalid.".into());
+        }
+        Ok(plan)
+    }
+    pub(crate) fn require_shape(&self,dimension:usize,test_components:usize,trial_components:usize)->Result<(),String> {
+        if (self.dimension,self.test_components,self.trial_components)!=(dimension,test_components,trial_components) {
+            return Err("Coupled boundary shape differs from its fields.".into());
+        }
+        Ok(())
+    }
+    pub(crate) fn accumulate(&self,test_basis:&[&[f64]],trial_basis:&[&[f64]],normal:&[f64],
+        coefficient:C,weight:f64,local:&mut [Vec<C>])->Result<(),String> {
+        if normal.len()!=self.dimension || normal.iter().any(|v|!v.is_finite())
+            || (normal.iter().map(|v|v*v).sum::<f64>()-1.).abs()>1e-9
+            || !weight.is_finite() || !coefficient.re.is_finite() || !coefficient.im.is_finite()
+            || local.len()!=test_basis.len() || local.iter().any(|row|row.len()!=trial_basis.len())
+            || test_basis.iter().any(|v|v.len()!=self.test_components || v.iter().any(|x|!x.is_finite()))
+            || trial_basis.iter().any(|v|v.len()!=self.trial_components || v.iter().any(|x|!x.is_finite())) {
+            return Err("Coupled boundary basis, normal, coefficient or matrix shape is invalid.".into());
+        }
+        let convert=|v:&&[f64]|v.iter().map(|&re|C {re,im:0.}).collect::<Vec<_>>();
+        let left=test_basis.iter().map(|b|self.test.project(&convert(b),normal)).collect::<Result<Vec<_>,_>>()?;
+        let right=trial_basis.iter().map(|b|self.trial.project(&convert(b),normal)).collect::<Result<Vec<_>,_>>()?;
+        let mut result=local.to_vec();
+        for i in 0..left.len() {for j in 0..right.len() {
+            result[i][j]=c_add(result[i][j],c_scale(c_mul(coefficient,inner(&left[i],&right[j])?),weight));
+            if !result[i][j].re.is_finite() || !result[i][j].im.is_finite() {
+                return Err("Coupled boundary produced a non-finite coefficient.".into());
+            }
+        }}
+        for (dst,src) in local.iter_mut().zip(result) {*dst=src;}
+        Ok(())
+    }
 }
 
 impl BoundaryFormPlan {
@@ -101,12 +173,14 @@ impl BoundaryFormPlan {
             .get("dimension")
             .and_then(Value::as_u64)
             .ok_or("Boundary form dimension must be an integer.")? as usize;
+        let operator_dimension=value.get("operatorDimension").and_then(Value::as_u64)
+            .and_then(|value|usize::try_from(value).ok()).unwrap_or(dimension);
         let components = value
             .get("fieldComponents")
             .and_then(Value::as_u64)
             .ok_or("Boundary form fieldComponents must be an integer.")?
             as usize;
-        if !(2..=3).contains(&dimension) || components == 0 || components > 3 {
+        if !(2..=3).contains(&dimension) || !(dimension..=3).contains(&operator_dimension) || components == 0 || components > 3 {
             return Err("Boundary form requires dimension 2 or 3 and 1–3 field components.".into());
         }
         let get = |term: &Value, key: &str| -> Result<String, String> {
@@ -156,6 +230,7 @@ impl BoundaryFormPlan {
         )?;
         Ok(Self {
             dimension,
+            operator_dimension,
             components,
             matrix_terms,
             load_terms,
@@ -173,6 +248,11 @@ impl BoundaryFormPlan {
         Ok(())
     }
 
+    pub(crate) fn require_operator_dimension(&self,dimension:usize)->Result<(),String>{
+        if self.operator_dimension!=dimension&&self.operator_dimension!=self.dimension{return Err(format!("Boundary form declares operator dimension {}; expected {dimension} or its mesh dimension {}.",self.operator_dimension,self.dimension));}
+        Ok(())
+    }
+
     pub(crate) fn evaluate_coefficients(
         &self,
         symbols: &HashMap<String, C>,
@@ -186,7 +266,7 @@ impl BoundaryFormPlan {
         normal: &[f64],
         weight: f64,
     ) -> Result<Vec<Vec<C>>, String> {
-        if normal.len() != self.dimension
+        if normal.len() != self.operator_dimension
             || normal.iter().any(|n| !n.is_finite())
             || (normal.iter().map(|n| n * n).sum::<f64>() - 1.0).abs() > 1e-9
             || !weight.is_finite()
@@ -414,6 +494,19 @@ mod tests {
     }
 
     #[test]
+    fn coupled_boundary_contracts_distinct_scalar_and_vector_traces() {
+        let plan=CoupledBoundaryForm::from_json(&json!({"dimension":2,"testComponents":1,
+            "trialComponents":2,"test":"value","trial":"normal"})).unwrap();
+        let test:&[&[f64]]=&[&[0.5]];
+        let trial:&[&[f64]]=&[&[2.,3.],&[1.,-1.]];
+        let mut local=vec![vec![C::default();2]];
+        plan.accumulate(test,trial,&[1.,0.],C{re:2.,im:0.},1.,&mut local).unwrap();
+        close(local[0][0],2.,0.);close(local[0][1],1.,0.);
+        assert!(plan.accumulate(test,trial,&[0.,0.],C{re:1.,im:0.},1.,&mut local).is_err());
+        close(local[0][0],2.,0.);
+    }
+
+    #[test]
     fn tangential_robin_matrix_and_complex_load_come_from_json() {
         let plan = BoundaryFormPlan::from_json(&json!({"dimension":3,"fieldComponents":3,
             "matrixTerms":[{"test":"tangential","trial":"tangential","coefficient":"a"}],
@@ -473,6 +566,26 @@ mod tests {
         plan.accumulate_load(&basis, &[0., 0., -1.], &coeff, &source, 0.5, &mut reverse)
             .unwrap();
         close(reverse[0], 0., 5.);
+    }
+
+    #[test]
+    fn planar_tangent_trace_accepts_legacy_and_full_spatial_vectors() {
+        let normal = [1., 0.];
+        let legacy = Trace::Tangent2d
+            .project(&[C { re: 2., im: 0. }, C { re: 3., im: 0. }], &normal)
+            .unwrap();
+        let full = Trace::Tangent2d
+            .project(
+                &[
+                    C { re: 2., im: 0. },
+                    C { re: 3., im: 0. },
+                    C { re: 100., im: 0. },
+                ],
+                &normal,
+            )
+            .unwrap();
+        assert_eq!(legacy, vec![C { re: 3., im: 0. }]);
+        assert_eq!(full, legacy);
     }
 
     #[test]

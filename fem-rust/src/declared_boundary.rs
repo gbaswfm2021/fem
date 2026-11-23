@@ -13,9 +13,11 @@ pub(crate) fn compile_rows<'a>(
     formulation: &str,
     rows: impl IntoIterator<Item = (usize, &'a Value)>,
 ) -> Result<HashMap<usize, BoundaryInput>, String> {
+    let inherited = package.get("formulationInheritance")
+        .and_then(|aliases| aliases.get(formulation)).and_then(serde_json::Value::as_str);
     let declarations = package
         .get("boundaryInputs")
-        .and_then(|v| v.get(formulation))
+        .and_then(|v| v.get(formulation).or_else(|| inherited.and_then(|base| v.get(base))))
         .and_then(Value::as_object)
         .ok_or("Missing declared boundary inputs for formulation.")?;
     let mut result = HashMap::new();

@@ -36,3 +36,32 @@ Store platform remains to be checked by the user after FEM deployment.
 The FEM runtime contract requires `editorApi.resultResolve.readOnlyDuringOperation: true` for result reads during a Study (`specification/contracts/runtime-integration-boundary.md`, Resolve field/global results). The previously observed shared runtime JSON Schema at `platform/contracts/fullmeta-model-runtime-1.schema.json` had SHA-256 `5FB06D3C7C78DADAB150C0211507A65054662B101449BAFC2D7D4BC269EF9797` and did not permit that property on endpoint objects. The shared Kernel source checks the same property in `platform/kernel-server-rust/src/main.rs`.
 
 The shared runtime schema now permits the boolean `readOnlyDuringOperation` endpoint property; its updated SHA-256 is `20A551BD77FCA8773E1EBC5EEF02D5263AC3799C42EF8BE222432A34A918B9E2`. `node --test applications/fem/tests/project-factory.test.js` passes all 21 cases, including rejection of a non-boolean value. The original failure was `$.editorApi.resultResolve: does not match an allowed schema variant. $.editorApi.resultResolve: must be string.` This validation does not establish whether a particular Kernel executable supports the behavior; live runtime acceptance remains separate.
+
+## Universal transient, single executable and Store-host compatibility — local checks, 2026-11-20
+
+The interrupted boundary-preparation regression passed 1/1:
+`study_prepare::multi_study_preparation_tests::transient_boundary_preparation_uses_declared_laws_and_per_case_parameters`.
+The full Rust test suite passed 304 tests, with 0 failures and 3 ignored
+(`fem-rust/target/transient_full_suite.log`).
+
+The native operation acceptance passed all 16 cases. It stages and invokes one
+`fullmeta-fem.exe` for FEM and mesh operations, and runs that same executable in
+`--mesh-only` mode to produce and verify a real mesh. The installed executable
+SHA-256 was
+`4FB56D56EADED902BC49FE037CD787BCB88A557BB6F276964B59A8DDE15D7883`.
+The mesh operation is a mode of the shared dispatcher; no separate mesher
+binary is staged.
+
+A fresh FEM payload was installed through `Install-FullMeta-Application.ps1`
+into an isolated clone of the Store 0.2.2.0 host. The cloned Store Kernel
+(`D25643103C1534432A5B49F6CAE974002DE715063DF35698457394D4E1A293B3`)
+served the new FEM `package.js` and `fem.schema.json` with HTTP 200 and ran a
+disposable acoustic-2D harmonic Study through `/api/model/study/run`. It
+completed successfully and wrote the expected pressure field. The installed
+runtime contained one `fullmeta-fem.exe` and the three required FEM DLLs. This
+checks old-Kernel package loading and a real Study request. The old-host smoke
+covered one acoustic Study; the Rust suite is the cross-scenario transient
+verification. The visible browser editor was not part of this check.
+
+Detailed local evidence is in the ignored workspace file
+`.scratch/fem-store-compat-current-fem/compatibility-evidence.json`.

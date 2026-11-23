@@ -13,8 +13,12 @@ use crate::{C, c_add, c_mul, c_scale};
 
 pub(crate) struct RecoveryPlan {
     operator: RecoveryOperator,
+    dimension: usize,
+    operator_dimension: usize,
+    longitudinal_wavenumber: C,
     transform: [[f64; 3]; 3],
     factor: CoefficientExpressions,
+    additive_domain_sources: Vec<(String, CoefficientExpressions)>,
     sampling: String,
     output: String,
 }
@@ -26,11 +30,34 @@ enum RecoveryOperator {
 }
 
 impl RecoveryPlan {
+    pub(crate) fn has_longitudinal_operator(&self) -> bool {
+        self.dimension == 2 && self.operator_dimension == 3
+    }
+
+    pub(crate) fn set_longitudinal_wavenumber(&mut self, value: C) -> Result<(), String> {
+        if !value.re.is_finite() || !value.im.is_finite() {
+            return Err("Recovery longitudinal wavenumber must be finite.".into());
+        }
+        if !self.has_longitudinal_operator() && value != C::default() {
+            return Err("Recovery does not declare a longitudinal operator dimension.".into());
+        }
+        self.longitudinal_wavenumber = value;
+        Ok(())
+    }
+
+    pub(crate) fn longitudinal_derivative(&self, value: C) -> C {
+        if self.has_longitudinal_operator() {
+            crate::longitudinal::derivative_value(self.longitudinal_wavenumber, value, true)
+        } else {
+            C::default()
+        }
+    }
+
     /// Check that the declared operator can act on the primary field.
     pub(crate) fn require_shape(&self, dimension: usize, components: usize) -> Result<(), String> {
         match self.operator {
             RecoveryOperator::Gradient if (2..=3).contains(&dimension) && components == 1 => Ok(()),
-            RecoveryOperator::Curl if dimension == 3 && components == 3 => Ok(()),
+            RecoveryOperator::Curl if (2..=3).contains(&dimension) && self.operator_dimension == 3 && components == 3 => Ok(()),
             RecoveryOperator::Gradient => Err(
                 "Gradient vector recovery requires a scalar field in two or three dimensions."
                     .into(),
@@ -42,6 +69,13 @@ impl RecoveryPlan {
     }
 
     pub(crate) fn from_json(value: &Value) -> Result<Self, String> {
+        let dimension = value.get("dimension").and_then(Value::as_u64)
+            .and_then(|v| usize::try_from(v).ok()).unwrap_or(3);
+        let operator_dimension = value.get("operatorDimension").and_then(Value::as_u64)
+            .and_then(|v| usize::try_from(v).ok()).unwrap_or(dimension);
+        if !(2..=3).contains(&dimension) || !(dimension..=3).contains(&operator_dimension) {
+            return Err("Recovery dimensions must declare a 2D or 3D mesh operator.".into());
+        }
         let operator = match value.get("operator").and_then(Value::as_str) {
             Some("gradient") => RecoveryOperator::Gradient,
             Some("curl") => RecoveryOperator::Curl,
@@ -66,6 +100,18 @@ impl RecoveryPlan {
         }
         let expression = value.get("factor").ok_or("Recovery factor is required.")?;
         let factor = CoefficientExpressions::from_json(&json!({"factor": expression}))?;
+        let mut additive_domain_sources = Vec::new();
+        if let Some(entries) = value.get("additiveDomainSources") {
+            for (index, entry) in entries.as_array().ok_or("Recovery additiveDomainSources must be an array.")?.iter().enumerate() {
+                let feature_type = entry.get("featureType").and_then(Value::as_str)
+                    .filter(|v| !v.is_empty()).ok_or_else(|| format!("Recovery additiveDomainSources[{index}] requires featureType."))?.to_owned();
+                let factor = CoefficientExpressions::from_json(&json!({"factor": entry.get("factor").ok_or_else(|| format!("Recovery additiveDomainSources[{index}] requires factor."))?}))?;
+                if additive_domain_sources.iter().any(|(kind, _)| kind == &feature_type) {
+                    return Err(format!("Recovery repeats additive domain source type {feature_type:?}."));
+                }
+                additive_domain_sources.push((feature_type, factor));
+            }
+        }
         let sampling = value
             .get("sampling")
             .and_then(Value::as_str)
@@ -80,8 +126,12 @@ impl RecoveryPlan {
             .to_owned();
         Ok(Self {
             operator,
+            dimension,
+            operator_dimension,
+            longitudinal_wavenumber: C::default(),
             transform,
             factor,
+            additive_domain_sources,
             sampling,
             output,
         })
@@ -119,6 +169,37 @@ impl RecoveryPlan {
             return Err("A gradient recovery cannot consume a curl sample.".into());
         }
         self.apply_sample(curl, symbols)
+    }
+
+    pub(crate) fn additive_domain_source_types(&self) -> impl Iterator<Item = &str> {
+        self.additive_domain_sources.iter().map(|(feature_type, _)| feature_type.as_str())
+    }
+
+    /// Apply the declared curl recovery and any scenario-declared additive
+    /// source contributions. An absent source is the zero vector.
+    pub(crate) fn apply_curl_with_domain_sources(
+        &self,
+        curl: [C; 3],
+        symbols: &HashMap<String, C>,
+        sources: &HashMap<String, Vec<C>>,
+    ) -> Result<[C; 3], String> {
+        let mut output = self.apply_curl(curl, symbols)?;
+        for (feature_type, factor_plan) in &self.additive_domain_sources {
+            let Some(source) = sources.get(feature_type) else { continue; };
+            let vector: [C; 3] = source.as_slice().try_into()
+                .map_err(|_| format!("Recovery source {feature_type:?} requires three components."))?;
+            let factor = *factor_plan.evaluate(symbols)?.get("factor")
+                .ok_or("Recovery additive source factor was not evaluated.")?;
+            for i in 0..3 {
+                let mut projected = C::default();
+                for j in 0..3 { projected = c_add(projected, c_scale(vector[j], self.transform[i][j])); }
+                output[i] = c_add(output[i], c_mul(factor, projected));
+                if !output[i].re.is_finite() || !output[i].im.is_finite() {
+                    return Err("Recovery additive source produced a non-finite value.".into());
+                }
+            }
+        }
+        Ok(output)
     }
 
     fn apply_sample(&self, sample: [C; 3], symbols: &HashMap<String, C>) -> Result<[C; 3], String> {
@@ -243,5 +324,18 @@ mod tests {
             },
         );
         close(result[2], C { re: -0.75, im: 0.5 });
+    }
+
+    #[test]
+    fn longitudinal_recovery_uses_minus_i_kz_times_the_primary_field() {
+        let plan = RecoveryPlan::from_json(&json!({"dimension":2,"operatorDimension":3,
+            "operator":"gradient","transform":[[1,0,0],[0,1,0],[0,0,1]],
+            "factor":1,"sampling":"cellCentroid","output":"cell"})).unwrap();
+        let mut plan=plan;
+        plan.set_longitudinal_wavenumber(C { re:2., im:3. }).unwrap();
+        let derivative=plan.longitudinal_derivative(C { re:4., im:1. });
+        close(derivative,C { re:14., im:-5. });
+        plan.set_longitudinal_wavenumber(C::default()).unwrap();
+        close(plan.longitudinal_derivative(C { re:4., im:1. }),C::default());
     }
 }

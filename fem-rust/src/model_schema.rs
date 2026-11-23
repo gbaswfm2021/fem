@@ -8,8 +8,60 @@ use serde_json::{Value, json};
 use std::sync::OnceLock;
 use std::{collections::BTreeSet, env, fs, path::PathBuf};
 
+#[cfg(test)]
+mod acoustic_isolation_tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn native_metadata_accepts_independent_packages_and_checks_orders() {
+        let app = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let schema_path = app.join("fem.schema.json");
+        let original = fullmeta_model::schema_documents::load_schema_documents(&schema_path).unwrap();
+        let raw_root = original[0].clone();
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let temporary = env::temp_dir().join(format!("fullmeta-acoustic-isolation-{}-{stamp}",std::process::id()));
+        let scenarios = temporary.join("fem-rust/src/scenarios");
+        fs::create_dir_all(&scenarios).unwrap();
+        for id in ["acoustic-2d","acoustic-3d","em-2d","em-3d","elastic-2d","elastic-3d","thermal-2d","thermal-3d"] {
+            let file = format!("{}.json",id.replace('-',""));
+            fs::copy(app.join("fem-rust/src/scenarios").join(&file),scenarios.join(&file)).unwrap();
+            fs::write(scenarios.join("registry.json"),serde_json::to_vec(&json!({
+                "format":"fullmeta-fem-scenario-registry/1","packages":[{"id":id,"file":file,"default":true}]
+            })).unwrap()).unwrap();
+            let (root, mut scenario_documents) = scenario_runtime::compose(raw_root.clone(),&temporary.join("fem.schema.json")).unwrap();
+            let mut documents = original.iter().skip(1).cloned().collect::<Vec<_>>();
+            documents.append(&mut scenario_documents);
+            let mut entries = vec!["/$defs/solverRequest".to_string()];
+            entries.extend(root.pointer("/x-fullmeta-rules/entrypoints").and_then(Value::as_array)
+                .into_iter().flatten().map(|v|v.as_str().unwrap().to_owned()));
+            let mut broken_root = root.clone();
+            let (formulation, wrong_orders, diagnostic) = match id {
+                "em-2d" => ("Hz",json!([2]),"Hz formulation must declare element orders 1"),
+                "em-3d" => ("electric",json!([3]),"electric formulation must declare element orders 1, 2"),
+                "elastic-2d" => ("planeStress",json!([2]),"planeStress formulation must declare element orders 1"),
+                "elastic-3d" => ("displacement",json!([2]),"displacement formulation must declare element orders 1"),
+                "thermal-2d" | "thermal-3d" => ("T",json!([2]),"T formulation must declare element orders 1"),
+                _ => ("pressure",json!([2]),"pressure formulation must declare element orders 1"),
+            };
+            broken_root["x-fem-capabilities"]["mesh"]["fieldFormulations"][formulation]["elementOrders"] = wrong_orders;
+            let context = SchemaContext::new_with_entrypoints(root,documents.clone(),entries.clone()).unwrap();
+            let result = validate_metadata_context(&context);
+            assert!(result.is_ok(),"{id}: {result:?}");
+            let broken = SchemaContext::new_with_entrypoints(broken_root,documents,entries).unwrap();
+            let error = validate_metadata_context(&broken).unwrap_err();
+            assert!(error.contains(diagnostic),"{id}: {error}");
+        }
+        fs::remove_dir_all(temporary).unwrap();
+    }
+}
+
 #[path = "scenario_runtime.rs"]
 mod scenario_runtime;
+
+pub(crate) fn scenario_supports_study(scenario:&serde_json::Value, study_type:&str)->bool {
+    scenario_runtime::scenario_supports_study(scenario,study_type)
+}
 
 static SELECTED_MODEL_SCHEMA_PATH: OnceLock<PathBuf> = OnceLock::new();
 
@@ -449,6 +501,7 @@ pub struct FieldVariable {
     pub unit: String,
     pub role: String,
     pub identically_zero: bool,
+    pub zero_in_studies: Vec<String>,
     pub solver_family: Option<String>,
     pub axis: Option<String>,
 }
@@ -534,6 +587,21 @@ pub fn field_variables_for_profile(
                 }
                 let mut solver_family = None;
                 let mut axis = None;
+                let mut zero_in_studies = Vec::new();
+                if let Some(studies) = variable.get("zeroInStudies") {
+                    let studies = studies.as_array().ok_or_else(|| {
+                        format!("{context}.zeroInStudies must be a string array.")
+                    })?;
+                    for study in studies {
+                        let study = study.as_str().filter(|value| !value.is_empty()).ok_or_else(|| {
+                            format!("{context}.zeroInStudies entries must be nonempty strings.")
+                        })?;
+                        if zero_in_studies.iter().any(|value| value == study) {
+                            return Err(format!("{context}.zeroInStudies cannot repeat {study:?}."));
+                        }
+                        zero_in_studies.push(study.to_owned());
+                    }
+                }
                 if let Some(component) = variable.get("solverComponent") {
                     if component.get("family").is_some() {
                         solver_family = Some(
@@ -566,6 +634,7 @@ pub fn field_variables_for_profile(
                             role.into()
                         },
                         identically_zero: zero_in_dimension || role == "zero",
+                        zero_in_studies,
                         solver_family,
                         axis,
                     });

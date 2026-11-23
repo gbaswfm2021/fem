@@ -37,6 +37,9 @@ enum StudyRoute {
     Stationary,
     FrequencyPlan,
     ConfiguredFrequency,
+    TransientPlan,
+    EigenfrequencyPlan,
+    PropagationModePlan,
 }
 
 /// Return the historical module label separately from the actual execution
@@ -56,16 +59,16 @@ fn study_route(study_type: &str, preparation: &str) -> Result<StudyRoute> {
         ("stationary", "stationaryPlan") => Ok(StudyRoute::Stationary),
         ("frequencyDomain", "frequencyPlan") => Ok(StudyRoute::FrequencyPlan),
         ("frequencyDomain", "configuredFrequencyRequest") => Ok(StudyRoute::ConfiguredFrequency),
+        ("transient", "transientPlan") => Ok(StudyRoute::TransientPlan),
+        ("eigenfrequency", "eigenfrequencyPlan") => Ok(StudyRoute::EigenfrequencyPlan),
+        ("propagationMode", "propagationModePlan") => Ok(StudyRoute::PropagationModePlan),
         _ => Err(format!("No execution route supports Study type {study_type:?} with preparation contract {preparation:?}.").into()),
     }
 }
 
 fn study_route_for_profile(profile_id: &str, study_type: &str) -> Result<StudyRoute> {
     let capabilities = crate::json_schema::engine_capabilities()?;
-    let preparation = capabilities.pointer("/study/preparationByProfile")
-        .and_then(|profiles| profiles.get(profile_id))
-        .and_then(|entry| entry.get("kind"))
-        .and_then(Value::as_str)
+    let preparation = crate::study_prepare::preparation_for_study(&capabilities,profile_id,Some(study_type))
         .ok_or_else(|| Failure(format!("Scenario {profile_id:?} must declare a Study preparation contract.")))?;
     study_route(study_type, preparation)
 }
@@ -438,7 +441,11 @@ fn entry(arguments: &[String]) -> Result<ExitCode> {
     }
     if arguments.is_empty() || arguments.iter().any(|arg| arg == "--help" || arg == "-h") {
         println!(
-            "Usage: fullmeta-fem <project-folder-name> [--validate] [--study <study-id>] [--csv <filename>]\n       fullmeta-fem --validate -\nRuns the saved projects/<project-folder-name>/fem_model.json sequentially.\nWith --validate, checks the model schema and semantic rules, then exits without geometry checks, meshing, or FEM.\nWith --validate -, reads the submitted model from stdin and returns a fullmeta-model-validation/1 JSON response."
+            "Usage: fullmeta-fem <project-folder-name> [--validate] [--study <study-id>] [--csv <filename>]
+       fullmeta-fem --validate -
+Runs the saved projects/<project-folder-name>/fem_model.json sequentially.
+With --validate, checks the model schema and semantic rules, then exits without geometry checks, meshing, or FEM.
+With --validate -, reads the submitted model from stdin and returns a fullmeta-model-validation/1 JSON response."
         );
         return Ok(if arguments.is_empty() {
             ExitCode::FAILURE
@@ -701,7 +708,7 @@ fn run_request(input: ProjectInput, sink: &EventSink, cli: bool) -> Result<()> {
                 "Scenario {profile_id:?} does not declare studyType."
             ))
         })?;
-    if declared_study_type != study_type {
+    if !crate::model_schema::scenario_supports_study(&scenario,study_type) {
         return Err(format!(
             "Study type {study_type:?} is not supported by scenario {profile_id:?} (declared {declared_study_type:?})."
         ).into());
@@ -718,6 +725,18 @@ fn run_request(input: ProjectInput, sink: &EventSink, cli: bool) -> Result<()> {
             ))
         })?;
     let route = study_route_for_profile(profile_id, study_type)?;
+    if route == StudyRoute::TransientPlan {
+        return run_transient_study(&root,&model_folder,&project,&model,&model_filename,&runs_directory_name,
+            input.model_hash.as_deref(),study,&study_id,component_id,profile_id,&normalized,&mesh_exe,sink,cli);
+    }
+    if route == StudyRoute::PropagationModePlan {
+        return run_propagation_mode_study(&root,&model_folder,&project,&model,&model_filename,&runs_directory_name,
+            input.model_hash.as_deref(),study,&study_id,component_id,profile_id,&normalized,&mesh_exe,sink,cli);
+    }
+    if route == StudyRoute::EigenfrequencyPlan {
+        return run_eigenfrequency_study(&root,&model_folder,&project,&model,&model_filename,&runs_directory_name,
+            input.model_hash.as_deref(),study,&study_id,component_id,profile_id,&normalized,&mesh_exe,sink,cli);
+    }
     if route == StudyRoute::Stationary {
         return run_stationary_study(
             &root,
@@ -1032,9 +1051,11 @@ fn run_stationary_study(
             &stderr_path,
             if stderr.is_empty() {
                 if exit_code == 0 {
-                    "Solver completed without standard error output.\n"
+                    "Solver completed without standard error output.
+"
                 } else {
-                    "Solver failed without standard error output.\n"
+                    "Solver failed without standard error output.
+"
                 }
             } else {
                 &stderr
@@ -1128,6 +1149,455 @@ fn run_stationary_study(
         let _ = write_json_replace(&run_path, &record);
     }
     execution
+}
+
+fn validate_transient_sample(value:&Value,study_id:Option<&str>,case:usize,sample:usize,expected:f64)->Result<f64> {
+    let actual=value.get("timeSeconds").and_then(Value::as_f64).filter(|v|v.is_finite()).ok_or("Transient sample time is invalid.")?;
+    if !expected.is_finite() || value.get("caseIndex").and_then(Value::as_u64)!=Some(case as u64)
+        || value.get("sampleIndex").and_then(Value::as_u64)!=Some(sample as u64)
+        || (actual-expected).abs()>32.*f64::EPSILON*actual.abs().max(expected.abs()).max(f64::MIN_POSITIVE)
+        || study_id.is_some_and(|id|!matches!(value.get("schema").and_then(Value::as_str),Some("fullmeta-transient-field/1"|"fullmeta-transient-history-sample/1")) || value.get("studyId").and_then(Value::as_str)!=Some(id)) {
+        return Err("Transient sample identity differs from its prepared case.".into());
+    }
+    Ok(actual)
+}
+
+fn model_for_transient_case(model:&Value,study_id:&str,case:&Value)->Result<Value> {
+    let parameters=case.get("parameterOverrides").and_then(Value::as_array).ok_or("Transient case has no parameter rows.")?;
+    let mut result=model.clone();result["model"]["parameters"]=json!(parameters);
+    let study=result.pointer_mut("/model/study").and_then(Value::as_array_mut)
+        .and_then(|rows|rows.iter_mut().find(|row|row.get("id").and_then(Value::as_str)==Some(study_id)))
+        .ok_or("Transient Study is missing from the case model.")?;
+    study.as_object_mut().ok_or("Transient Study must be an object.")?.remove("parameterSweep");
+    Ok(result)
+}
+
+fn publish_transient_sample(source_dir:&Path,output_dir:&Path,study_id:&str,case:usize,sample:usize,time:f64)->Result<Value> {
+    let name=format!("case-{case:06}-time-{sample:06}.json");
+    let source=source_dir.join(&name);
+    let metadata=fs::symlink_metadata(&source)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len()==0 {
+        return Err("Transient output is not a nonempty regular file.".into());
+    }
+    let bytes=fs::read(&source)?;
+    let document:Value=serde_json::from_slice(&bytes)?;
+    validate_transient_sample(&document,Some(study_id),case,sample,time)?;
+    if document.get("schema").and_then(Value::as_str)!=Some("fullmeta-transient-field/1") {return Err("Transient field artifact has the wrong schema.".into());}
+    let mut target=OpenOptions::new().write(true).create_new(true).open(output_dir.join(&name))?;
+    target.write_all(&bytes)?;
+    target.flush()?;
+    Ok(run_artifacts::register_time_field_file(output_dir,&name,case,sample,time,&json!({"studyId":study_id}))?)
+}
+
+/// Build a numeric time-series table from already verified snapshots. Each
+/// case/sample pair has its own row; symbols keep their complex components.
+fn transient_history_csv(model:&Value,samples:&[Value])->Result<String> {
+    let symbols=model.pointer("/model/variables").and_then(Value::as_array).into_iter().flatten().map(|row|{
+        let symbol=row.get("symbol").and_then(Value::as_str).filter(|s|!s.is_empty()&&s.chars().enumerate().all(|(i,c)|
+            if i==0 {c=='_'||c.is_ascii_alphabetic()}else{c=='_'||c.is_ascii_alphanumeric()})).ok_or("Transient global variable symbol is invalid.")?;
+        Ok(symbol.to_string())
+    }).collect::<Result<Vec<_>>>()?;
+    let mut unique=std::collections::HashSet::new();
+    if symbols.iter().any(|name|!unique.insert(name)){return Err("Transient global variable symbols must be unique.".into());}
+    let mut csv=String::from("case_index,sample_index,t");
+    for symbol in &symbols {csv.push_str(&format!(",{symbol}_re,{symbol}_im"));}
+    csv.push('\n');
+    for sample in samples {
+        let case=sample.get("caseIndex").and_then(Value::as_u64).ok_or("Transient history case index is invalid.")?;
+        let index=sample.get("sampleIndex").and_then(Value::as_u64).ok_or("Transient history sample index is invalid.")?;
+        let time=sample.get("timeSeconds").and_then(Value::as_f64).filter(|v|v.is_finite()).ok_or("Transient history time is invalid.")?;
+        csv.push_str(&format!("{case},{index},{time}"));
+        let globals=sample.get("globalVariables").and_then(Value::as_object);
+        if globals.map_or(0,|v|v.len())!=symbols.len(){return Err("Transient history global values differ from the model declarations.".into());}
+        for symbol in &symbols {
+            let value=globals.and_then(|rows|rows.get(symbol)).ok_or("Transient history global value is missing.")?;
+            let number=|key:&str|value.get(key).and_then(Value::as_f64).filter(|v|v.is_finite())
+                .ok_or_else(||Failure(format!("Transient history value {symbol}.{key} must be finite.")));
+            csv.push_str(&format!(",{},{}",number("re")?,number("im")?));
+        }
+        csv.push('\n');
+    }
+    if samples.is_empty(){return Err("Transient history has no requested samples.".into());}
+    Ok(csv)
+}
+
+fn run_transient_study(
+    root:&Path,model_folder:&str,project:&Path,model:&Value,model_filename:&str,runs_directory_name:&str,
+    supplied_model_hash:Option<&str>,study:&Value,study_id:&str,component_id:&str,profile_id:&str,
+    plan:&Value,mesh_exe:&Path,sink:&EventSink,cli:bool,
+)->Result<()> {
+    if plan.get("schema").and_then(Value::as_str)!=Some("fullmeta-transient-study-plan/1")
+        || plan.get("studyType").and_then(Value::as_str)!=Some("transient")
+        || plan.get("studyId").and_then(Value::as_str)!=Some(study_id)
+        || plan.get("profileId").and_then(Value::as_str)!=Some(profile_id) {
+        return Err("The transient Study preparer returned an incompatible plan.".into());
+    }
+    let cases=plan.get("cases").and_then(Value::as_array).filter(|rows|!rows.is_empty())
+        .ok_or("The transient Study has no prepared cases.")?;
+    if cases.len()>maximum_sweep_points()? {return Err("The transient Study exceeds the configured sweep limit.".into());}
+    let grids=cases.iter().map(crate::transient_request::PreparedTransientCase::from_json).collect::<std::result::Result<Vec<_>,_>>()?;
+    if grids.iter().any(|case|case.grid.output_times.is_empty()) {return Err("Every transient case must request output times.".into());}
+    let settings=plan.get("solverSettings").ok_or("Transient solver settings are missing.")?;
+    let field_files=plan.get("fieldFiles").and_then(Value::as_bool).ok_or("Transient output fieldFiles policy is missing.")?;
+    let history_name=plan.get("csvFilename").and_then(Value::as_str).filter(|name|safe_filename(name,".csv")).ok_or("Transient history CSV filename is invalid.")?;
+    let setting=|key:&str|settings.get(key).and_then(Value::as_str).filter(|s|!s.is_empty()).ok_or_else(||Failure(format!("Transient solver setting {key} is required.")));
+    let formulation=setting("fieldFormulation")?;let backend=setting("solverBackend")?;
+    let scenario=crate::model_schema::scenario_metadata_for_profile(profile_id)?;
+    let dimension=scenario.pointer("/profile/dimension").and_then(Value::as_u64).and_then(|n|usize::try_from(n).ok()).filter(|n|matches!(n,2|3))
+        .ok_or("Transient scenario dimension is invalid.")?;
+    let (family,cell_key,boundary_key)=if dimension==2 {("triangle","triangles","boundaryEdges")}else{("tetrahedron","tetrahedra","boundaryTriangles")};
+    let total=cases.len();let model_id=model.pointer("/metadata/id").and_then(Value::as_str).ok_or("metadata.id is required")?;
+    let model_hash=match supplied_model_hash {Some(value) if value.len()==64 && value.chars().all(|ch|ch.is_ascii_hexdigit())=>value.to_string(),
+        Some(_)=>return Err("The editor supplied an invalid model content hash.".into()),None=>canonical_hash(model)?};
+    let runs_dir=ensure_real_child_directory(project,runs_directory_name)?;
+    let case_models=cases.iter().map(|case|model_for_transient_case(model,study_id,case)).collect::<Result<Vec<_>>>()?;
+    let announced=run_artifacts::coordinated_run_id();
+    if let Some(id)=&announced {update_preparation_stage(&runs_dir.join(id),"geometry",total)?;}
+    sink.emit(json!({"type":"progress","state":"running","stage":"geometry","message":"Preparing transient Study geometry…","totalPoints":total,"completedPoints":0,"runId":announced}));
+    let (compiled,prepared_mesh)=compile_and_prepare_run_mesh(mesh_exe,root,project,&runs_dir,&case_models[0],component_id,study_id)?;
+    let run_id=prepared_mesh.run_id.clone();let run_dir=prepared_mesh.run_directory.clone();
+    let run_relative=relative_model_path(model_folder,&format!("{runs_directory_name}/{run_id}"));
+    let output_dir=ensure_real_child_directory(&run_dir,"output")?;
+    let logs_dir=ensure_real_child_directory(&run_dir,"logs")?;
+    let case_root=ensure_real_child_directory(&run_dir,"case-work")?;
+    let run_path=run_dir.join("run.json");let request_path=run_dir.join("request.json");
+    write_json_new(&request_path,plan)?;write_json_new(&run_dir.join("model.json"),model)?;
+    let case_meshes=prepare_case_meshes(mesh_exe,root,&runs_dir,&run_dir,&logs_dir,&compiled,&prepared_mesh,&case_models,component_id,sink,total)?;
+    let primary=case_meshes.first().ok_or("Transient Study has no case mesh.")?;
+    let geometry_cases=case_meshes.iter().enumerate().map(|(index,mesh)|->Result<Value>{Ok(json!({"caseIndex":index,"geometryHash":mesh.compiled.geometry_hash,
+        "mesh":run_relative_reference(&run_dir,&mesh.paths.mesh)?,"map":run_relative_reference(&run_dir,&mesh.paths.map)?,"reused":mesh.reused}))}).collect::<Result<Vec<_>>>()?;
+    let mut record=json!({"schema":"fullmeta-run/1","kind":"study","runId":run_id,"state":"running","startedAt":timestamp(),"completedAt":null,
+        "model":{"file":relative_model_path(model_folder,model_filename),"id":model_id,"modelFormat":MODEL_FORMAT_V2,"sha256":model_hash,"snapshot":model},
+        "study":{"id":study_id,"name":study.get("name").and_then(Value::as_str).unwrap_or("Study"),"snapshot":study},
+        "solver":{"executable":profile_id,"formulation":formulation,"backend":backend,"requestFile":"request.json","fieldFiles":field_files},
+        "geometry":{"geometryHash":primary.compiled.geometry_hash,"mesh":run_relative_reference(&run_dir,&primary.paths.mesh)?,"map":run_relative_reference(&run_dir,&primary.paths.map)?,"cases":geometry_cases},
+        "artifacts":{"fieldFiles":[],"fieldFileCount":0,"stdout":"logs/solver.stdout.log","stderr":"logs/solver.stderr.log"},
+        "progress":{"totalPoints":total,"completedPoints":0},"error":null});
+    let (module,execution)=run_record_provenance(&scenario)?;if let Some(execution)=execution {if !module.is_null(){record["solver"]["module"]=module;}record["solver"]["execution"]=execution;}
+    if run_artifacts::adopt_server_record(&run_path,&mut record)? {write_json_replace(&run_path,&record)?;}else{write_json_new(&run_path,&record)?;}
+    let mut completed=0usize;
+    let execution=(||->Result<()> {
+        let mut stdout=File::create(logs_dir.join("solver.stdout.log"))?;let mut stderr=File::create(logs_dir.join("solver.stderr.log"))?;
+        let mut timings=run_artifacts::SolverStageTimings::create(&logs_dir.join("solver-stage-timings.csv"))?;
+        record["solver"]["stageTimings"]=json!("logs/solver-stage-timings.csv");
+        let runtime=solver_runtime(root,profile_id,backend)?;let limits=mesh_resource_limits(profile_id)?;
+        let mut artifacts=Vec::new();let mut history=Vec::new();
+        for (index,((case,case_model),case_mesh)) in cases.iter().zip(&case_models).zip(&case_meshes).enumerate() {
+            let nodes=case_mesh.report.get("nodes").and_then(Value::as_u64).unwrap_or(0);
+            let cells=case_mesh.report.get(cell_key).and_then(Value::as_u64).unwrap_or(0);
+            check_mesh_resources(profile_id,limits,nodes,cells,cell_key,index)?;
+            sink.emit(json!({"type":"mesh","state":"success","runId":run_id,"message":format!("Transient case {} mesh ready",index+1),
+                "mesh":{"dimension":dimension,"elementFamily":family,"nodes":nodes,"cells":cells,"boundaryCount":case_mesh.report.get(boundary_key),"reused":case_mesh.reused}}));
+            let work=ensure_real_child_directory(&case_root,&format!("case-{index:06}"))?;
+            let work_output=ensure_real_child_directory(&work,"output")?;
+            let model_file=work.join("model.json");write_json_new(&model_file,case_model)?;
+            let solver_case=json!({"schema":"fullmeta-transient-case/1","studyType":"transient","solver":profile_id,"studyId":study_id,
+                "caseIndex":index,"modelFile":model_file,"meshFile":case_mesh.paths.mesh,"modelMapFile":case_mesh.paths.map,
+                "outputDirectory":work_output,"solverSettings":settings,"fieldFiles":field_files,"case":case});
+            let solver_request=work.join("case.json");write_json_new(&solver_request,&solver_case)?;
+            record["progress"]["stage"]=json!("solve");record["progress"]["caseIndex"]=json!(index);write_json_replace(&run_path,&record)?;
+            sink.emit(json!({"type":"progress","state":"running","stage":"solve","message":format!("Solving transient case {} of {total}",index+1),"runId":run_id,"totalPoints":total,"completedPoints":completed}));
+            let mut callback_error:Option<Failure>=None;let mut observed=0usize;
+            let result=super::run_solver_case(&runtime,&solver_request,&mut |line|{
+                if callback_error.is_some(){return;}
+                let item=(||->Result<()> {
+                    writeln!(stdout,"{line}")?;
+                    if let Some((stage,message))=run_artifacts::solver_stage(line)? {
+                        timings.start(index,None,stage)?;
+                        sink.emit(json!({"type":"progress","event":"stage-start","state":"running","stage":stage,"message":message,"runId":run_id,"totalPoints":total,"completedPoints":completed}));
+                    }
+                    if let Some(payload)=line.strip_prefix("FULLMETA_TRANSIENT_SAMPLE ") {
+                        let value:Value=serde_json::from_str(payload)?;
+                        let expected=*grids[index].grid.output_times.get(observed).ok_or("Transient solver reported an extra sample.")?;
+                        let time=validate_transient_sample(&value,None,index,observed,expected)?;
+                        observed+=1;sink.emit(json!({"type":"progress","event":"time-sample","state":"running","stage":"solve","runId":run_id,
+                            "message":format!("Case {}: saved time {} s",index+1,time),"caseIndex":index,"sampleIndex":observed-1,"timeSeconds":time,"totalPoints":total,"completedPoints":completed}));
+                    }
+                    Ok(())
+                })();if let Err(error)=item{callback_error=Some(error);}
+            });
+            timings.finish()?;if let Some(error)=callback_error{return Err(error);}
+            let (exit,errors)=result.map_err(|error|Failure(error.to_string()))?;writeln!(stderr,"{errors}")?;
+            if exit!=0{return Err(format!("Transient solver case {} exited with code {exit}: {}",index+1,errors.trim()).into());}
+            if observed!=grids[index].grid.output_times.len(){return Err("Transient solver did not report every requested sample.".into());}
+            for (sample,&time) in grids[index].grid.output_times.iter().enumerate() {
+                let name=format!("case-{index:06}-time-{sample:06}.json");let path=work_output.join(&name);
+                let metadata=fs::symlink_metadata(&path)?;
+                if metadata.file_type().is_symlink()||!metadata.is_file()||metadata.len()==0{return Err("Transient output is not a nonempty regular file.".into());}
+                let document:Value=serde_json::from_slice(&fs::read(path)?)?;
+                validate_transient_sample(&document,Some(study_id),index,sample,time)?;
+                let expected_schema=if field_files {"fullmeta-transient-field/1"}else{"fullmeta-transient-history-sample/1"};
+                if document.get("schema").and_then(Value::as_str)!=Some(expected_schema){return Err("Transient sample output policy has the wrong schema.".into());}
+                history.push(json!({"caseIndex":index,"sampleIndex":sample,"timeSeconds":time,"globalVariables":document.get("globalVariables").cloned().unwrap_or_else(||json!({}))}));
+                if field_files {artifacts.push(publish_transient_sample(&work_output,&output_dir,study_id,index,sample,time)?);}
+            }
+            completed+=1;record["progress"]["completedPoints"]=json!(completed);write_json_replace(&run_path,&record)?;
+        }
+        let csv=transient_history_csv(model,&history)?;
+        let mut history_file=OpenOptions::new().write(true).create_new(true).open(output_dir.join(history_name))?;
+        history_file.write_all(csv.as_bytes())?;history_file.flush()?;
+        record["artifacts"]["csv"]=json!(format!("output/{history_name}"));record["artifacts"]["csvBytes"]=json!(csv.len());
+        stdout.flush()?;stderr.flush()?;record["state"]=json!("completed");record["completedAt"]=json!(timestamp());
+        record["progress"]["stage"]=json!("verification");record["artifacts"]["fieldFileCount"]=json!(artifacts.len());record["artifacts"]["fieldFiles"]=json!(artifacts);
+        write_json_replace(&run_path,&record)?;fs::remove_dir_all(&case_root)?;
+        let fields=record["artifacts"]["fieldFiles"].as_array().unwrap().iter().filter_map(|row|row["name"].as_str()).map(str::to_owned).collect::<Vec<_>>();
+        let output_files=["run.json","request.json"].iter().map(|name|format!("{run_relative}/{name}"))
+            .chain(run_artifacts::completion_solver_log_files(&run_relative))
+            .chain(fields.iter().map(|name|format!("{run_relative}/output/{name}")))
+            .chain(std::iter::once(format!("{run_relative}/output/{history_name}"))).collect::<Vec<_>>();
+        sink.emit(json!({"type":"complete","state":"success","message":format!("Completed {total} transient cases"),"totalPoints":total,"completedPoints":completed,
+            "runId":run_id,"runDirectory":run_relative,"fields":fields,"csv":format!("output/{history_name}"),"outputFiles":output_files,"dimension":dimension,"elementFamily":family}));
+        Ok(())
+    })();
+    if let Err(error)=execution {record["state"]=json!("failed");record["completedAt"]=json!(timestamp());record["error"]=json!(error.0);record["progress"]["completedPoints"]=json!(completed);let _=write_json_replace(&run_path,&record);
+        if cli{return Err(error);}sink.error(&error.0,total,completed,Some(&run_relative));}
+    Ok(())
+}
+
+fn run_eigenfrequency_study(
+    root:&Path,model_folder:&str,project:&Path,model:&Value,model_filename:&str,runs_directory_name:&str,
+    supplied_model_hash:Option<&str>,study:&Value,study_id:&str,component_id:&str,profile_id:&str,
+    plan:&Value,mesh_exe:&Path,sink:&EventSink,cli:bool,
+)->Result<()> {
+    if plan.get("schema").and_then(Value::as_str)!=Some("fullmeta-eigenfrequency-study-plan/1")
+        || plan.get("studyType").and_then(Value::as_str)!=Some("eigenfrequency")
+        || plan.get("studyId").and_then(Value::as_str)!=Some(study_id)
+        || plan.get("profileId").and_then(Value::as_str)!=Some(profile_id) {
+        return Err("The eigenfrequency Study preparer returned an incompatible plan.".into());
+    }
+    let cases=plan.get("cases").and_then(Value::as_array).filter(|rows|!rows.is_empty())
+        .ok_or("The eigenfrequency Study has no prepared parameter cases.")?;
+    if cases.len()>maximum_sweep_points()? {return Err("The eigenfrequency Study exceeds the configured sweep limit.".into());}
+    let settings=plan.get("solverSettings").ok_or("Eigenfrequency solver settings are missing.")?;
+    let field_files=plan.get("fieldFiles").and_then(Value::as_bool).ok_or("Eigenfrequency fieldFiles policy is missing.")?;
+    let mode_count=settings.get("modeCount").and_then(Value::as_u64).and_then(|v|usize::try_from(v).ok()).filter(|v|*v>0)
+        .ok_or("Eigenfrequency modeCount is invalid.")?;
+    let tolerance=settings.get("residualTolerance").and_then(Value::as_f64).filter(|v|v.is_finite()&&*v>0.&&*v<1.)
+        .ok_or("Eigenfrequency residualTolerance is invalid.")?;
+    let setting=|key:&str|settings.get(key).and_then(Value::as_str).filter(|s|!s.is_empty()).ok_or_else(||Failure(format!("Eigenfrequency solver setting {key} is required.")));
+    let formulation=setting("fieldFormulation")?;let backend=setting("solverBackend")?;
+    let scenario=crate::model_schema::scenario_metadata_for_profile(profile_id)?;
+    let dimension=scenario.pointer("/profile/dimension").and_then(Value::as_u64).and_then(|n|usize::try_from(n).ok()).filter(|n|matches!(n,2|3))
+        .ok_or("Eigenfrequency scenario dimension is invalid.")?;
+    let (family,cell_key,boundary_key)=if dimension==2 {("triangle","triangles","boundaryEdges")}else{("tetrahedron","tetrahedra","boundaryTriangles")};
+    let total=cases.len();let total_modes=total.checked_mul(mode_count).ok_or("Eigenfrequency mode count overflow.")?;
+    let model_id=model.pointer("/metadata/id").and_then(Value::as_str).ok_or("metadata.id is required")?;
+    let model_hash=match supplied_model_hash {Some(value) if value.len()==64&&value.chars().all(|ch|ch.is_ascii_hexdigit())=>value.to_string(),
+        Some(_)=>return Err("The editor supplied an invalid model content hash.".into()),None=>canonical_hash(model)?};
+    let runs_dir=ensure_real_child_directory(project,runs_directory_name)?;
+    let case_models=cases.iter().map(|case|model_for_transient_case(model,study_id,case)).collect::<Result<Vec<_>>>()?;
+    let announced=run_artifacts::coordinated_run_id();
+    if let Some(id)=&announced{update_preparation_stage(&runs_dir.join(id),"geometry",total)?;}
+    sink.emit(json!({"type":"progress","state":"running","stage":"geometry","message":"Preparing eigenfrequency Study geometry…","totalPoints":total,"completedPoints":0,"runId":announced}));
+    let (compiled,prepared_mesh)=compile_and_prepare_run_mesh(mesh_exe,root,project,&runs_dir,&case_models[0],component_id,study_id)?;
+    let run_id=prepared_mesh.run_id.clone();let run_dir=prepared_mesh.run_directory.clone();
+    let run_relative=relative_model_path(model_folder,&format!("{runs_directory_name}/{run_id}"));
+    let output_dir=ensure_real_child_directory(&run_dir,"output")?;let logs_dir=ensure_real_child_directory(&run_dir,"logs")?;
+    let case_root=ensure_real_child_directory(&run_dir,"case-work")?;let run_path=run_dir.join("run.json");let request_path=run_dir.join("request.json");
+    write_json_new(&request_path,plan)?;write_json_new(&run_dir.join("model.json"),model)?;
+    let case_meshes=prepare_case_meshes(mesh_exe,root,&runs_dir,&run_dir,&logs_dir,&compiled,&prepared_mesh,&case_models,component_id,sink,total)?;
+    let primary=case_meshes.first().ok_or("Eigenfrequency Study has no case mesh.")?;
+    let geometry_cases=case_meshes.iter().enumerate().map(|(index,mesh)|->Result<Value>{Ok(json!({"caseIndex":index,"geometryHash":mesh.compiled.geometry_hash,
+        "mesh":run_relative_reference(&run_dir,&mesh.paths.mesh)?,"map":run_relative_reference(&run_dir,&mesh.paths.map)?,"reused":mesh.reused}))}).collect::<Result<Vec<_>>>()?;
+    let mut record=json!({"schema":"fullmeta-run/1","kind":"study","runId":run_id,"state":"running","startedAt":timestamp(),"completedAt":null,
+        "model":{"file":relative_model_path(model_folder,model_filename),"id":model_id,"modelFormat":MODEL_FORMAT_V2,"sha256":model_hash,"snapshot":model},
+        "study":{"id":study_id,"name":study.get("name").and_then(Value::as_str).unwrap_or("Eigenfrequency Study"),"snapshot":study},
+        "solver":{"executable":profile_id,"formulation":formulation,"backend":backend,"requestFile":"request.json","fieldFiles":field_files},
+        "geometry":{"geometryHash":primary.compiled.geometry_hash,"mesh":run_relative_reference(&run_dir,&primary.paths.mesh)?,"map":run_relative_reference(&run_dir,&primary.paths.map)?,"cases":geometry_cases},
+        "artifacts":{"fieldFiles":[],"fieldFileCount":0,"modes":[],"stdout":"logs/solver.stdout.log","stderr":"logs/solver.stderr.log"},
+        "progress":{"totalPoints":total,"completedPoints":0,"totalModes":total_modes,"completedModes":0},"error":null});
+    let (module,execution)=run_record_provenance(&scenario)?;if let Some(execution)=execution{if !module.is_null(){record["solver"]["module"]=module;}record["solver"]["execution"]=execution;}
+    if run_artifacts::adopt_server_record(&run_path,&mut record)?{write_json_replace(&run_path,&record)?;}else{write_json_new(&run_path,&record)?;}
+    let mut completed=0usize;let mut completed_modes=0usize;
+    let execution=(||->Result<()> {
+        let mut stdout=File::create(logs_dir.join("solver.stdout.log"))?;let mut stderr=File::create(logs_dir.join("solver.stderr.log"))?;
+        let mut timings=run_artifacts::SolverStageTimings::create(&logs_dir.join("solver-stage-timings.csv"))?;
+        record["solver"]["stageTimings"]=json!("logs/solver-stage-timings.csv");
+        let runtime=solver_runtime(root,profile_id,backend)?;let limits=mesh_resource_limits(profile_id)?;
+        let mut artifacts=Vec::new();let mut mode_metadata=Vec::new();
+        for (index,((case,case_model),case_mesh)) in cases.iter().zip(&case_models).zip(&case_meshes).enumerate(){
+            let nodes=case_mesh.report.get("nodes").and_then(Value::as_u64).unwrap_or(0);let cells=case_mesh.report.get(cell_key).and_then(Value::as_u64).unwrap_or(0);
+            check_mesh_resources(profile_id,limits,nodes,cells,cell_key,index)?;
+            sink.emit(json!({"type":"mesh","state":"success","runId":run_id,"message":format!("Eigenfrequency case {} mesh ready",index+1),
+                "mesh":{"dimension":dimension,"elementFamily":family,"nodes":nodes,"cells":cells,"boundaryCount":case_mesh.report.get(boundary_key),"reused":case_mesh.reused}}));
+            let work=ensure_real_child_directory(&case_root,&format!("case-{index:06}"))?;let work_output=ensure_real_child_directory(&work,"output")?;
+            let model_file=work.join("model.json");write_json_new(&model_file,case_model)?;
+            let solver_case=json!({"schema":"fullmeta-eigenfrequency-case/1","studyType":"eigenfrequency","solver":profile_id,"studyId":study_id,
+                "caseIndex":index,"modelFile":model_file,"meshFile":case_mesh.paths.mesh,"modelMapFile":case_mesh.paths.map,
+                "outputDirectory":work_output,"solverSettings":settings,"fieldFiles":field_files,"case":case});
+            let solver_request=work.join("case.json");write_json_new(&solver_request,&solver_case)?;
+            record["progress"]["stage"]=json!("solve");record["progress"]["caseIndex"]=json!(index);write_json_replace(&run_path,&record)?;
+            sink.emit(json!({"type":"progress","state":"running","stage":"solve","message":format!("Solving eigenfrequency case {} of {total}",index+1),"runId":run_id,"totalPoints":total,"completedPoints":completed,"totalModes":total_modes,"completedModes":completed_modes}));
+            let mut callback_error:Option<Failure>=None;let mut observed=Vec::new();
+            let result=super::run_solver_case(&runtime,&solver_request,&mut |line|{if callback_error.is_some(){return;}let item=(||->Result<()>{
+                writeln!(stdout,"{line}")?;if let Some((stage,message))=run_artifacts::solver_stage(line)?{timings.start(index,None,stage)?;
+                    sink.emit(json!({"type":"progress","event":"stage-start","state":"running","stage":stage,"message":message,"runId":run_id,"totalPoints":total,"completedPoints":completed}));}
+                if let Some(payload)=line.strip_prefix("FULLMETA_EIGENFREQUENCY_MODE "){let value:Value=serde_json::from_str(payload)?;
+                    if value.get("caseIndex").and_then(Value::as_u64)!=Some(index as u64)||value.get("modeIndex").and_then(Value::as_u64)!=Some(observed.len() as u64){return Err("Eigenfrequency solver emitted a mode with the wrong case or index.".into());}
+                    let residual=value.get("relativeResidual").and_then(Value::as_f64).filter(|v|v.is_finite()&&*v>=0.).ok_or("Eigenfrequency solver emitted an invalid residual.")?;
+                    if residual>tolerance{return Err("Eigenfrequency solver emitted a mode that exceeds the residual tolerance.".into());}
+                    for key in ["realPerSecond","imaginaryPerSecond"]{if value.pointer(&format!("/temporalEigenvalue/{key}")).and_then(Value::as_f64).is_none_or(|v|!v.is_finite()){return Err("Eigenfrequency solver emitted a non-finite eigenvalue.".into());}}
+                    observed.push(value);sink.emit(json!({"type":"progress","event":"mode","state":"running","stage":"solve","runId":run_id,"caseIndex":index,"modeIndex":observed.len()-1,
+                        "message":format!("Case {}: converged mode {}",index+1,observed.len()),"totalPoints":total,"completedPoints":completed,"totalModes":total_modes,"completedModes":completed_modes+observed.len()}));}
+                Ok(())})();if let Err(error)=item{callback_error=Some(error);}});
+            timings.finish()?;if let Some(error)=callback_error{return Err(error);}let (exit,errors)=result.map_err(|error|Failure(error.to_string()))?;writeln!(stderr,"{errors}")?;
+            if exit!=0{return Err(format!("Eigenfrequency case {} exited with code {exit}: {}",index+1,errors.trim()).into());}
+            if observed.len()!=mode_count{return Err(format!("Eigenfrequency case {} reported {} modes; {mode_count} were requested.",index+1,observed.len()).into());}
+            for mode in 0..mode_count{let metadata=&observed[mode];let eigenvalue=&metadata["temporalEigenvalue"];let residual=metadata["relativeResidual"].as_f64().unwrap();
+                let mut mode_row=json!({"caseIndex":index,"modeIndex":mode,"label":format!("Case {} · mode {}",index+1,mode+1),"temporalEigenvalue":eigenvalue,"relativeResidual":residual});
+                if field_files{let source_name=metadata["name"].as_str().filter(|v|!v.is_empty()).ok_or("Eigenfrequency mode marker has no field filename.")?;
+                    if source_name!=format!("case-{index:06}-mode-{mode:06}.json"){return Err("Eigenfrequency mode filename does not match its case and index.".into());}
+                    let source=work_output.join(source_name);let info=fs::symlink_metadata(&source)?;if info.file_type().is_symlink()||!info.is_file()||info.len()==0{return Err("Eigenfrequency mode output is not a nonempty regular file.".into());}
+                    let bytes=fs::read(&source)?;let document:Value=serde_json::from_slice(&bytes)?;
+                    if document.get("schema").and_then(Value::as_str)!=Some("fullmeta-eigenfrequency-mode/1")||document.get("studyId").and_then(Value::as_str)!=Some(study_id)
+                        ||document.get("caseIndex").and_then(Value::as_u64)!=Some(index as u64)||document.get("modeIndex").and_then(Value::as_u64)!=Some(mode as u64)
+                        ||document.pointer("/temporalEigenvalue/realPerSecond")!=Some(&eigenvalue["realPerSecond"])
+                        ||document.pointer("/temporalEigenvalue/imaginaryPerSecond")!=Some(&eigenvalue["imaginaryPerSecond"])
+                        ||document.get("relativeResidual").and_then(Value::as_f64)!=Some(residual){return Err("Eigenfrequency mode artifact identity or residual differs from its solver record.".into());}
+                    let target_name=format!("case-{index:06}-mode-{mode:06}.json");let mut target=OpenOptions::new().write(true).create_new(true).open(output_dir.join(&target_name))?;target.write_all(&bytes)?;target.flush()?;
+                    let artifact=run_artifacts::register_case_field_file(&output_dir,&target_name,index,&json!({"studyId":study_id,"modeIndex":mode,"label":mode_row["label"],
+                        "temporalEigenvalue":eigenvalue,"complexFrequencyHz":document["complexFrequencyHz"],"relativeResidual":residual}))?;
+                    artifacts.push(artifact);mode_row["name"]=json!(target_name);}
+                mode_metadata.push(mode_row);
+            }
+            completed_modes+=mode_count;completed+=1;record["progress"]["completedPoints"]=json!(completed);record["progress"]["completedModes"]=json!(completed_modes);
+            record["artifacts"]["modes"]=json!(mode_metadata);record["artifacts"]["fieldFiles"]=json!(artifacts);record["artifacts"]["fieldFileCount"]=json!(artifacts.len());write_json_replace(&run_path,&record)?;
+        }
+        stdout.flush()?;stderr.flush()?;record["state"]=json!("completed");record["completedAt"]=json!(timestamp());record["progress"]["stage"]=json!("verification");
+        record["artifacts"]["modes"]=json!(mode_metadata);record["artifacts"]["fieldFiles"]=json!(artifacts);record["artifacts"]["fieldFileCount"]=json!(artifacts.len());write_json_replace(&run_path,&record)?;fs::remove_dir_all(&case_root)?;
+        let fields=artifacts.iter().filter_map(|row|row["name"].as_str()).map(str::to_owned).collect::<Vec<_>>();
+        let output_files=["run.json","request.json"].iter().map(|name|format!("{run_relative}/{name}"))
+            .chain(run_artifacts::completion_solver_log_files(&run_relative)).chain(fields.iter().map(|name|format!("{run_relative}/output/{name}"))).collect::<Vec<_>>();
+        sink.emit(json!({"type":"complete","state":"success","message":format!("Completed {completed_modes} eigenfrequency modes across {total} cases"),
+            "totalPoints":total,"completedPoints":completed,"totalModes":total_modes,"completedModes":completed_modes,"runId":run_id,"runDirectory":run_relative,
+            "fields":fields,"outputFiles":output_files,"dimension":dimension,"elementFamily":family}));Ok(())
+    })();
+    if let Err(error)=execution{record["state"]=json!("failed");record["completedAt"]=json!(timestamp());record["error"]=json!(error.0);record["progress"]["completedPoints"]=json!(completed);
+        record["progress"]["completedModes"]=json!(completed_modes);let _=write_json_replace(&run_path,&record);if cli{return Err(error);}sink.error(&error.0,total,completed,Some(&run_relative));}
+    Ok(())
+}
+
+fn run_propagation_mode_study(
+    root:&Path,model_folder:&str,project:&Path,model:&Value,model_filename:&str,runs_directory_name:&str,
+    supplied_model_hash:Option<&str>,study:&Value,study_id:&str,component_id:&str,profile_id:&str,
+    plan:&Value,mesh_exe:&Path,sink:&EventSink,cli:bool,
+)->Result<()> {
+    if plan.get("schema").and_then(Value::as_str)!=Some("fullmeta-propagation-mode-study-plan/1")
+        || plan.get("studyType").and_then(Value::as_str)!=Some("propagationMode")
+        || plan.get("studyId").and_then(Value::as_str)!=Some(study_id)
+        || plan.get("profileId").and_then(Value::as_str)!=Some(profile_id) {
+        return Err("The propagationMode Study preparer returned an incompatible plan.".into());
+    }
+    let cases=plan.get("cases").and_then(Value::as_array).filter(|rows|!rows.is_empty())
+        .ok_or("The propagationMode Study has no prepared parameter cases.")?;
+    if cases.len()>maximum_sweep_points()? {return Err("The propagationMode Study exceeds the configured sweep limit.".into());}
+    let settings=plan.get("solverSettings").ok_or("Propagation-mode solver settings are missing.")?;
+    let field_files=plan.get("fieldFiles").and_then(Value::as_bool).ok_or("Propagation-mode fieldFiles policy is missing.")?;
+    let mode_count=settings.get("modeCount").and_then(Value::as_u64).and_then(|v|usize::try_from(v).ok()).filter(|v|*v>0)
+        .ok_or("Propagation-mode modeCount is invalid.")?;
+    let tolerance=settings.get("residualTolerance").and_then(Value::as_f64).filter(|v|v.is_finite()&&*v>0.&&*v<1.)
+        .ok_or("Propagation-mode residualTolerance is invalid.")?;
+    let setting=|key:&str|settings.get(key).and_then(Value::as_str).filter(|s|!s.is_empty()).ok_or_else(||Failure(format!("Propagation-mode solver setting {key} is required.")));
+    let formulation=setting("fieldFormulation")?;let backend=setting("solverBackend")?;
+    let scenario=crate::model_schema::scenario_metadata_for_profile(profile_id)?;
+    let dimension=scenario.pointer("/profile/dimension").and_then(Value::as_u64).and_then(|n|usize::try_from(n).ok()).filter(|n|matches!(n,2|3))
+        .ok_or("Propagation-mode scenario dimension is invalid.")?;
+    let (family,cell_key,boundary_key)=if dimension==2 {("triangle","triangles","boundaryEdges")}else{("tetrahedron","tetrahedra","boundaryTriangles")};
+    let total=cases.len();let total_modes=total.checked_mul(mode_count).ok_or("Propagation-mode mode count overflow.")?;
+    let model_id=model.pointer("/metadata/id").and_then(Value::as_str).ok_or("metadata.id is required")?;
+    let model_hash=match supplied_model_hash {Some(value) if value.len()==64&&value.chars().all(|ch|ch.is_ascii_hexdigit())=>value.to_string(),
+        Some(_)=>return Err("The editor supplied an invalid model content hash.".into()),None=>canonical_hash(model)?};
+    let runs_dir=ensure_real_child_directory(project,runs_directory_name)?;
+    let case_models=cases.iter().map(|case|model_for_transient_case(model,study_id,case)).collect::<Result<Vec<_>>>()?;
+    let announced=run_artifacts::coordinated_run_id();
+    if let Some(id)=&announced{update_preparation_stage(&runs_dir.join(id),"geometry",total)?;}
+    sink.emit(json!({"type":"progress","state":"running","stage":"geometry","message":"Preparing propagationMode Study geometry…","totalPoints":total,"completedPoints":0,"runId":announced}));
+    let (compiled,prepared_mesh)=compile_and_prepare_run_mesh(mesh_exe,root,project,&runs_dir,&case_models[0],component_id,study_id)?;
+    let run_id=prepared_mesh.run_id.clone();let run_dir=prepared_mesh.run_directory.clone();
+    let run_relative=relative_model_path(model_folder,&format!("{runs_directory_name}/{run_id}"));
+    let output_dir=ensure_real_child_directory(&run_dir,"output")?;let logs_dir=ensure_real_child_directory(&run_dir,"logs")?;
+    let case_root=ensure_real_child_directory(&run_dir,"case-work")?;let run_path=run_dir.join("run.json");let request_path=run_dir.join("request.json");
+    write_json_new(&request_path,plan)?;write_json_new(&run_dir.join("model.json"),model)?;
+    let case_meshes=prepare_case_meshes(mesh_exe,root,&runs_dir,&run_dir,&logs_dir,&compiled,&prepared_mesh,&case_models,component_id,sink,total)?;
+    let primary=case_meshes.first().ok_or("Propagation-mode Study has no case mesh.")?;
+    let geometry_cases=case_meshes.iter().enumerate().map(|(index,mesh)|->Result<Value>{Ok(json!({"caseIndex":index,"geometryHash":mesh.compiled.geometry_hash,
+        "mesh":run_relative_reference(&run_dir,&mesh.paths.mesh)?,"map":run_relative_reference(&run_dir,&mesh.paths.map)?,"reused":mesh.reused}))}).collect::<Result<Vec<_>>>()?;
+    let mut record=json!({"schema":"fullmeta-run/1","kind":"study","runId":run_id,"state":"running","startedAt":timestamp(),"completedAt":null,
+        "model":{"file":relative_model_path(model_folder,model_filename),"id":model_id,"modelFormat":MODEL_FORMAT_V2,"sha256":model_hash,"snapshot":model},
+        "study":{"id":study_id,"name":study.get("name").and_then(Value::as_str).unwrap_or("Propagation-mode Study"),"snapshot":study},
+        "solver":{"executable":profile_id,"formulation":formulation,"backend":backend,"requestFile":"request.json","fieldFiles":field_files},
+        "geometry":{"geometryHash":primary.compiled.geometry_hash,"mesh":run_relative_reference(&run_dir,&primary.paths.mesh)?,"map":run_relative_reference(&run_dir,&primary.paths.map)?,"cases":geometry_cases},
+        "artifacts":{"fieldFiles":[],"fieldFileCount":0,"modes":[],"stdout":"logs/solver.stdout.log","stderr":"logs/solver.stderr.log"},
+        "progress":{"totalPoints":total,"completedPoints":0,"totalModes":total_modes,"completedModes":0},"error":null});
+    let (module,execution)=run_record_provenance(&scenario)?;if let Some(execution)=execution{if !module.is_null(){record["solver"]["module"]=module;}record["solver"]["execution"]=execution;}
+    if run_artifacts::adopt_server_record(&run_path,&mut record)?{write_json_replace(&run_path,&record)?;}else{write_json_new(&run_path,&record)?;}
+    let mut completed=0usize;let mut completed_modes=0usize;
+    let execution=(||->Result<()> {
+        let mut stdout=File::create(logs_dir.join("solver.stdout.log"))?;let mut stderr=File::create(logs_dir.join("solver.stderr.log"))?;
+        let mut timings=run_artifacts::SolverStageTimings::create(&logs_dir.join("solver-stage-timings.csv"))?;
+        record["solver"]["stageTimings"]=json!("logs/solver-stage-timings.csv");
+        let runtime=solver_runtime(root,profile_id,backend)?;let limits=mesh_resource_limits(profile_id)?;
+        let mut artifacts=Vec::new();let mut mode_metadata=Vec::new();
+        for (index,((case,case_model),case_mesh)) in cases.iter().zip(&case_models).zip(&case_meshes).enumerate(){
+            let nodes=case_mesh.report.get("nodes").and_then(Value::as_u64).unwrap_or(0);let cells=case_mesh.report.get(cell_key).and_then(Value::as_u64).unwrap_or(0);
+            check_mesh_resources(profile_id,limits,nodes,cells,cell_key,index)?;
+            sink.emit(json!({"type":"mesh","state":"success","runId":run_id,"message":format!("Propagation-mode case {} mesh ready",index+1),
+                "mesh":{"dimension":dimension,"elementFamily":family,"nodes":nodes,"cells":cells,"boundaryCount":case_mesh.report.get(boundary_key),"reused":case_mesh.reused}}));
+            let work=ensure_real_child_directory(&case_root,&format!("case-{index:06}"))?;let work_output=ensure_real_child_directory(&work,"output")?;
+            let model_file=work.join("model.json");write_json_new(&model_file,case_model)?;
+            let solver_case=json!({"schema":"fullmeta-propagation-mode-case/1","studyType":"propagationMode","solver":profile_id,"studyId":study_id,
+                "caseIndex":index,"modelFile":model_file,"meshFile":case_mesh.paths.mesh,"modelMapFile":case_mesh.paths.map,
+                "outputDirectory":work_output,"solverSettings":settings,"fieldFiles":field_files,"case":case});
+            let solver_request=work.join("case.json");write_json_new(&solver_request,&solver_case)?;
+            record["progress"]["stage"]=json!("solve");record["progress"]["caseIndex"]=json!(index);write_json_replace(&run_path,&record)?;
+            sink.emit(json!({"type":"progress","state":"running","stage":"solve","message":format!("Solving propagationMode case {} of {total}",index+1),"runId":run_id,"totalPoints":total,"completedPoints":completed,"totalModes":total_modes,"completedModes":completed_modes}));
+            let mut callback_error:Option<Failure>=None;let mut observed=Vec::new();
+            let result=super::run_solver_case(&runtime,&solver_request,&mut |line|{if callback_error.is_some(){return;}let item=(||->Result<()>{
+                writeln!(stdout,"{line}")?;if let Some((stage,message))=run_artifacts::solver_stage(line)?{timings.start(index,None,stage)?;
+                    sink.emit(json!({"type":"progress","event":"stage-start","state":"running","stage":stage,"message":message,"runId":run_id,"totalPoints":total,"completedPoints":completed}));}
+                if let Some(payload)=line.strip_prefix("FULLMETA_PROPAGATION_MODE "){let value:Value=serde_json::from_str(payload)?;
+                    if value.get("caseIndex").and_then(Value::as_u64)!=Some(index as u64)||value.get("modeIndex").and_then(Value::as_u64)!=Some(observed.len() as u64){return Err("Propagation-mode solver emitted a mode with the wrong case or index.".into());}
+                    let residual=value.get("relativeResidual").and_then(Value::as_f64).filter(|v|v.is_finite()&&*v>=0.).ok_or("Propagation-mode solver emitted an invalid residual.")?;
+                    if residual>tolerance{return Err("Propagation-mode solver emitted a mode that exceeds the residual tolerance.".into());}
+                    for key in ["realRadPerMetre","imaginaryRadPerMetre"]{if value.pointer(&format!("/longitudinalWavenumber/{key}")).and_then(Value::as_f64).is_none_or(|v|!v.is_finite()){return Err("Propagation-mode solver emitted a non-finite eigenvalue.".into());}}
+                    observed.push(value);sink.emit(json!({"type":"progress","event":"mode","state":"running","stage":"solve","runId":run_id,"caseIndex":index,"modeIndex":observed.len()-1,
+                        "message":format!("Case {}: converged mode {}",index+1,observed.len()),"totalPoints":total,"completedPoints":completed,"totalModes":total_modes,"completedModes":completed_modes+observed.len()}));}
+                Ok(())})();if let Err(error)=item{callback_error=Some(error);}});
+            timings.finish()?;if let Some(error)=callback_error{return Err(error);}let (exit,errors)=result.map_err(|error|Failure(error.to_string()))?;writeln!(stderr,"{errors}")?;
+            if exit!=0{return Err(format!("Propagation-mode case {} exited with code {exit}: {}",index+1,errors.trim()).into());}
+            if observed.len()!=mode_count{return Err(format!("Propagation-mode case {} reported {} modes; {mode_count} were requested.",index+1,observed.len()).into());}
+            for mode in 0..mode_count{let metadata=&observed[mode];let eigenvalue=&metadata["longitudinalWavenumber"];let residual=metadata["relativeResidual"].as_f64().unwrap();
+                let mut mode_row=json!({"caseIndex":index,"modeIndex":mode,"label":format!("Case {} · mode {}",index+1,mode+1),"longitudinalWavenumber":eigenvalue,"relativeResidual":residual});
+                if field_files{let source_name=metadata["name"].as_str().filter(|v|!v.is_empty()).ok_or("Propagation-mode mode marker has no field filename.")?;
+                    if source_name!=format!("case-{index:06}-mode-{mode:06}.json"){return Err("Propagation-mode mode filename does not match its case and index.".into());}
+                    let source=work_output.join(source_name);let info=fs::symlink_metadata(&source)?;if info.file_type().is_symlink()||!info.is_file()||info.len()==0{return Err("Propagation-mode mode output is not a nonempty regular file.".into());}
+                    let bytes=fs::read(&source)?;let document:Value=serde_json::from_slice(&bytes)?;
+                    if document.get("schema").and_then(Value::as_str)!=Some("fullmeta-propagation-mode/1")||document.get("studyId").and_then(Value::as_str)!=Some(study_id)
+                        ||document.get("caseIndex").and_then(Value::as_u64)!=Some(index as u64)||document.get("modeIndex").and_then(Value::as_u64)!=Some(mode as u64)
+                        ||document.pointer("/longitudinalWavenumber/realRadPerMetre")!=Some(&eigenvalue["realRadPerMetre"])
+                        ||document.pointer("/longitudinalWavenumber/imaginaryRadPerMetre")!=Some(&eigenvalue["imaginaryRadPerMetre"])
+                        ||document.get("relativeResidual").and_then(Value::as_f64)!=Some(residual){return Err("Propagation-mode mode artifact identity or residual differs from its solver record.".into());}
+                    let target_name=format!("case-{index:06}-mode-{mode:06}.json");let mut target=OpenOptions::new().write(true).create_new(true).open(output_dir.join(&target_name))?;target.write_all(&bytes)?;target.flush()?;
+                    let artifact=run_artifacts::register_case_field_file(&output_dir,&target_name,index,&json!({"studyId":study_id,"modeIndex":mode,"label":mode_row["label"],
+                        "longitudinalWavenumber":eigenvalue,"frequencyHz":document["frequencyHz"],"relativeResidual":residual}))?;
+                    artifacts.push(artifact);mode_row["name"]=json!(target_name);}
+                mode_metadata.push(mode_row);
+            }
+            completed_modes+=mode_count;completed+=1;record["progress"]["completedPoints"]=json!(completed);record["progress"]["completedModes"]=json!(completed_modes);
+            record["artifacts"]["modes"]=json!(mode_metadata);record["artifacts"]["fieldFiles"]=json!(artifacts);record["artifacts"]["fieldFileCount"]=json!(artifacts.len());write_json_replace(&run_path,&record)?;
+        }
+        stdout.flush()?;stderr.flush()?;record["state"]=json!("completed");record["completedAt"]=json!(timestamp());record["progress"]["stage"]=json!("verification");
+        record["artifacts"]["modes"]=json!(mode_metadata);record["artifacts"]["fieldFiles"]=json!(artifacts);record["artifacts"]["fieldFileCount"]=json!(artifacts.len());write_json_replace(&run_path,&record)?;fs::remove_dir_all(&case_root)?;
+        let fields=artifacts.iter().filter_map(|row|row["name"].as_str()).map(str::to_owned).collect::<Vec<_>>();
+        let output_files=["run.json","request.json"].iter().map(|name|format!("{run_relative}/{name}"))
+            .chain(run_artifacts::completion_solver_log_files(&run_relative)).chain(fields.iter().map(|name|format!("{run_relative}/output/{name}"))).collect::<Vec<_>>();
+        sink.emit(json!({"type":"complete","state":"success","message":format!("Completed {completed_modes} propagationMode modes across {total} cases"),
+            "totalPoints":total,"completedPoints":completed,"totalModes":total_modes,"completedModes":completed_modes,"runId":run_id,"runDirectory":run_relative,
+            "fields":fields,"outputFiles":output_files,"dimension":dimension,"elementFamily":family}));Ok(())
+    })();
+    if let Err(error)=execution{record["state"]=json!("failed");record["completedAt"]=json!(timestamp());record["error"]=json!(error.0);record["progress"]["completedPoints"]=json!(completed);
+        record["progress"]["completedModes"]=json!(completed_modes);let _=write_json_replace(&run_path,&record);if cli{return Err(error);}sink.error(&error.0,total,completed,Some(&run_relative));}
+    Ok(())
 }
 
 fn model_for_sweep_case(model: &Value, study_id: &str, case: &Value) -> Result<Value> {
@@ -1913,7 +2383,9 @@ fn run_configured_frequency_study(
 fn validate_model(model: &Value) -> Result<()> {
     let errors = super::validate_native_model(model);
     if !errors.is_empty() {
-        return Err(format!("Model JSON is invalid:\n{}", errors.join("\n")).into());
+        return Err(format!("Model JSON is invalid:
+{}", errors.join("
+")).into());
     }
     Ok(())
 }
@@ -2070,7 +2542,7 @@ fn command(executable: &Path, args: &[&str], cwd: &Path) -> Result<ProcessResult
         .args(args)
         .current_dir(cwd)
         .output()
-        .map_err(|error| Failure(format!("Could not start {}: {error}", executable.display())))?;
+        .map_err(|error| Failure(format!("Could not start {} in {}: {error}", executable.display(),cwd.display())))?;
     Ok(ProcessResult {
         code: output.status.code().unwrap_or(-1),
         stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
@@ -2540,6 +3012,34 @@ fn run_relative_reference(run_directory: &Path, path: &Path) -> Result<String> {
     Ok(reference)
 }
 
+/// Short geometry directories keep subprocess working paths usable on Windows.
+/// A full-hash marker resolves prefix collisions without mixing cached meshes.
+fn case_geometry_directory(root:&Path,hash:&str)->Result<PathBuf> {
+    if hash.len()!=64 || !hash.bytes().all(|byte|byte.is_ascii_hexdigit()) {
+        return Err("Geometry cache hash is invalid.".into());
+    }
+    for length in [16,32,48,64] {
+        let name=format!("g-{}",&hash[..length]);
+        let directory=root.join(&name);
+        match fs::create_dir(&directory) {
+            Ok(())=>{
+                let mut marker=OpenOptions::new().write(true).create_new(true).open(directory.join(".geometry-hash"))?;
+                marker.write_all(hash.as_bytes())?;marker.flush()?;
+                return Ok(directory);
+            }
+            Err(error) if error.kind()==io::ErrorKind::AlreadyExists=>{
+                let metadata=fs::symlink_metadata(&directory)?;
+                if metadata.file_type().is_symlink() || !metadata.is_dir(){return Err("Geometry cache path must be a real directory.".into());}
+                let marker=directory.join(".geometry-hash");
+                if fs::symlink_metadata(&marker).is_ok_and(|value|value.is_file()&&!value.file_type().is_symlink())
+                    && fs::read_to_string(marker).is_ok_and(|value|value==hash){return Ok(directory);}
+            }
+            Err(error)=>return Err(error.into()),
+        }
+    }
+    Err("Could not allocate a distinct geometry cache directory.".into())
+}
+
 fn prepare_case_meshes(
     mesh_exe: &Path,
     root: &Path,
@@ -2601,10 +3101,7 @@ fn prepare_case_meshes(
                     reused.reused = true;
                     return Ok(reused);
                 }
-                let geometry_directory = ensure_real_child_directory(
-                    &case_mesh_root,
-                    &format!("geometry-{}", compiled.geometry_hash),
-                )?;
+                let geometry_directory = case_geometry_directory(&case_mesh_root,&compiled.geometry_hash)?;
                 fs::copy(
                     staging.join(&compiled.geo_name),
                     geometry_directory.join(&compiled.geo_name),
@@ -2981,7 +3478,8 @@ fn run_solver(
             }
             fs::write(
                 stderr_path,
-                "Solver completed without standard error output.\n",
+                "Solver completed without standard error output.
+",
             )?;
             0
         }
@@ -3093,7 +3591,8 @@ fn solver_failure(stdout: &Path, stderr: &Path, code: i32) -> Result<Failure> {
 }
 
 fn write_json_new(path: &Path, value: &Value) -> Result<()> {
-    let text = format!("{}\n", serde_json::to_string_pretty(value)?);
+    let text = format!("{}
+", serde_json::to_string_pretty(value)?);
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -3111,7 +3610,8 @@ fn write_json_replace(path: &Path, value: &Value) -> Result<()> {
         }
         return run_record_guard::write_scenario_record(path, value).map_err(Failure);
     }
-    let text = format!("{}\n", serde_json::to_string_pretty(value)?);
+    let text = format!("{}
+", serde_json::to_string_pretty(value)?);
     let temp = path.with_file_name(format!(
         ".{}.{}.tmp",
         path.file_name()
@@ -3186,13 +3686,73 @@ fn make_run_id(study: &str) -> String {
 mod study_route_tests {
     use super::*;
 
-    
+    #[test]
+    fn transient_history_preserves_case_time_and_complex_values() {
+        let model=json!({"model":{"variables":[{"symbol":"probe"},{"symbol":"energy"}]}});
+        let samples=vec![json!({"caseIndex":0,"sampleIndex":0,"timeSeconds":0.,"globalVariables":{"probe":{"re":1.,"im":-2.},"energy":{"re":3.,"im":0.}}}),
+            json!({"caseIndex":1,"sampleIndex":0,"timeSeconds":1e-12,"globalVariables":{"probe":{"re":4.,"im":5.},"energy":{"re":6.,"im":0.}}})];
+        assert_eq!(transient_history_csv(&model,&samples).unwrap(),"case_index,sample_index,t,probe_re,probe_im,energy_re,energy_im
+0,0,0,1,-2,3,0
+1,0,0.000000000001,4,5,6,0
+");
+        let mut incomplete=samples.clone();incomplete[0]["globalVariables"].as_object_mut().unwrap().remove("probe");
+        assert!(transient_history_csv(&model,&incomplete).is_err());
+        let duplicate=json!({"model":{"variables":[{"symbol":"a"},{"symbol":"a"}]}});
+        assert!(transient_history_csv(&duplicate,&samples).is_err());
+        assert_eq!(transient_history_csv(&json!({"model":{}}),&[json!({"caseIndex":0,"sampleIndex":0,"timeSeconds":0.})]).unwrap(),"case_index,sample_index,t
+0,0,0
+");
+    }
+
+    #[test]
+    fn transient_publication_validates_identity_before_creating_artifact() {
+        let directory=std::env::temp_dir().join(make_run_id("transient-publication"));
+        let source=directory.join("source");let output=directory.join("output");
+        fs::create_dir_all(&source).unwrap();fs::create_dir(&output).unwrap();
+        let name="case-000002-time-000001.json";
+        let mut sample=json!({"schema":"fullmeta-transient-field/1","studyId":"other","caseIndex":2,"sampleIndex":1,"timeSeconds":0.5});
+        fs::write(source.join(name),serde_json::to_vec(&sample).unwrap()).unwrap();
+        assert!(publish_transient_sample(&source,&output,"time",2,1,0.5).is_err());
+        assert!(!output.join(name).exists());
+        sample["studyId"]=json!("time");
+        let mut history_sample=sample.clone();history_sample["schema"]=json!("fullmeta-transient-history-sample/1");
+        fs::write(source.join(name),serde_json::to_vec(&history_sample).unwrap()).unwrap();
+        assert!(publish_transient_sample(&source,&output,"time",2,1,0.5).is_err());
+        fs::write(source.join(name),serde_json::to_vec(&sample).unwrap()).unwrap();
+        let artifact=publish_transient_sample(&source,&output,"time",2,1,0.5).unwrap();
+        assert_eq!(artifact,json!({"name":name,"studyId":"time","caseIndex":2,"sampleIndex":1,"timeSeconds":0.5}));
+        assert_eq!(serde_json::from_slice::<Value>(&fs::read(output.join(name)).unwrap()).unwrap(),sample);
+        assert!(publish_transient_sample(&source,&output,"time",2,1,0.5).is_err());
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn transient_case_staging_keeps_study_identity_and_checks_each_sample() {
+        let model=json!({"model":{"parameters":[{"symbol":"a","expression":"1"}],"study":[
+            {"id":"other","type":"stationary"},{"id":"time","type":"transient","parameterSweep":{"parameters":[{}]},"time":{"endTime":{"expression":"a","unit":"s"}}}]}});
+        let case=json!({"parameterOverrides":[{"symbol":"a","expression":"2"}]});
+        let staged=model_for_transient_case(&model,"time",&case).unwrap();
+        assert_eq!(staged["model"]["parameters"][0]["expression"],"2");
+        assert!(staged["model"]["study"][1].get("parameterSweep").is_none());
+        assert!(model["model"]["study"][1].get("parameterSweep").is_some());
+        assert!(model_for_transient_case(&model,"missing",&case).is_err());
+        let mut sample=json!({"schema":"fullmeta-transient-field/1","studyId":"time","caseIndex":2,"sampleIndex":1,"timeSeconds":1e-12});
+        assert!(validate_transient_sample(&sample,Some("time"),2,1,1e-12).is_ok());
+        assert!(validate_transient_sample(&sample,None,2,0,1e-12).is_err());
+        assert!(validate_transient_sample(&sample,Some("other"),2,1,1e-12).is_err());
+        sample["timeSeconds"]=json!(1.1e-12);
+        assert!(validate_transient_sample(&sample,Some("time"),2,1,1e-12).is_err());
+    }
 
     #[test]
     fn routes_by_study_and_declared_preparation() {
         assert_eq!(study_route("stationary", "stationaryPlan").unwrap(), StudyRoute::Stationary);
         assert_eq!(study_route("frequencyDomain", "frequencyPlan").unwrap(), StudyRoute::FrequencyPlan);
         assert_eq!(study_route("frequencyDomain", "configuredFrequencyRequest").unwrap(), StudyRoute::ConfiguredFrequency);
+        assert_eq!(study_route("transient", "transientPlan").unwrap(), StudyRoute::TransientPlan);
+        assert_eq!(study_route("eigenfrequency", "eigenfrequencyPlan").unwrap(), StudyRoute::EigenfrequencyPlan);
+        assert_eq!(study_route("propagationMode", "propagationModePlan").unwrap(), StudyRoute::PropagationModePlan);
+        assert!(study_route("transient", "frequencyPlan").is_err());
         assert!(study_route("stationary", "frequencyPlan").is_err());
         assert!(study_route("frequencyDomain", "stationaryPlan").is_err());
         assert!(study_route("frequencyDomain", "unknown").is_err());
@@ -3202,6 +3762,22 @@ mod study_route_tests {
 #[cfg(test)]
 mod mesh_cache_log_tests {
     use super::*;
+
+    #[test]
+    fn geometry_cache_prefix_collisions_keep_full_identity() {
+        let directory=std::env::temp_dir().join(make_run_id("cache-prefix"));
+        fs::create_dir(&directory).unwrap();
+        let first=format!("{}{}","a".repeat(16),"1".repeat(48));
+        let second=format!("{}{}","a".repeat(16),"2".repeat(48));
+        let a=case_geometry_directory(&directory,&first).unwrap();
+        assert_eq!(a,case_geometry_directory(&directory,&first).unwrap());
+        let b=case_geometry_directory(&directory,&second).unwrap();
+        assert_ne!(a,b);
+        assert_eq!(fs::read_to_string(a.join(".geometry-hash")).unwrap(),first);
+        assert_eq!(fs::read_to_string(b.join(".geometry-hash")).unwrap(),second);
+        assert!(case_geometry_directory(&directory,"invalid").is_err());
+        fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn matching_cache_hashes_do_not_make_an_empty_gmsh_log_reusable() {
@@ -3221,7 +3797,8 @@ mod mesh_cache_log_tests {
             // still must not reintroduce the completion failure on the next run.
             write_mesh_cache(&paths, "geometry", &report)?;
             assert!(read_valid_cache(&paths, "geometry")?.is_none());
-            fs::write(&paths.gmsh_log, b"Gmsh invocation: exit code 0\n")?;
+            fs::write(&paths.gmsh_log, b"Gmsh invocation: exit code 0
+")?;
             write_mesh_cache(&paths, "geometry", &report)?;
             assert!(read_valid_cache(&paths, "geometry")?.is_some());
             Ok(())

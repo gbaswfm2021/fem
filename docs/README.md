@@ -31,18 +31,33 @@ The application currently registers these profiles:
 
 | Profile ID | Physics | Formulations | Study type |
 | --- | --- | --- | --- |
-| `acoustic-2d` | [2D pressure acoustics](../fem-rust/docs/notes_acoustic2d.md) | `pressure` | Frequency domain |
-| `acoustic-3d` | [3D pressure acoustics](../fem-rust/docs/notes_acoustic3d.md) | `pressure` | Frequency domain |
-| `em-2d` | [2D electromagnetics](../fem-rust/docs/notes_em2d.md) | `Ez`, `Hz` | Frequency domain |
-| `em-3d` | [3D electromagnetics](../fem-rust/docs/notes_em3d.md) | `electric` | Frequency domain |
-| `elastic-2d` | [2D elasticity](../fem-rust/docs/notes_elastic2d.md) | `planeStress`, `planeStrain` | Frequency domain |
-| `elastic-3d` | [3D elasticity](../fem-rust/docs/notes_elastic3d.md) | `displacement` | Frequency domain |
-| `thermal-2d` | [2D heat conduction](../fem-rust/docs/notes_thermal2d.md) | `T` | Stationary |
-| `thermal-3d` | [3D heat conduction](../fem-rust/docs/therm3d.md) | `T` | Stationary |
+| `acoustic-2d` | [2D pressure acoustics](../fem-rust/docs/notes_acoustic2d.md) | `pressure` | Harmonic, Eigenfrequency, Propagation Mode, Transient |
+| `acoustic-3d` | [3D pressure acoustics](../fem-rust/docs/notes_acoustic3d.md) | `pressure` | Harmonic, Eigenfrequency, Transient |
+| `em-2d` | [2D electromagnetics](../fem-rust/docs/notes_em2d.md) | `Ez`, `Hz` | Harmonic, Eigenfrequency, Propagation Mode, Transient |
+| `em-3d` | [3D electromagnetics](../fem-rust/docs/notes_em3d.md) | `electric` | Harmonic, Eigenfrequency, Transient |
+| `elastic-2d` | [2D elasticity](../fem-rust/docs/notes_elastic2d.md) | `planeStress`, `planeStrain` | Harmonic, Eigenfrequency, Propagation Mode, Transient |
+| `elastic-3d` | [3D elasticity](../fem-rust/docs/notes_elastic3d.md) | `displacement` | Harmonic, Eigenfrequency, Transient |
+| `thermal-2d` | [2D heat conduction](../fem-rust/docs/notes_thermal2d.md) | `T` | Stationary, Eigenfrequency, Transient |
+| `thermal-3d` | [3D heat conduction](../fem-rust/docs/therm3d.md) | `T` | Stationary, Eigenfrequency, Transient |
+
+Propagation Mode is available for Acoustic 2D pressure, both full-polarization
+EM2D formulations, and the three-component plane-strain-parent Elastic 2D
+formulation. It fixes a real operating frequency and solves the complex
+longitudinal wavenumber `kz` directly. The Study supports a complex search shift,
+mode count, Krylov dimension, and residual tolerance; result fields are
+cross-sectional amplitudes with `exp(-i*kz*z)` dependence. The shared
+scenario-neutral implementation and its current element, material, and boundary
+limits are documented in the [propagation-mode implementation plan](../fem-rust/docs/implement_2d_propagation_mode_study.md).
 
 Thermal 3D uses first-order tetrahedra, material-wise constant isotropic
-conductivity, prescribed temperature or heat flux, and optional Domain Sources.
-Periodic conditions and spatially varying conductivity are not supported.
+conductivity, prescribed temperature or heat flux, optional Domain Sources,
+and zero-phase matched periodic conditions for stationary Studies. Spatially
+varying conductivity is not supported by the stationary adapter. The
+scenario-neutral sparse Transient Study is enabled for all eight scenarios;
+its equations and declarations are documented in the
+[transient contract](../fem-rust/docs/transient_study_contract.md). The thermal
+transient form requires a positive volumetric heat capacity and permits
+prescribed material expressions in space and time.
 
 The scenario registry selects `em-3d` as the default for new projects; an
 existing model keeps its stored profile ID. A declared option is not by itself

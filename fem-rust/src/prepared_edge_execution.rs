@@ -162,7 +162,7 @@ pub(crate) fn solve(case:&ConfiguredCase, package:&Value, mesh_text:&str, cache:
     let selections = plan.selections.as_ref().ok_or("Edge selection plan is required.")?;
     let source_by_cell = selections.uses_cell_map("domainSources", &case.mesh_map);
     let bound = mesh.bind_configured(case,selections,policy.get("selectionEntities").ok_or("Edge selection entities are required.")?)?;
-    let source_data = crate::domain_source::prepare(plan.domain_source.as_ref(), bound.get("domainSources").map(Vec::as_slice))?;
+    let source_data = crate::domain_source::prepare_routes(&plan.domain_sources, bound.get("domainSources").map(Vec::as_slice))?;
     let material = policy.get("material").ok_or("Edge material policy is required.")?;
     if material.get("sampling").and_then(Value::as_str) != Some("cellCentroid") { return Err("Unsupported edge material sampling policy.".into()); }
     let collection = material.get("collection").and_then(Value::as_str).ok_or("Edge material collection is required.")?;
@@ -171,7 +171,8 @@ pub(crate) fn solve(case:&ConfiguredCase, package:&Value, mesh_text:&str, cache:
         boolean(material,"fallbackToRow")?)?;
     let samples = mesh.centroid_materials(&case.profile,&assignments,&case.parameters,case.frequency_hz,&plan)?;
     let quadrature = mesh.volume_points(|element,_,_| Ok(samples[element].coefficients.clone()))?;
-    let source_samples = if let Some((load_plan, sources)) = &source_data {
+    let mut source_samples = Vec::with_capacity(source_data.len());
+    for (_, load_plan, sources) in &source_data {
         let mut all = Vec::with_capacity(quadrature.len());
         for (element, points) in quadrature.iter().enumerate() {
             let mut sampled = Vec::with_capacity(points.len());
@@ -185,8 +186,8 @@ pub(crate) fn solve(case:&ConfiguredCase, package:&Value, mesh_text:&str, cache:
             }
             all.push(sampled);
         }
-        Some(all)
-    } else { None };
+        source_samples.push(all);
+    }
     let contracts = package.get("boundaryInputs").and_then(|v|v.get(&case.formulation)).ok_or("Edge boundary inputs are required.")?;
     let boundaries = crate::prepared_edge::compile_boundaries(&bound,contracts,policy.get("boundaryCollections").ok_or("Edge boundary collection policies are required.")?,&plan)?;
     let periodic_policy = policy.get("periodic").ok_or("Edge periodic policy is required.")?;
@@ -234,8 +235,10 @@ pub(crate) fn solve(case:&ConfiguredCase, package:&Value, mesh_text:&str, cache:
     );
     let problem = crate::nedelec_driver::Problem { prepared:Some(&prepared), ..problem };
     let matrix_assembly_started = Instant::now();
-    let system = problem.assemble_with_volume_loads(&mut cache.assembly,
-        source_data.as_ref().zip(source_samples.as_ref()).map(|((load_plan, _), values)| (&load_plan.form, values.as_slice())))?;
+    let volume_loads = source_data.iter().zip(&source_samples)
+        .map(|((_, load_plan, _), values)| (&load_plan.form, values.as_slice()))
+        .collect::<Vec<_>>();
+    let system = problem.assemble_with_volume_load_routes(&mut cache.assembly, &volume_loads)?;
     println!(
         "  profile: generic sparse matrix assembly and constraints {:.3}s",
         matrix_assembly_started.elapsed().as_secs_f64()
@@ -249,7 +252,8 @@ pub(crate) fn solve(case:&ConfiguredCase, package:&Value, mesh_text:&str, cache:
     let solution = crate::nedelec_driver::Solution { real,imaginary,residual };
     let declarations = crate::model_schema::field_variables_for_profile(&case.profile,Some(&case.formulation),false)?;
     let output = crate::prepared_edge_output::EdgeOutput::new(&mesh,&problem,&solution,&samples,
-        policy.get("fieldFamilies").ok_or("Edge field families are required.")?,&declarations)?;
+        policy.get("fieldFamilies").ok_or("Edge field families are required.")?,&declarations,
+        &source_data,&case.parameters,case.frequency_hz,source_by_cell)?;
     let fields = if case.field_files { output.nodal_fields()? } else { HashMap::new() };
     let configured = crate::configured_integration::ConfiguredIntegration::from_parts(&case.configuration,&case.mesh_map,&mesh,
         &crate::model_schema::engine_capabilities()?,policy.get("integrationSelectionKeys").ok_or("Integration selection ID keys are required.")?)?;

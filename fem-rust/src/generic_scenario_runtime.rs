@@ -82,18 +82,35 @@ pub(crate) fn run(kind: &str, profile: &str, arguments: &[String]) -> Result<i32
     run_validated(&package, kind, profile, arguments)
 }
 
+fn preparation_for_request<'a>(package:&'a Value,profile:&str,request:&Value)->Result<&'a str,String> {
+    let study=request.get("studyType").map(|value|value.as_str().filter(|v|matches!(*v,"stationary"|"frequencyDomain"|"transient"|"eigenfrequency"|"propagationMode"))
+        .ok_or("Solver request has an unsupported Study type.")).transpose()?;
+    let capabilities=package.pointer("/schemaDocument/x-fem-capabilities").ok_or("Scenario Study capabilities are missing.")?;
+    if let Some(study)=study {
+        let default=package.pointer("/schemaDocument/x-fem-scenario/studyType").and_then(Value::as_str);
+        let typed=capabilities.pointer("/study/preparationByStudyTypeByProfile").and_then(|v|v.get(profile)).and_then(|v|v.get(study));
+        if let Some(entry)=typed {return entry.get("kind").and_then(Value::as_str).ok_or("Study preparation kind is required.".into());}
+        if default!=Some(study) {return Err(format!("Scenario {profile:?} has no preparation for Study type {study:?}."));}
+    }
+    capabilities.pointer("/study/preparationByProfile").and_then(|v|v.get(profile)).and_then(|v|v.get("kind"))
+        .and_then(Value::as_str).ok_or("Scenario preparation kind is required for generic execution.".into())
+}
+
 fn run_validated(package: &Value, kind: &str, profile: &str, arguments: &[String]) -> Result<i32, String> {
-    let preparation = || {
-        package
-            .pointer("/schemaDocument/x-fem-capabilities/study/preparationByProfile")
-            .and_then(|v| v.get(profile))
-            .and_then(|v| v.get("kind"))
-            .and_then(Value::as_str)
-            .ok_or("Scenario preparation kind is required for generic execution.")
-    };
     match arguments {
         [command, request] if command == "--solve" => {
-            match (kind, preparation()?) {
+            let content=std::fs::read(request).map_err(|e|format!("Could not read solver request: {e}"))?;
+            let request_json:Value=serde_json::from_slice(&content).map_err(|e|format!("Invalid solver request JSON: {e}"))?;
+            match (kind, preparation_for_request(package,profile,&request_json)?) {
+                (_, "transientPlan") => crate::transient_execution::run_request(
+                    std::path::Path::new(request), profile,
+                )?,
+                (_, "eigenfrequencyPlan") => crate::eigenfrequency_execution::run_request(
+                    std::path::Path::new(request), profile,
+                )?,
+                (_, "propagationModePlan") => crate::propagation_mode_execution::run_request(
+                    std::path::Path::new(request), profile,
+                )?,
                 ("scalarSimplexP1", "stationaryPlan") => crate::prepared_scalar_execution::run_request(
                     std::path::Path::new(request),
                     profile,
@@ -119,7 +136,9 @@ fn run_validated(package: &Value, kind: &str, profile: &str, arguments: &[String
             Ok(0)
         }
         [command, manifest] if command == "--sequence" => {
-            match (kind, preparation()?) {
+            let content=std::fs::read(manifest).map_err(|e|format!("Could not read solver sequence manifest: {e}"))?;
+            let manifest_json:Value=serde_json::from_slice(&content).map_err(|e|format!("Invalid solver sequence manifest JSON: {e}"))?;
+            match (kind, preparation_for_request(package,profile,&manifest_json)?) {
                 ("scalarSimplexP1", "frequencyPlan") => crate::prepared_frequency_execution::run_sequence(
                     std::path::Path::new(manifest),
                     profile,
@@ -154,6 +173,21 @@ fn run_validated(package: &Value, kind: &str, profile: &str, arguments: &[String
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn request_study_type_selects_declared_preparation_without_falling_back() {
+        let package=json!({"schemaDocument":{"x-fem-scenario":{"studyType":"frequencyDomain"},"x-fem-capabilities":{"study":{
+            "preparationByProfile":{"profile":{"kind":"frequencyPlan"}},
+            "preparationByStudyTypeByProfile":{"profile":{"transient":{"kind":"transientPlan"}}}}}}});
+        assert_eq!(preparation_for_request(&package,"profile",&json!({})).unwrap(),"frequencyPlan");
+        assert_eq!(preparation_for_request(&package,"profile",&json!({"studyType":"frequencyDomain"})).unwrap(),"frequencyPlan");
+        assert_eq!(preparation_for_request(&package,"profile",&json!({"studyType":"transient"})).unwrap(),"transientPlan");
+        let mut package=package;
+        package["schemaDocument"]["x-fem-capabilities"]["study"]["preparationByStudyTypeByProfile"]["profile"]["eigenfrequency"]=
+            json!({"kind":"eigenfrequencyPlan"});
+        assert_eq!(preparation_for_request(&package,"profile",&json!({"studyType":"eigenfrequency"})).unwrap(),"eigenfrequencyPlan");
+        assert!(preparation_for_request(&package,"profile",&json!({"studyType":"stationary"})).is_err());
+        assert!(preparation_for_request(&package,"profile",&json!({"studyType":"bogus"})).is_err());
+    }
 
     #[test]
     fn validates_capability_and_package_identity_without_claiming_a_runner() {
@@ -215,7 +249,7 @@ mod tests {
             &["--sequence".into(), "cases.json".into()]
         )
         .unwrap_err()
-        .contains("does not support"));
+        .contains("Could not read solver sequence manifest"));
         assert!(run_validated(&package, "vectorSimplexP1", "selected-profile", &arguments)
             .unwrap_err().contains("does not support"));
         assert!(

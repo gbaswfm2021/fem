@@ -4,6 +4,11 @@ import { copyFileSync, mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { root, run, target, toolchain } from './common.mjs';
 import { generateScenarioIndex } from './scenario-index.mjs';
+import { syncThermalValidation } from './sync-thermal-validation.mjs';
+import { syncBoundaryCountValidation } from './sync-boundary-count-validation.mjs';
+import { syncFormulationOrderValidation } from './sync-formulation-order-validation.mjs';
+import { syncVectorComponentGuards } from './sync-vector-component-guards.mjs';
+import { syncTransientOutputValidation } from './sync-transient-output-validation.mjs';
 
 const args = new Set(process.argv.slice(2));
 for (const arg of args) if (!['--offline', '--stage'].includes(arg)) throw new Error(`Unknown option: ${arg}`);
@@ -12,6 +17,11 @@ const targetDir = resolve(root, 'target/fem-local-native');
 const output = resolve(root, 'target/fem-local-bundle', target, 'release');
 const cargo = process.env.CARGO || 'cargo';
 const env = { ...process.env, CARGO_TARGET_DIR: targetDir };
+syncThermalValidation();
+syncBoundaryCountValidation();
+syncFormulationOrderValidation();
+syncVectorComponentGuards();
+syncTransientOutputValidation();
 generateScenarioIndex(resolve(root, 'src/scenarios'));
 for (const manifest of [
   'platform/core-rust/Cargo.toml',

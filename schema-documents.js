@@ -81,7 +81,7 @@ export async function loadModelSchema(schemaUrl, applicationId) {
   const { schema, scenarioDocuments } = composeScenarioContracts(baseSchema, packages);
   const documents = [...sources.slice(1).map(source => source.document), ...scenarioDocuments];
   configureModelSchema(schema, documents);
-  active = { schema, sources, documents };
+  active = { schema, sources, documents, scenarioContracts: packages };
   return active;
 }
 

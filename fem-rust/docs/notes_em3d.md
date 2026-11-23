@@ -114,9 +114,9 @@ Verify against an appropriate analytic wave or cavity case, energy/phase convent
 
 For example, in a homogeneous lossless medium a +x plane wave with `E = E0 exp(-i k x) z_hat` has `H = -(E0/eta) exp(-i k x) y_hat`, where `k = omega sqrt(mu epsilon)` and `eta = sqrt(mu/epsilon)`. With compatible boundary and periodic data, compare the complex field signs and phase with this reference as the mesh and approximation order are refined.
 
-## Future eigenfrequency study
+## Lossless second-order frequency eigenproblem (reference)
 
-An eigenfrequency Study is not implemented. For a source-free cavity with zero conductivity and positive frequency-independent `epsilon` and `mu`, the electric wave equation in section 1 becomes
+This familiar frequency-domain reduction is retained as an analytical reference, not as the implemented Study contract. The universal eigenfrequency Study below uses the first-order transient state system and solves directly for the complex temporal rate `s`. For a source-free cavity with zero conductivity and positive frequency-independent `epsilon` and `mu`, the electric wave equation in section 1 becomes
 
 ```math
 \nabla\times(\mu^{-1}\nabla\times\mathbf E)
@@ -140,10 +140,101 @@ M_{ij}=\int_\Omega\epsilon\,\mathbf W_i\cdot\mathbf W_j\,dV.
 
 Here `W_i` are the Nédélec basis functions and `M` discretizes the permittivity-weighted field operator. Homogeneous PEC constraints apply to both matrices. A nonzero eigenvector is a mode shape, and for positive eigenvalues `f = sqrt(lambda)/(2 pi)`. The curl–curl operator has a gradient-field nullspace, so a future solver must distinguish zero and spurious modes from physical modes; magnetic-field recovery divides by `omega` and does not apply at zero. Conductivity, impedance or frequency-dependent coefficients require a more general eigenproblem.
 
-## Domain Source
+## Transient study
 
-The current implementation supports multiple Domain Source entries under PHYSICS, each with an existing domain selection and expressions in spatial coordinates. Overlapping entries add; no entry means zero source. The project model stores selections and expressions, while the scenario contract declares their physical interpretation and weak-form contribution. This implementation is undergoing verification; its availability in a deployed installation depends on compatible FEM and platform runtimes.
+The [scenario JSON](../src/scenarios/em3d.json) advertises transient Studies using oriented tetrahedral edge spaces of orders 1 and 2. The shared runner binds field blocks, materials, sources, initial fields and time snapshots; tangential electric moments, magnetic flux and impedance facet terms use the declared laws. Synthetic native coordinator cases exercise nonzero sources, time-dependent material and prescribed tangential fields. Fixed zero-phase periodic routing is supported within its matching-facet constraints. Nonzero legacy scalar Neumann data remains unsupported; live editor and deployed-host workflows still need visible verification.
 
-For the electric-field formulation, electric current density J has three components in A/m^2 and contributes `-i omega integral(test · J) dV` under the stated phasor convention. The load is assembled against the declared edge-element test basis.
+The native `scenario_operators_obey_physical_energy_and_heat_balances` test checks the assembled Maxwell energy identity for the 3D edge formulation at both supported Nédélec orders. Spatial refinement checks both mesh families; the perturbed-interior sequence uses 2, 4 and 6 divisions for runtime.
 
-See the [implementation plan](implement_domain_sources.md) for expression evaluation, generic assembly and verification requirements.
+The transient result's nodal electric and magnetic vectors are visualization averages of the incident element traces. Periodic constraints apply to the oriented tangential degrees of freedom; these averaged nodal vectors need not match pointwise across a periodic boundary. They should not be used as a direct check of periodic trace continuity.
+
+For scalar instantaneous permittivity $\epsilon$, permeability $\mu$, conductivity $\sigma$, electric current density $\mathbf J_{e,s}$ and equivalent magnetic current density $\mathbf J_{m,s}$, the supported 3D equation is
+
+```math
+\partial_t(\epsilon\mathbf E)+\sigma\mathbf E-\nabla\!\times\mathbf H=-\mathbf J_{e,s},
+\qquad
+\partial_t(\mu\mathbf H)+\nabla\!\times\mathbf E=-\mathbf J_{m,s}.
+```
+
+The corresponding sparse block equation is
+
+```math
+\frac{d}{dt}\!\left[\begin{pmatrix}M_\epsilon&0\\0&M_\mu\end{pmatrix}
+\begin{pmatrix}\mathbf E\\\mathbf H\end{pmatrix}\right]
++\begin{pmatrix}M_\sigma&-C_H\\C_E&0\end{pmatrix}
+\begin{pmatrix}\mathbf E\\\mathbf H\end{pmatrix}
+=\begin{pmatrix}-\mathbf j_{e,s}\\-\mathbf j_{m,s}\end{pmatrix}.
+```
+
+Both constitutive derivatives are product derivatives when coefficients depend on time. The state fields use oriented edge degrees of freedom; nodal output values are visualization averages of element traces, not nodal degrees of freedom. Initial fields must satisfy applicable constraints. Time-domain inputs are real, not harmonic phasors; dispersive or memory-dependent materials require causal constitutive laws and potentially auxiliary variables.
+
+The [shared transient reference](transient_study_contract.md) documents the component equations, weak forms, units, boundary and result contracts, sparse time step, and current limitations.
+
+## Domain Source and Additional Domain Source
+
+These are two distinct PHYSICS feature types. Domain Source is electric current density $\mathbf J_e$ with components (J_ex, J_ey, J_ez) in A/m²; it enters Ampere's equation. Additional Domain Source is equivalent magnetic current density $\mathbf J_m$ with components (J_mx, J_my, J_mz) in V/m²; it enters Faraday's equation. The equivalent magnetic source is often written $\mathbf M$ in dual-source Maxwell notation; here it is an impressed source, not material magnetization. Each feature has its own selected domains and expressions, and both may be present in the same model. Multiple entries of either type add on overlapping domains; absence of one type sets only that source to zero. Expressions use physical coordinates and model parameters; harmonic evaluations provide freq, frequency and omega, while transient evaluations provide $t$ in seconds.
+
+For the electric-field formulation, the harmonic electric-current load is $-i\omega\int\overline{\mathbf F}\cdot\mathbf J_e\,dV$, assembled against the declared edge-element test basis.
+
+With the package convention $\exp(+i\omega t)$, the first-order equations with both source types are
+
+~~~text
+epsilon * partial_t(E) + sigma * E - curl(H) = -J_e
+mu * partial_t(H) + curl(E) = -J_m
+~~~
+
+Eliminating $\mathbf H$ gives the E-only equation
+
+~~~text
+curl(mu^-1 * curl(E)) + (-omega^2 * epsilon + i*omega*sigma) * E
+    = -i*omega*J_e - curl(mu^-1 * J_m)
+~~~
+
+For an electric test function $\mathbf F$, the corresponding volume load is
+
+~~~text
+-i*omega * integral(conj(F) dot J_e) dV
+- integral(curl(conj(F)) dot (mu^-1 * J_m)) dV
+~~~
+
+The magnetic contribution is assembled with the curl of the same Nédélec test basis; no spatial derivative of the user expression is formed. The recovered harmonic field is
+
+~~~text
+H = i/(omega*mu) * (curl(E) + J_m)
+~~~
+
+Thus result fields and integration expressions include the magnetic-source contribution. In transient studies the second equation is $\partial_t(\mu\mathbf H)+\nabla\times\mathbf E=-\mathbf J_{m,s}$, and $\mathbf J_m$ is routed to the H test equation. An absent Additional Domain Source contributes zero and takes no expression-sampling path.
+
+See the [EM3D JSON contract](../src/scenarios/em3d.json) for component labels, units and source routes, and the [implementation plan](implement_domain_sources.md) for generic assembly details.
+
+## Boundary vector count validation
+
+Enabled Cartesian Dirichlet and Neumann vectors must have exactly three components. Semantic model validation checks `fieldValues` and legacy array values supplied through the fallback `value` path from the scenario’s declared boundary input; scalar values remain supported and the solver retains its own check. Enabled vectors with an invalid type or component count receive a semantic validation error. To repair one in the editor, turn off “Specify field components” and turn it back on to recreate the declared defaults; this reset replaces the existing components. Disabled conditions skip these semantic checks.
+
+
+
+## Universal Eigenfrequency Study
+
+The eigenfrequency Study is implemented in the shared FEM runtime and declared by all eight scenario packages. Each package points to the same generic preparation and execution route; its existing transient form contract supplies the state layout, derivative terms, spatial operators, materials, and boundary laws. The assembler does not branch on scenario ID.
+
+For the selected formulation, stack its declared transient fields into $u$. With coefficients independent of time and the unknown eigenvalue, its source-free homogeneous transient system has the form
+
+```math
+M\,\dot u + K u = 0.
+```
+
+A modal solution $u(t)=\phi e^{st}$ gives the generalized sparse pencil
+
+```math
+(K+sM)\phi=0,\qquad \phi\ne0.
+```
+
+The eigenvalue is the complex temporal rate $s$ itself, in inverse seconds. The implementation does not square it, assume a Hermitian pencil, or impose reciprocal $+/-$ mode pairing. Under the application’s $e^{+i\omega t}$ harmonic convention, the derived complex frequency is $f_c=-i s/(2\pi)$. The UI shift is described as $s^{-1}$; its persisted unit token is $\mathrm{Hz}$, which has the same SI dimension and scale in the current legacy host.
+
+The shared sparse solver uses shift-invert Arnoldi and sparse shifted solves. It applies homogeneous essential constraints and declared periodic reductions to both operators, discards infinite descriptor modes, checks the generalized residual, normalizes each mode, and records the parameter-case and mesh identity. Excitation terms are omitted: package-declared volume sources, prescribed natural loads, and incident fields are removed before the modal assembly. Essential constraints and homogeneous boundary operators, such as impedance terms, are retained.
+
+Spatially varying coefficients and parameter sweeps are supported when each case resolves to a linear time-invariant operator. Coefficients or boundary data depending on time, frequency, the eigenvalue, or the unknown state are outside this Study’s contract. The reusable nodal adapter currently supports simplex P1; the oriented tetrahedral edge adapter supports orders 1 and 2. A requested element order outside those adapters is not supported by the modal runner.
+
+For thermal scenarios, $s$ describes diffusion decay; a mode need not have an oscillatory frequency. The planned 2D fixed-frequency propagation Study with eigenvalue $k_z$ remains a distinct problem.
+
+Automated checks cover the generic complex nonsymmetric pencil, descriptor infinite-mode filtering, load removal and boundary-operator retention across all eight packages, eigenfrequency preparation, UI/schema declarations, and one-simplex assembly-to-modal-solve smoke cases for each advertised package/formulation adapter (generalized residual below `1e-7`). The full native Rust suite passes: 315 passed, 0 failed, 3 ignored; the 12 targeted FEM Node tests also pass, including modal result selection and eigenfrequency declaration/gating for all eight packages. The FEM release executable and frontend builds succeed. Structured mesh-reference checks cover rigid-cavity acoustic modes in 2D and 3D, both EM2D polarizations, EM3D PEC modes with edge orders 1 and 2, thermal decay rates in 2D and 3D, and elastic plane-stress/plane-strain plus 3D periodic-longitudinal cases. Acoustic and thermal constant zero modes survive result snapshotting. A nontrivial 2D thermal smoke model in the live local FEM editor (31 nodes, 44 triangles) passed preparation and completed six eigenfrequency modes in 15.474 s, with the run recorded as completed. This confirms the local UI-to-native-solver path for thermal 2D; rendered modal fields and the other scenario UIs remain to be verified. The older host on port 8766 loaded the FEM app, but its Study menu exposes only Add Stationary study, so it cannot create an eigenfrequency step until it receives the updated FEM application schema/UI; runner compatibility there remains unverified. See the [universal implementation plan](implement_universal_eigenfrequency_study.md).

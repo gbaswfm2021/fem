@@ -140,9 +140,9 @@ Before trusting the plate response, verify rigid translation and rotation produc
 
 The scenario provides harmonic solves, not an eigenfrequency Study. Compare peaks and their complex field patterns with a separate free-plate reference, accounting for finite damping and source symmetry. A successful sweep alone does not establish plate bending accuracy.
 
-## Future eigenfrequency study
+## Lossless second-order frequency eigenproblem (reference)
 
-An eigenfrequency Study is not implemented. With no body force or boundary drive, zero density loss, and frequency-independent elastic properties and density, the momentum equation in section 1 becomes
+This familiar frequency-domain reduction is retained as an analytical reference, not as the implemented Study contract. The universal eigenfrequency Study below uses the first-order transient state system and solves directly for the complex temporal rate `s`. With no body force or boundary drive, zero density loss, and frequency-independent elastic properties and density, the momentum equation in section 1 becomes
 
 ```math
 -\nabla\cdot\boldsymbol\sigma(\mathbf u)=\lambda\rho\mathbf u,
@@ -167,10 +167,87 @@ M_{ij}=\int_\Omega\rho\,\mathbf N_i\cdot\mathbf N_j\,dV.
 
 Here `N_i` are vector displacement basis functions, `C` is the elastic stiffness tensor, and `M` is the consistent density-weighted mass matrix. Apply homogeneous displacement constraints to both matrices; a free connected body has six rigid-body zero modes. For positive eigenvalues, `f = sqrt(lambda)/(2 pi)`. Loss, impedance or frequency-dependent coefficients require a more general eigenproblem. Mode shapes have arbitrary amplitude and do not by themselves give a driven response.
 
+## Transient study
+
+The [scenario JSON](../src/scenarios/elastic3d.json) advertises transient Studies. The shared runner binds displacement and velocity fields, space/time-dependent materials, body forces, initial fields, prescribed displacement, traction and instantaneous impedance boundaries, and samples declared tensor stress outputs. Synthetic native coordinator cases exercise nonzero forces and space/time-dependent density. Initial rates are checked for supported differentiable traces; unsupported initial derivatives are rejected. Live editor and deployed-host workflows still need visible verification. Nonzero harmonic loss requires a separately declared causal time-domain law.
+
+The native `scenario_operators_obey_physical_energy_and_heat_balances` test checks the assembled 3D kinetic-plus-strain energy identity. Spatial refinement checks structured and perturbed-interior simplex meshes.
+
+When this Study is present, the scenario enables its declared global-variable, pointwise-variable, integration-operator and parameter-sweep controls. Requested times can produce a checked global history CSV, with field snapshots optional; see [the shared transient contract](transient_study_contract.md) for output and supported limits.
+
+For displacement $\mathbf u$, velocity $\mathbf v$, density $\rho$, body force density $\mathbf f$, and instantaneous isotropic stress $\boldsymbol\sigma(\mathbf u)$, the declared first-order system is
+
+```math
+\dot{\mathbf u}-\mathbf v=0,\qquad
+\partial_t(\rho\mathbf v)-\nabla\!\cdot\boldsymbol\sigma(\mathbf u)=\mathbf f.
+```
+
+The density derivative is a product derivative when density depends on time. With $M_0$ the unweighted nodal mass, $M_\rho$ the density-weighted mass, and $K_\sigma$ the declared elasticity operator, the sparse block equation is
+
+```math
+\begin{pmatrix}M_0&0\\0&0\end{pmatrix}
+\begin{pmatrix}\dot{\mathbf u}\\\dot{\mathbf v}\end{pmatrix}
++\frac{d}{dt}\!\left[\begin{pmatrix}0&0\\0&M_\rho\end{pmatrix}
+\begin{pmatrix}\mathbf u\\\mathbf v\end{pmatrix}\right]
++\begin{pmatrix}0&-M_0\\K_\sigma&0\end{pmatrix}
+\begin{pmatrix}\mathbf u\\\mathbf v\end{pmatrix}
+=\begin{pmatrix}0\\\mathbf f+\mathbf f_\Gamma\end{pmatrix}.
+```
+
+The JSON maps Domain Source to body force density in N/m³ and traction to the momentum load. Its instantaneous impedance law $\boldsymbol\sigma\mathbf n=-Z\mathbf v$ adds $Z$ to the boundary velocity block; complex or frequency-dependent impedance requires a separate causal time-domain model. A prescribed displacement $\mathbf g(t)$ also constrains velocity in each backward-Euler step to $[\mathbf g(t_n)-\mathbf g(t_{n-1})]/\Delta t$. Initial displacement is checked against the prescribed value, and initial velocity is checked against the continuous boundary rate when that derivative is supported by the expression evaluator; unsupported derivatives are rejected. The 3D formulation uses all three displacement components. Time-domain inputs are real, not harmonic phasors.
+
+The [shared transient reference](transient_study_contract.md) records the weak forms, coefficient laws, boundary and result contracts, sparse time step, and required verification.
+
 ## Domain Source
 
-The current implementation supports multiple Domain Source entries under PHYSICS, each with an existing domain selection and expressions in spatial coordinates. Overlapping entries add; no entry means zero source. The project model stores selections and expressions, while the scenario contract declares their physical interpretation and weak-form contribution. This implementation is undergoing verification; its availability in a deployed installation depends on compatible FEM and platform runtimes.
+The current implementation supports Domain Source and Additional Domain Source as separate PHYSICS feature types. Each entry has its own domain selection and expression components; multiple entries of either type add, including on overlapping selections, while an absent type contributes zero. Expressions are sampled at volume quadrature points using physical coordinates and model parameters. Where harmonic studies are supported, their evaluations additionally provide `freq`, `frequency`, and `omega`; transient studies additionally provide time `t` in seconds. The scenario JSON declares each type’s physical meaning, units, component order and weak-form route. This implementation is undergoing verification; its availability in a deployed installation depends on compatible FEM and platform runtimes.
 
 The source is a three-component body-force density `f` in N/m^3, integrated over the selected volume. It contributes `integral(test · f) dV` and is distinct from a surface traction.
 
 See the [implementation plan](implement_domain_sources.md) for expression evaluation, generic assembly and verification requirements.
+
+## Boundary vector count validation
+
+Enabled Cartesian displacement and traction vectors must each have exactly three components. Semantic model validation checks the primary `fieldValues` count from the scenario’s declared boundary input; the solver retains its own check. Enabled vectors with an invalid type or component count receive a semantic validation error. To repair one in the editor, turn off “Specify field components” and turn it back on to recreate the declared defaults; this reset replaces the existing components. Disabled conditions skip these semantic checks.
+
+
+## Additional Domain Source
+
+`additionalDomainSource` is a prescribed eigenstress **S** in the elastic constitutive equation, not a body force. It accepts the nine row-major tensor components `(S_xx, S_xy, S_xz, S_yx, S_yy, S_yz, S_zx, S_zy, S_zz)` in Pa. Since the strain test is symmetric, only the symmetric part of **S** contributes. The existing `domainSource` remains body-force density in N/m³.
+
+~~~text
+epsilon(u) = sym(grad(u))
+sigma(u) = C : epsilon(u) - S
+partial_t(u) = velocity
+rho * partial_t(velocity) - div(sigma(u)) = body_force
+
+Additional weak load: integral(sym(grad(test)) : S) dV
+~~~
+
+The transient solver evolves displacement and velocity in this first-order state form. In that system the eigenstress is a load on the momentum equation, so the JSON routes its symmetric-gradient load to the velocity test field. The JSON declares tensor component order, units, and the symmetric-gradient load route used by harmonic and transient studies. The [elastic 3D contract](../src/scenarios/elastic3d.json) supplies that route without an elasticity-specific assembler branch.
+
+## Universal Eigenfrequency Study
+
+The eigenfrequency Study is implemented in the shared FEM runtime and declared by all eight scenario packages. Each package points to the same generic preparation and execution route; its existing transient form contract supplies the state layout, derivative terms, spatial operators, materials, and boundary laws. The assembler does not branch on scenario ID.
+
+For the selected formulation, stack its declared transient fields into $u$. With coefficients independent of time and the unknown eigenvalue, its source-free homogeneous transient system has the form
+
+```math
+M\,\dot u + K u = 0.
+```
+
+A modal solution $u(t)=\phi e^{st}$ gives the generalized sparse pencil
+
+```math
+(K+sM)\phi=0,\qquad \phi\ne0.
+```
+
+The eigenvalue is the complex temporal rate $s$ itself, in inverse seconds. The implementation does not square it, assume a Hermitian pencil, or impose reciprocal $+/-$ mode pairing. Under the application’s $e^{+i\omega t}$ harmonic convention, the derived complex frequency is $f_c=-i s/(2\pi)$. The UI shift is described as $s^{-1}$; its persisted unit token is $\mathrm{Hz}$, which has the same SI dimension and scale in the current legacy host.
+
+The shared sparse solver uses shift-invert Arnoldi and sparse shifted solves. It applies homogeneous essential constraints and declared periodic reductions to both operators, discards infinite descriptor modes, checks the generalized residual, normalizes each mode, and records the parameter-case and mesh identity. Excitation terms are omitted: package-declared volume sources, prescribed natural loads, and incident fields are removed before the modal assembly. Essential constraints and homogeneous boundary operators, such as impedance terms, are retained.
+
+Spatially varying coefficients and parameter sweeps are supported when each case resolves to a linear time-invariant operator. Coefficients or boundary data depending on time, frequency, the eigenvalue, or the unknown state are outside this Study’s contract. The reusable nodal adapter currently supports simplex P1; the oriented tetrahedral edge adapter supports orders 1 and 2. A requested element order outside those adapters is not supported by the modal runner.
+
+For thermal scenarios, $s$ describes diffusion decay; a mode need not have an oscillatory frequency. The planned 2D fixed-frequency propagation Study with eigenvalue $k_z$ remains a distinct problem.
+
+Automated checks cover the generic complex nonsymmetric pencil, descriptor infinite-mode filtering, load removal and boundary-operator retention across all eight packages, eigenfrequency preparation, UI/schema declarations, and one-simplex assembly-to-modal-solve smoke cases for each advertised package/formulation adapter (generalized residual below `1e-7`). The full native Rust suite passes: 315 passed, 0 failed, 3 ignored; the 12 targeted FEM Node tests also pass, including modal result selection and eigenfrequency declaration/gating for all eight packages. The FEM release executable and frontend builds succeed. Structured mesh-reference checks cover rigid-cavity acoustic modes in 2D and 3D, both EM2D polarizations, EM3D PEC modes with edge orders 1 and 2, thermal decay rates in 2D and 3D, and elastic plane-stress/plane-strain plus 3D periodic-longitudinal cases. Acoustic and thermal constant zero modes survive result snapshotting. A nontrivial 2D thermal smoke model in the live local FEM editor (31 nodes, 44 triangles) passed preparation and completed six eigenfrequency modes in 15.474 s, with the run recorded as completed. This confirms the local UI-to-native-solver path for thermal 2D; rendered modal fields and the other scenario UIs remain to be verified. The older host on port 8766 loaded the FEM app, but its Study menu exposes only Add Stationary study, so it cannot create an eigenfrequency step until it receives the updated FEM application schema/UI; runner compatibility there remains unverified. See the [universal implementation plan](implement_universal_eigenfrequency_study.md).

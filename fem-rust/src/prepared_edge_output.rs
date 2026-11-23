@@ -18,6 +18,10 @@ pub(crate) struct EdgeOutput<'a, 'p> {
     samples: &'a [CellMaterialSample],
     projection: Vec<field_output::FieldProjection>,
     families: HashMap<String, Family>,
+    domain_sources: &'a [(String, &'a crate::domain_source::DomainSourcePlan, crate::domain_source::DomainSources)],
+    parameters: &'a HashMap<String, crate::model_expression::Scalar>,
+    frequency: f64,
+    source_by_cell: bool,
 }
 
 
@@ -30,11 +34,16 @@ impl<'a, 'p> EdgeOutput<'a, 'p> {
     /// `recovered`. Symbols and model-axis components remain schema-driven.
     pub(crate) fn new(mesh: &'a PreparedEdgeMesh, problem: &'a Problem<'p>, solution: &'a Solution,
         samples: &'a [CellMaterialSample], field_families: &Value,
-        declarations: &[crate::model_schema::FieldVariable]) -> Result<Self, String> {
+        declarations: &[crate::model_schema::FieldVariable],
+        domain_sources: &'a [(String, &'a crate::domain_source::DomainSourcePlan, crate::domain_source::DomainSources)],
+        parameters: &'a HashMap<String, crate::model_expression::Scalar>, frequency: f64, source_by_cell: bool) -> Result<Self, String> {
         problem.recovery.require_shape(3, 3)?;
         problem.recovery.require_policy("cellCentroid", "nodalArithmeticMeanAndPoint")?;
         if samples.len() != mesh.cells.len() || problem.tets != mesh.cells.as_slice() || problem.nodes != mesh.nodes.as_slice() {
             return Err("Edge output mesh, problem and centroid samples must match.".into());
+        }
+        if !frequency.is_finite() || frequency <= 0. {
+            return Err("Edge output frequency must be positive and finite.".into());
         }
         if solution.real.len() != mesh.driver_topology.count || solution.imaginary.len() != mesh.driver_topology.count {
             return Err("Edge output solution does not match mesh degrees of freedom.".into());
@@ -55,7 +64,7 @@ impl<'a, 'p> EdgeOutput<'a, 'p> {
         let empty = [C::default(); 3];
         let check: HashMap<&str, [C; 3]> = families.keys().map(|name| (name.as_str(), empty)).collect();
         field_output::project_point_fields(&projection, &HashMap::new(), &check)?;
-        Ok(Self { mesh, problem, solution, samples, projection, families })
+        Ok(Self { mesh, problem, solution, samples, projection, families, domain_sources, parameters, frequency, source_by_cell })
     }
 
     /// Recover at a model-frame point. For an interface the primary trace is
@@ -71,7 +80,15 @@ impl<'a, 'p> EdgeOutput<'a, 'p> {
             // PreparedEdgeMesh accepts only orientation-preserving frames, so
             // polar and axial vectors use the same permutation here.
             let curl = self.mesh.frame.vector_to_model(curl);
-            Ok((value, self.problem.recovery.apply_curl(curl, symbols)?))
+            let mut source_values = HashMap::new();
+            let source_key = if self.source_by_cell { cell } else { self.mesh.cell_tags[cell] };
+            for feature_type in self.problem.recovery.additive_domain_source_types() {
+                if let Some((_, _, sources)) = self.domain_sources.iter().find(|(kind, _, _)| kind.as_str() == feature_type) {
+                    source_values.insert(feature_type.to_owned(), sources.sample(
+                        source_key, point_model, self.parameters, Some(self.frequency))?);
+                }
+            }
+            Ok((value, self.problem.recovery.apply_curl_with_domain_sources(curl, symbols, &source_values)?))
         };
         let (primary, mut recovered) = sample(element)?;
         if let Some(other) = adjacent {

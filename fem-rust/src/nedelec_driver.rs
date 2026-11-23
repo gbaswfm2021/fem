@@ -129,7 +129,16 @@ impl Problem<'_> {
         workspace: &mut crate::assembler::SparseAssemblyWorkspace,
         loads: Option<(&crate::weak_form::VolumeLoadPlan, &[Vec<Vec<C>>])>,
     ) -> Result<LinearSystem, String> {
-        if let Some((_, samples)) = loads {
+        let routes = loads.into_iter().collect::<Vec<_>>();
+        self.assemble_with_volume_load_routes(workspace, &routes)
+    }
+
+    pub(crate) fn assemble_with_volume_load_routes(
+        &self,
+        workspace: &mut crate::assembler::SparseAssemblyWorkspace,
+        loads: &[(&crate::weak_form::VolumeLoadPlan, &[Vec<Vec<C>>])],
+    ) -> Result<LinearSystem, String> {
+        for (_, samples) in loads {
             if samples.len() != self.quadrature.len() || samples.iter().zip(self.quadrature).any(|(row, points)| row.len() != points.len()) {
                 return Err("Volume load samples must match the cell quadrature.".into());
             }
@@ -175,7 +184,7 @@ impl Problem<'_> {
             for (point_index, point) in points.iter().enumerate() {
                 let basis = self.basis(&prepared[element], &candidates, point.point)?;
                 crate::nedelec_volume::accumulate_quadrature(self.form, &basis, &point.coefficients, point.weight, &mut local)?;
-                if let Some((plan, samples)) = loads {
+                for (plan, samples) in loads {
                     let functions: Vec<_> = basis.iter().map(|b| crate::weak_form::BasisSample { value: &b.value, gradient: &[], curl: &b.curl }).collect();
                     let mut load = vec![C::default(); dofs.len()];
                     plan.accumulate(&functions, &samples[element][point_index], point.weight, &mut load)?;

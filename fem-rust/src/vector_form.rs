@@ -45,42 +45,35 @@ pub(crate) fn add_declared_p1_quadrature<const D: usize, const N: usize, M: Spar
     weight: f64,
     coefficients: &HashMap<String, crate::weak_form::Coefficient<'_>>,
 ) -> Result<(), String> {
-    let n = N * D;
-    let mut basis_values = [[[0.0; D]; D]; N];
-    let mut basis_gradients = [[[[0.0; D]; D]; D]; N];
-    for a in 0..N {
-        for component in 0..D {
-            basis_values[a][component][component] = values[a];
-            for axis in 0..D {
-                basis_gradients[a][component][component][axis] = gradients[a][axis];
-            }
-        }
+    add_declared_p1_quadrature_with_space::<D,D,N,M>(plan,matrix,nodes,gradients,values,weight,coefficients)
+}
+
+/// Assemble a Cartesian vector field with `C` components on a mesh embedded
+/// in `D` dimensions. Keeping these counts separate supports cross-sectional
+/// vector fields with a declared higher-dimensional differential operator.
+pub(crate) fn add_declared_p1_quadrature_with_space<const D: usize, const C: usize, const N: usize, M: SparseMatrixSink + ?Sized>(
+    plan:&crate::weak_form::FormPlan,
+    matrix:&mut M,
+    nodes:[usize;N],
+    gradients:[[f64;D];N],
+    values:[f64;N],
+    weight:f64,
+    coefficients:&HashMap<String,crate::weak_form::Coefficient<'_>>,
+)->Result<(),String>{
+    if !(2..=3).contains(&D)||!(1..=3).contains(&C)||N!=D+1 {
+        return Err("Vector P1 assembly requires a 2D/3D simplex and one to three field components.".into());
     }
-    let mut basis = Vec::with_capacity(n);
-    for a in 0..N {
-        for component in 0..D {
-            basis.push(crate::weak_form::BasisSample {
-                value: &basis_values[a][component],
-                gradient: basis_gradients[a][component].as_flattened(),
-                curl: &[],
-            });
-        }
-    }
-    let mut local = vec![vec![C::default(); n]; n];
-    plan.accumulate(&basis, coefficients, weight, &mut local)?;
-    for a in 0..N {
-        for i in 0..D {
-            for b in 0..N {
-                for j in 0..D {
-                    matrix.add_entry(
-                        D * nodes[a] + i,
-                        D * nodes[b] + j,
-                        local[D * a + i][D * b + j],
-                    )?;
-                }
-            }
-        }
-    }
+    let n=N*C;
+    let basis_values=(0..N).flat_map(|a|(0..C).map(move |component|(a,component)))
+        .map(|(a,component)|{let mut value=vec![0.;C];value[component]=values[a];value}).collect::<Vec<_>>();
+    let basis_gradients=(0..N).flat_map(|a|(0..C).map(move |component|(a,component)))
+        .map(|(a,component)|{let mut gradient=vec![0.;C*D];for axis in 0..D{gradient[component*D+axis]=gradients[a][axis];}gradient}).collect::<Vec<_>>();
+    let basis=(0..n).map(|i|crate::weak_form::BasisSample{value:&basis_values[i],gradient:&basis_gradients[i],curl:&[]}).collect::<Vec<_>>();
+    let mut local=vec![vec![C::default();n];n];
+    plan.accumulate(&basis,coefficients,weight,&mut local)?;
+    for a in 0..N { for i in 0..C { for b in 0..N { for j in 0..C {
+        matrix.add_entry(C*nodes[a]+i,C*nodes[b]+j,local[C*a+i][C*b+j])?;
+    }}}}
     Ok(())
 }
 

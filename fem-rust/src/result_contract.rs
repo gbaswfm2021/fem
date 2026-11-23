@@ -555,7 +555,39 @@ impl ResultPlan {
 mod tests {
     use super::*;
 
-    
+    #[test]
+    fn thermal_2d_result_plan_exposes_per_depth_measures() {
+        let package: Value = serde_json::from_str(include_str!("scenarios/thermal2d.json")).unwrap();
+        let plan = ResultPlan::from_json(&package["resultPlans"]["T"]).unwrap();
+        let data = ResultData {
+            values: HashMap::from([
+                ("studyId".into(), json!("s")), ("nodes".into(), json!([[0,0,0],[1,0,0],[0,1,0]])),
+                ("cells".into(), json!([{ "nodes":[0,1,2], "materialTag":1 }])),
+                ("minimum".into(), json!(300.)), ("maximum".into(), json!(301.)),
+                ("backend".into(), json!("faer")), ("ordering".into(), json!("auto")),
+                ("threads".into(), json!(1)), ("quadrature".into(), json!("default")),
+                ("residual".into(), json!(0.)), ("unknowns".into(), json!(3)),
+                ("meanConstraints".into(), json!(0)), ("meanValue".into(), json!(0.)),
+                ("systemUnknowns".into(), json!(3)), ("volume".into(), json!(0.5)),
+                ("boundaryArea".into(), json!({"1":2.})),
+                ("boundaryPower".into(), json!({"1":-4.})),
+                ("netBoundaryPower".into(), json!(-4.)),
+            ]),
+            complex: HashMap::new(),
+            series: HashMap::from([
+                ("primary".into(), vec![C {re:300., im:0.}; 3]),
+                ("cellMaterial".into(), vec![C {re:1., im:0.}]),
+            ]),
+            matrices: HashMap::from([("recovered".into(), vec![vec![C {re:0., im:0.}; 2]])]),
+        };
+        let document = plan.document(&data).unwrap();
+        assert_eq!(document["areaM2"], json!(0.5));
+        assert_eq!(document["boundaryLengthMByTag"]["1"], json!(2.));
+        assert_eq!(document["boundaryOutwardPowerWPerMByTag"]["1"], json!(-4.));
+        assert_eq!(document["netBoundaryOutwardPowerWPerM"], json!(-4.));
+        assert_eq!(document["schema"], "fullmeta-thermal-field/1");
+        assert_eq!(document["temperatureK"], json!([300., 300., 300.]));
+    }
 
     #[test]
     fn declared_vector_and_cell_outputs_preserve_component_order_and_metadata() {

@@ -6,7 +6,7 @@
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum CaseKind {
     Stationary,
     Frequency { frequency_hz: f64, case: Value },
@@ -14,13 +14,13 @@ pub(crate) enum CaseKind {
 
 
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum Output {
     Stationary { csv: String, field_files: bool, field_filename: Option<String> },
     Frequency { sweep_csv: String },
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct SolverSettings {
     pub(crate) formulation: String,
     pub(crate) element_order: u64,
@@ -30,7 +30,7 @@ pub(crate) struct SolverSettings {
     pub(crate) threads: usize,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct PreparedCase {
     pub(crate) request: Value,
     pub(crate) profile: String,

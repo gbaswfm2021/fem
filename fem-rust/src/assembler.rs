@@ -15,6 +15,13 @@ pub(crate) trait SparseMatrixSink {
     fn dimension(&self) -> usize;
     fn add_entry(&mut self, row: usize, column: usize, value: C) -> Result<(), String>;
 
+    fn check_entry(&self, row: usize, column: usize) -> Result<(),String> {
+        if row>=self.dimension() || column>=self.dimension() {
+            return Err("Sparse assembly entry is outside the global matrix.".into());
+        }
+        Ok(())
+    }
+
     /// Scatter one dense element matrix. The cached implementation can use
     /// precomputed row/column slots; ordinary row maps use the default path.
     fn scatter_element(
@@ -426,6 +433,15 @@ impl SparseMatrixSink for SparseAssemblyWorkspace {
             .map_or(0, |pattern| pattern.dimension)
     }
 
+    fn check_entry(&self, row:usize, column:usize) -> Result<(),String> {
+        let pattern=self.pattern.as_ref().ok_or("Sparse assembly pattern has not been prepared.")?;
+        if row>=pattern.dimension {return Err("Sparse assembly row is outside the global matrix.".into());}
+        let range=pattern.row_offsets[row]..pattern.row_offsets[row+1];
+        pattern.columns[range].binary_search(&column)
+            .map_err(|_|"Sparse assembly entry is absent from the prepared pattern.".to_string())?;
+        Ok(())
+    }
+
     fn add_entry(&mut self, row: usize, column: usize, value: C) -> Result<(), String> {
         let pattern = self
             .pattern
@@ -509,6 +525,28 @@ pub(crate) fn scatter_local<M: SparseMatrixSink + ?Sized>(
     Ok(())
 }
 
+/// Scatter a rectangular local coupling block between distinct test and trial
+/// spaces. A cached destination must have been prepared with the union of all
+/// coupled element DOFs, so each requested entry exists in its sparse pattern.
+pub(crate) fn scatter_coupling<M: SparseMatrixSink + ?Sized>(
+    matrix: &mut M, test_dofs: &[usize], trial_dofs: &[usize], local: &[Vec<C>],
+) -> Result<(), String> {
+    if local.len() != test_dofs.len()
+        || local.iter().any(|row| row.len() != trial_dofs.len())
+        || test_dofs.iter().chain(trial_dofs).any(|&dof| dof >= matrix.dimension())
+        || local.iter().flatten().any(|c| !c.re.is_finite() || !c.im.is_finite())
+    {
+        return Err("Invalid sparse coupling shape, DOF or coefficient.".into());
+    }
+    for &row in test_dofs { for &column in trial_dofs { matrix.check_entry(row,column)?; } }
+    for (i, &row) in test_dofs.iter().enumerate() {
+        for (j, &column) in trial_dofs.iter().enumerate() {
+            matrix.add_entry(row, column, local[i][j])?;
+        }
+    }
+    Ok(())
+}
+
 /// Evaluate a typed weak form for real-valued scalar P1 basis samples at one
 /// quadrature point, then scatter into the sparse master matrix. `weight`
 /// includes physical measure and quadrature weight. Coefficients are complex.
@@ -536,7 +574,10 @@ pub(crate) fn accumulate_scalar_volume<const N: usize, const D: usize, M: Sparse
     let mut value_coefficient = C::default();
     let mut has_gradient = false;
     let mut has_value = false;
-    let mut specialized = true;
+    // The optimized scalar stiffness/mass kernel is a 2D-only contraction.
+    // A prescribed longitudinal derivative adds a third gradient component,
+    // so route that case through the generic weak-form assembler.
+    let mut specialized = !plan.has_active_longitudinal_derivative();
     for term in plan.terms() {
         let target = match (term.test, term.trial) {
             (Operator::Gradient, Operator::Gradient) => {
@@ -623,6 +664,26 @@ mod tests {
 
     fn close(actual: f64, expected: f64) {
         assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
+    }
+
+    #[test]
+    fn rectangular_field_coupling_scatter_preserves_sparse_layout() {
+        let mut matrix = vec![BTreeMap::new(); 5];
+        let z = |re| C { re, im: 0.0 };
+        scatter_coupling(&mut matrix, &[0, 2], &[1, 3, 4],
+            &[vec![z(1.),z(2.),z(3.)],vec![z(4.),z(5.),z(6.)]]).unwrap();
+        close(matrix[0][&3].re, 2.0);
+        close(matrix[2][&4].re, 6.0);
+        assert!(matrix[1].is_empty());
+        assert!(scatter_coupling(&mut matrix, &[0], &[1, 3], &[vec![z(1.)]]).is_err());
+        let mut workspace = SparseAssemblyWorkspace::default();
+        let elements = vec![vec![0, 2, 1, 3, 4]];
+        workspace.prepare(5, &elements).unwrap();
+        scatter_coupling(&mut workspace, &[0, 2], &[1, 3, 4],
+            &[vec![z(1.),z(2.),z(3.)],vec![z(4.),z(5.),z(6.)]]).unwrap();
+        let cached = workspace.rows().unwrap();
+        close(cached[0][&3].re, 2.0);
+        close(cached[2][&4].re, 6.0);
     }
 
     #[test]

@@ -323,13 +323,28 @@ impl PreparedEdgeMesh {
     pub(crate) fn essential_moments(&self, tag: usize, order: u8,
         input: &crate::boundary_input::BoundaryInput, plan: &crate::essential_form::EssentialFormPlan,
         parameters: &HashMap<String, crate::model_expression::Scalar>) -> Result<Vec<nedelec_driver::EssentialMoment>, String> {
+        self.essential_moments_with_time(tag,order,input,plan,parameters,None)
+    }
+
+    /// Integrate the same scenario-declared tangential trace at a time stage.
+    pub(crate) fn essential_moments_at_time(&self, tag: usize, order: u8,
+        input: &crate::boundary_input::BoundaryInput, plan: &crate::essential_form::EssentialFormPlan,
+        parameters: &HashMap<String, crate::model_expression::Scalar>, time:f64) -> Result<Vec<nedelec_driver::EssentialMoment>, String> {
+        self.essential_moments_with_time(tag,order,input,plan,parameters,Some(time))
+    }
+
+    fn essential_moments_with_time(&self, tag: usize, order: u8,
+        input: &crate::boundary_input::BoundaryInput, plan: &crate::essential_form::EssentialFormPlan,
+        parameters: &HashMap<String, crate::model_expression::Scalar>, time:Option<f64>) -> Result<Vec<nedelec_driver::EssentialMoment>, String> {
         if order != self.order { return Err("Essential moment order does not match the prepared mesh.".into()); }
         plan.require_tangential_moments()?;
         let mut moments = Vec::new();
         for (face, element, _) in self.exterior_faces(tag)? {
             let tet = self.cells[element];
             let values = crate::nedelec::face_tangential_moments(tet, face, &self.nodes, order, |point| {
-                let values = input.evaluate(parameters, Some(self.frame.point_to_model(point)), &HashMap::new(), None)?;
+                let position=Some(self.frame.point_to_model(point));
+                let values = if let Some(time)=time {input.evaluate_at_time(parameters,position,time,&HashMap::new(),None)?}
+                    else {input.evaluate(parameters,position,&HashMap::new(),None)?};
                 let field = plan.moment_values(values.essential.unwrap_or_default(), values.essential_vector.as_deref(), "boundary")?;
                 let model: [crate::C;3] = field.try_into().map_err(|_| "Oriented field requires three Cartesian components.")?;
                 Ok(self.frame.vector_to_internal(model))
@@ -467,6 +482,25 @@ mod tests {
             let expected = crate::c_mul(crate::C {re:0.,im:-1.},periodic.weights[lower]);
             assert!((periodic.weights[upper].re-expected.re).abs()<1e-12);
             assert!((periodic.weights[upper].im-expected.im).abs()<1e-12);
+        }
+    }
+
+    #[test]
+    fn time_dependent_tangential_moments_use_declared_input_at_each_stage() {
+        let text="V,0,0,0,0\nV,1,1,0,0\nV,2,0,1,0\nV,3,0,0,1\nT,0,0,1,2,3,1\nF,x,0,1,2,4";
+        let package:serde_json::Value=serde_json::from_str(include_str!("scenarios/em3d.json")).unwrap();
+        let input=crate::boundary_input::BoundaryInput::compile(&package["boundaryInputs"]["electric"]["dirichlet"],
+            &serde_json::json!({"value":{"expression":"0","unit":"V/m"},"fieldValues":[{"expression":"t/tau","unit":"V/m"},
+                {"expression":"0","unit":"V/m"},{"expression":"0","unit":"V/m"}]})).unwrap();
+        let form=crate::essential_form::EssentialFormPlan::from_json(&package["essentialForms"]["electric"]["dirichlet"]).unwrap();
+        let parameters=HashMap::from([("tau".into(),crate::model_expression::Scalar {value:1.,dimension:crate::model_expression::unit("s").unwrap().1})]);
+        for order in [1,2] {
+            let mesh=prepare(text,order,"standard").unwrap();
+            let a=mesh.essential_moments_at_time(4,order,&input,&form,&parameters,1.).unwrap();
+            let b=mesh.essential_moments_at_time(4,order,&input,&form,&parameters,2.).unwrap();
+            assert!(!a.is_empty());assert_eq!(a.len(),b.len());
+            assert!(a.iter().any(|v|v.value.re.abs()>1e-10));
+            for (a,b) in a.iter().zip(&b) {assert_eq!(a.raw_dof,b.raw_dof);assert!((b.value.re-2.*a.value.re).abs()<1e-10);}
         }
     }
 

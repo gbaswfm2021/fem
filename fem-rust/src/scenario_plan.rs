@@ -23,10 +23,14 @@ fn formulation_entry<'a>(
 ) -> Result<Option<&'a Value>, String> {
     match package.get(section) {
         None => Ok(None),
-        Some(value) => Ok(value
-            .as_object()
-            .ok_or_else(|| format!("{section} must be an object indexed by formulation."))?
-            .get(formulation)),
+        Some(value) => {
+            let entries = value.as_object()
+                .ok_or_else(|| format!("{section} must be an object indexed by formulation."))?;
+            if let Some(entry) = entries.get(formulation) { return Ok(Some(entry)); }
+            let inherited = package.get("formulationInheritance")
+                .and_then(|aliases| aliases.get(formulation)).and_then(Value::as_str);
+            Ok(inherited.and_then(|base| entries.get(base)))
+        }
     }
 }
 
@@ -42,7 +46,25 @@ pub(crate) struct ScenarioPlan {
     pub(crate) material_bindings: Option<MaterialBindings>,
     pub(crate) coefficient_matrices: HashMap<String, CoefficientMatrixPlan>,
     pub(crate) selections: Option<SelectionPlan>,
-    pub(crate) domain_source: Option<crate::domain_source::DomainSourcePlan>,
+    pub(crate) domain_sources: HashMap<String, crate::domain_source::DomainSourcePlan>,
+}
+
+impl ScenarioPlan {
+    /// Apply a numeric longitudinal substitution only to operators whose
+    /// scenario declaration embeds a 3D operator on the 2D mesh.
+    pub(crate) fn set_longitudinal_wavenumber(&mut self, value: crate::C) -> Result<(), String> {
+        self.volume.set_longitudinal_wavenumber(value)?;
+        if let Some(recovery) = self.recovery.as_mut() {
+            if recovery.has_longitudinal_operator() { recovery.set_longitudinal_wavenumber(value)?; }
+        }
+        if let Some(recovery)=self.tensor_recovery.as_mut(){
+            if recovery.has_longitudinal_operator(){recovery.set_longitudinal_wavenumber(value)?;}
+        }
+        for route in self.domain_sources.values_mut() {
+            if route.form.has_longitudinal_operator() { route.form.set_longitudinal_wavenumber(value)?; }
+        }
+        Ok(())
+    }
 }
 
 impl ScenarioPlan {
@@ -53,6 +75,15 @@ impl ScenarioPlan {
     }
 
     pub(crate) fn from_package(package: &Value, formulation: &str) -> Result<Self, String> {
+        Self::from_package_with_source_formulation(package,formulation,formulation)
+    }
+
+    /// Compile the spatial operator from `formulation` and the model-feature
+    /// load routes from a separately declared source contract. This supports
+    /// alternate field spaces while keeping source names and units in JSON.
+    pub(crate) fn from_package_with_source_formulation(
+        package:&Value, formulation:&str, source_formulation:&str,
+    )->Result<Self,String>{
         let weak = package
             .get("weakForms")
             .and_then(|v| v.get(formulation))
@@ -62,9 +93,25 @@ impl ScenarioPlan {
             return Err(format!("weakForms.{formulation}.element is required."));
         }
         let (dimension, components) = volume.shape();
-        let domain_source = formulation_entry(package, "domainSources", formulation)?
-            .map(|value| crate::domain_source::DomainSourcePlan::from_json(value, dimension, components))
-            .transpose()?;
+        let mut domain_sources = HashMap::new();
+        if let Some(value) = formulation_entry(package, "domainSources", source_formulation)? {
+            let routes = value.get("routes").unwrap_or(value);
+            if routes.get("form").is_some() {
+                domain_sources.insert("domainSource".to_owned(),
+                    crate::domain_source::DomainSourcePlan::from_json(routes, dimension, components)?);
+            } else {
+                for (feature_type, route) in routes.as_object()
+                    .ok_or("domainSources formulation must declare a load route or route object.")? {
+                    if feature_type.is_empty() || route.get("form").is_none() {
+                        return Err(format!("domainSources.{formulation}.{feature_type} must declare a load form."));
+                    }
+                    let plan = crate::domain_source::DomainSourcePlan::from_json(route, dimension, components)?;
+                    if domain_sources.insert(feature_type.clone(), plan).is_some() {
+                        return Err(format!("domainSources.{formulation} repeats feature type {feature_type:?}."));
+                    }
+                }
+            }
+        }
         let mut coefficient_matrices = HashMap::new();
         if let Some(matrices) = weak.get("matrixCoefficients") {
             for (name, value) in matrices
@@ -120,6 +167,8 @@ impl ScenarioPlan {
                 compiled
                     .require_shape(dimension, components)
                     .map_err(|error| format!("boundaryForms.{formulation}.{name}: {error}"))?;
+                compiled.require_operator_dimension(volume.operator_dimension())
+                    .map_err(|error|format!("boundaryForms.{formulation}.{name}: {error}"))?;
                 boundaries.insert(name.clone(), compiled);
             }
         }
@@ -192,7 +241,7 @@ impl ScenarioPlan {
             material_bindings,
             coefficient_matrices,
             selections,
-            domain_source,
+            domain_sources,
         })
     }
 }

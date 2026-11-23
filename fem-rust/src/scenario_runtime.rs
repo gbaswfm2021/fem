@@ -13,6 +13,7 @@ const CAPABILITY_PATHS: &[(&str, &str)] = &[
     ("physics", "solverBoundaryTypesByProfile"),
     ("study", "discretizationChoicesByProfile"),
     ("study", "preparationByProfile"),
+    ("study", "preparationByStudyTypeByProfile"),
     ("study", "solverRuntimesByProfile"),
     ("study", "solverSettingsByProfile"),
 ];
@@ -27,6 +28,50 @@ fn safe_id(value: &Value) -> Option<&str> {
         return None;
     }
     Some(id)
+}
+
+pub(crate) fn scenario_supports_study(scenario:&Value, study_type:&str)->bool {
+    match scenario.get("supportedStudyTypes").and_then(Value::as_array) {
+        Some(types)=>types.iter().any(|value|value.as_str()==Some(study_type)),
+        None=>scenario.get("studyType").and_then(Value::as_str)==Some(study_type),
+    }
+}
+
+fn validate_supported_study_types(scenario:Option<&Value>, id:&str, default:&str)->Result<(),String> {
+    let Some(value)=scenario.and_then(|scenario|scenario.get("supportedStudyTypes")) else {return Ok(());};
+    let entries=value.as_array().filter(|entries|!entries.is_empty())
+        .ok_or_else(||format!("Scenario {id:?} supportedStudyTypes must be a nonempty array."))?;
+    let mut seen=HashSet::new();
+    for value in entries {
+        let kind=value.as_str().filter(|kind|matches!(*kind,"stationary"|"frequencyDomain"|"transient"|"eigenfrequency"|"propagationMode"))
+            .ok_or_else(||format!("Scenario {id:?} declares an unsupported Study type."))?;
+        if !seen.insert(kind) {return Err(format!("Scenario {id:?} repeats Study type {kind:?}."));}
+    }
+    if !seen.contains(default) {return Err(format!("Scenario {id:?} supported Study types must include its default."));}
+    Ok(())
+}
+
+#[cfg(test)]
+mod transient_capability_tests {
+    use super::*;
+    #[test]
+    fn supports_multiple_studies_without_changing_legacy_default() {
+        let legacy=json!({"studyType":"frequencyDomain"});
+        assert!(scenario_supports_study(&legacy,"frequencyDomain"));
+        assert!(!scenario_supports_study(&legacy,"transient"));
+        let multi=json!({"studyType":"frequencyDomain","supportedStudyTypes":["frequencyDomain","transient"]});
+        assert!(validate_supported_study_types(Some(&multi),"test","frequencyDomain").is_ok());
+        assert!(scenario_supports_study(&multi,"transient"));
+        let duplicate=json!({"supportedStudyTypes":["frequencyDomain","frequencyDomain"]});
+        assert!(validate_supported_study_types(Some(&duplicate),"test","frequencyDomain").is_err());
+    }
+    #[test]
+    fn rejects_invalid_study_scopes_for_material_properties() {
+        let mut document=json!({"x-fem-scenario":{"materials":{"properties":[{"key":"capacity","schema":{"type":"object"},"studyTypes":["transient"]}]}}});
+        assert!(profile_material_schema(&document,"test").is_ok());
+        document["x-fem-scenario"]["materials"]["properties"][0]["studyTypes"]=json!(["transient","transient"]);
+        assert!(profile_material_schema(&document,"test").is_err());
+    }
 }
 
 fn merge_capability(
@@ -195,6 +240,7 @@ fn validate_scenario_programs(package: &Value, id: &str) -> Result<(), String> {
                 "Scenario {id:?} must declare x-fem-scenario.studyType as stationary or frequencyDomain."
             )
         })?;
+    validate_supported_study_types(package.pointer("/schemaDocument/x-fem-scenario"),id,study_type)?;
     if package
         .pointer("/schemaDocument/x-fem-scenario/starterDefaults/study/type")
         .and_then(Value::as_str)
@@ -217,6 +263,27 @@ fn validate_scenario_programs(package: &Value, id: &str) -> Result<(), String> {
         .and_then(Value::as_str)
     {
         used.insert(program_id);
+    }
+    let scenario=package.pointer("/schemaDocument/x-fem-scenario").ok_or("Scenario metadata is missing.")?;
+    if let Some(types)=scenario.get("supportedStudyTypes").and_then(Value::as_array) {
+        let prepared=capabilities.pointer(&format!("/preparationByStudyTypeByProfile/{id}"));
+        for kind in types.iter().filter_map(Value::as_str).filter(|kind|*kind!=study_type) {
+            if !prepared.and_then(|entries|entries.get(kind)).is_some_and(Value::is_object) {
+                return Err(format!("Scenario {id:?} must declare a preparation for additional Study type {kind:?}."));
+            }
+        }
+    }
+    if let Some(by_type)=capabilities.pointer(&format!("/preparationByStudyTypeByProfile/{id}")) {
+        let entries=by_type.as_object().ok_or_else(||format!("Scenario {id:?} Study preparations must be an object."))?;
+        for (kind,entry) in entries {
+            if !scenario_supports_study(scenario,kind) {return Err(format!("Scenario {id:?} has an invalid preparation for Study type {kind:?}."));}
+            entry.get("kind").and_then(Value::as_str).filter(|value|!value.is_empty())
+                .ok_or_else(||format!("Scenario {id:?} preparation for {kind:?} needs a kind."))?;
+            let program=entry.get("programId").and_then(Value::as_str)
+                .filter(|value|!value.is_empty())
+                .ok_or_else(||format!("Scenario {id:?} preparation for {kind:?} needs a programId."))?;
+            used.insert(program);
+        }
     }
     if let Some(runtimes) = capabilities
         .pointer(&format!("/solverRuntimesByProfile/{id}"))
@@ -496,6 +563,15 @@ fn profile_material_schema(
             .ok_or_else(|| {
                 format!("Scenario {id:?} material property {key:?} must declare a JSON Schema.")
             })?;
+        if let Some(value)=declaration.get("studyTypes") {
+            let kinds=value.as_array().filter(|v|!v.is_empty()).ok_or_else(||format!("Scenario {id:?} material {key:?} studyTypes must be a nonempty array."))?;
+            let mut seen=HashSet::new();
+            for kind in kinds {
+                let kind=kind.as_str().filter(|v|matches!(*v,"stationary"|"frequencyDomain"|"transient"|"eigenfrequency"|"propagationMode"))
+                    .ok_or_else(||format!("Scenario {id:?} material {key:?} has an invalid Study type."))?;
+                if !seen.insert(kind) {return Err(format!("Scenario {id:?} material {key:?} repeats a Study type."));}
+            }
+        }
         if let Some(existing) = properties.get(key) {
             if existing != schema {
                 return Err(format!(
@@ -525,6 +601,7 @@ fn configure_profile_schema(
     root: &mut Value,
     document: &mut Value,
     id: &str,
+    package: &Value,
 ) -> Result<(), String> {
     let (material_properties, material_required) = profile_material_schema(document, id)?;
     let generic_material_properties = root
@@ -603,9 +680,11 @@ fn configure_profile_schema(
                 })?;
             let mut branch = branch.clone();
             if physics.pointer(&format!("/featureHandlingByType/{condition_type}")).and_then(Value::as_str) == Some("domainSource") {
-                let layout = physics.get("domainSourceLayout").ok_or_else(|| format!("Scenario {id:?} must declare a domain source layout."))?;
+                let layout = physics.get("domainSourceLayoutsByType").and_then(|layouts| layouts.get(condition_type))
+                    .or_else(|| physics.get("domainSourceLayout"))
+                    .ok_or_else(|| format!("Scenario {id:?} must declare a domain source layout."))?;
                 let labels = layout.get("componentLabels").and_then(Value::as_array)
-                    .filter(|items| !items.is_empty() && items.len() <= 3 && items.iter().all(|v| v.as_str().is_some_and(|s| !s.trim().is_empty())))
+                    .filter(|items| !items.is_empty() && items.len() <= 9 && items.iter().all(|v| v.as_str().is_some_and(|s| !s.trim().is_empty())))
                     .ok_or_else(|| format!("Scenario {id:?} must label every domain source component."))?;
                 let defaults = physics.get("boundaryDefaultsByFormulation").and_then(Value::as_object)
                     .ok_or("Domain source formulation defaults are required.")?;
@@ -626,7 +705,14 @@ fn configure_profile_schema(
                 if units.is_empty() { return Err(format!("Scenario {id:?} has no domain source units.")); }
                 for unit in &units { if !domain_source_units.contains(unit) { domain_source_units.push(unit.clone()); } }
                 let vector = branch.pointer_mut("/properties/values").and_then(Value::as_object_mut).ok_or("FEM base schema must declare domain source values.")?;
-                vector.insert("minItems".into(), json!(labels.len()));
+                let legacy_counts=layout.get("legacyComponentCounts").and_then(Value::as_array).into_iter().flatten()
+                    .map(|value|value.as_u64().and_then(|n|usize::try_from(n).ok()).filter(|n|*n>0&&*n<labels.len())
+                        .ok_or_else(||format!("Scenario {id:?} has an invalid legacy domain source component count for {condition_type}.")))
+                    .collect::<Result<Vec<_>,_>>()?;
+                if legacy_counts.iter().any(|n|legacy_counts.iter().filter(|m|*m==n).count()>1) {
+                    return Err(format!("Scenario {id:?} repeats a legacy domain source component count for {condition_type}."));
+                }
+                vector.insert("minItems".into(), json!(legacy_counts.iter().copied().min().unwrap_or(labels.len())));
                 vector.insert("maxItems".into(), json!(labels.len()));
                 if let Some(title) = layout.get("title").and_then(Value::as_str).filter(|s| !s.trim().is_empty()) { vector.insert("title".into(), json!(title)); }
                 let settings = vector.get_mut("x-fullmeta-ui-behavior").and_then(|ui| ui.pointer_mut("/payload/widget/settings")).and_then(Value::as_object_mut)
@@ -655,8 +741,17 @@ fn configure_profile_schema(
                     .ok_or_else(|| format!("Scenario {id:?} must label every field component for {condition_type}."))?;
                 let vector = branch.pointer_mut("/properties/fieldValues").and_then(Value::as_object_mut)
                     .ok_or("FEM base boundary schema must declare fieldValues.")?;
-                vector.insert("minItems".into(), json!(count));
-                vector.insert("maxItems".into(), json!(count));
+                // Count and type are semantic checks so malformed saved values
+                // remain editable; the solver still checks its input contract.
+                if package.pointer("/validationGeneration/boundaryVectorCounts").and_then(Value::as_bool) == Some(true) {
+                    vector.insert("type".into(), json!(["array","object","string","number","boolean","null"]));
+                    vector.remove("minItems");
+                    vector.remove("maxItems");
+                } else {
+                    vector.insert("type".into(), json!("array"));
+                    vector.insert("minItems".into(), json!(count));
+                    vector.insert("maxItems".into(), json!(count));
+                }
                 let settings = vector.get_mut("x-fullmeta-ui-behavior").and_then(|ui| ui.pointer_mut("/payload/widget/settings"))
                     .and_then(Value::as_object_mut).ok_or("Boundary fieldValues must declare widget settings.")?;
                 settings.insert("componentLabels".into(), Value::Array(labels.clone()));
@@ -925,7 +1020,7 @@ pub fn compose(root: Value, schema_path: &Path) -> Result<(Value, Vec<Value>), S
                 .filter_map(Value::as_str)
                 .map(str::to_string),
         );
-        configure_profile_schema(&mut root, &mut document, id)?;
+        configure_profile_schema(&mut root, &mut document, id, &package)?;
         merge_physics_condition_actions(&mut root, &document, id)?;
         scenario_dimensions.push(dimension);
         scenario_physics.push(physics);

@@ -18,6 +18,8 @@ enum Entry {
 
 pub(crate) struct TensorRecoveryPlan {
     dimension: usize,
+    operator_dimension: usize,
+    longitudinal_wavenumber: C,
     components: Vec<String>,
     matrix: Vec<Vec<Entry>>,
     coefficients: CoefficientExpressions,
@@ -49,7 +51,10 @@ impl TensorRecoveryPlan {
             .and_then(Value::as_u64)
             .ok_or("Tensor recovery fieldComponents must be an integer.")?
             as usize;
-        if !(2..=3).contains(&dimension) || field_components != dimension {
+        let operator_dimension=value.get("operatorDimension").and_then(Value::as_u64)
+            .and_then(|v|usize::try_from(v).ok()).unwrap_or(dimension);
+        if !(2..=3).contains(&dimension) || !(dimension..=3).contains(&operator_dimension)
+            || field_components != operator_dimension {
             return Err(
                 "Tensor recovery requires a 2D or 3D vector field matching its dimension.".into(),
             );
@@ -79,11 +84,11 @@ impl TensorRecoveryPlan {
         for (r, row) in rows.iter().enumerate() {
             let entries = row
                 .as_array()
-                .filter(|v| v.len() == dimension * dimension)
+                .filter(|v| v.len() == operator_dimension * operator_dimension)
                 .ok_or_else(|| {
                     format!(
                         "Tensor recovery matrix row {r} must contain {} entries.",
-                        dimension * dimension
+                        operator_dimension * operator_dimension
                     )
                 })?;
             let mut parsed = Vec::with_capacity(entries.len());
@@ -112,6 +117,8 @@ impl TensorRecoveryPlan {
         };
         Ok(Self {
             dimension,
+            operator_dimension,
+            longitudinal_wavenumber:C::default(),
             components,
             matrix,
             coefficients: CoefficientExpressions::from_json(
@@ -153,13 +160,25 @@ impl TensorRecoveryPlan {
         dimension: usize,
         field_components: usize,
     ) -> Result<(), String> {
-        if self.dimension != dimension || self.dimension != field_components {
+        if self.dimension != dimension || self.operator_dimension != field_components {
             return Err(format!(
-                "Tensor recovery declares a {}-component field in {}D; expected {field_components} components in {dimension}D.",
-                self.dimension, self.dimension
+                "Tensor recovery declares {} field components and a {}D operator on a {}D mesh; expected {field_components} components and a {dimension}D mesh.",
+                self.operator_dimension,self.operator_dimension,self.dimension
             ));
         }
         Ok(())
+    }
+
+    pub(crate) fn has_longitudinal_operator(&self)->bool {self.dimension==2&&self.operator_dimension==3}
+    pub(crate) fn set_longitudinal_wavenumber(&mut self,value:C)->Result<(),String>{
+        if !value.re.is_finite()||!value.im.is_finite(){return Err("Tensor-recovery longitudinal wavenumber must be finite.".into());}
+        if !self.has_longitudinal_operator()&&value!=C::default(){return Err("Tensor recovery does not declare a longitudinal operator dimension.".into());}
+        self.longitudinal_wavenumber=value;Ok(())
+    }
+    pub(crate) fn operator_dimension(&self)->usize{self.operator_dimension}
+    pub(crate) fn longitudinal_derivative(&self,value:C)->C{
+        if self.has_longitudinal_operator(){crate::longitudinal::derivative_value(self.longitudinal_wavenumber,value,true)}
+        else{C::default()}
     }
 
     /// `gradient` uses row-major field-component-by-coordinate ordering.
@@ -168,7 +187,7 @@ impl TensorRecoveryPlan {
         gradient: &[C],
         symbols: &HashMap<String, C>,
     ) -> Result<Vec<C>, String> {
-        let dimension = self.dimension;
+        let dimension = self.operator_dimension;
         if gradient.len() != dimension * dimension
             || gradient
                 .iter()

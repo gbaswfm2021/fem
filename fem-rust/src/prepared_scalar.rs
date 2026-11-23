@@ -136,13 +136,14 @@ fn check_stationary_material_scope(package: &Value, materials: &HashMap<usize, V
         .and_then(Value::as_array).ok_or("Scenario material catalog is required.")?;
     for row in materials.values() {
         for definition in definitions {
+            if definition.get("studyTypes").and_then(Value::as_array).is_some_and(|types|!types.iter().any(|kind|kind.as_str()==Some("stationary"))) {continue;}
             let key = definition.get("key").and_then(Value::as_str).ok_or("Material property key is required.")?;
             let Some(raw) = row.get(key).or_else(|| definition.get("default")) else { continue; };
             let expression = if definition.get("representation").and_then(Value::as_str) == Some("quantity") {
                 raw.get("expression").and_then(Value::as_str)
             } else { raw.as_str() }.ok_or_else(|| format!("Material property {key:?} requires an expression."))?;
             let (_, names, _) = model_expression::inspect(expression)?;
-            if names.iter().any(|name| matches!(name.as_str(), "x" | "y" | "z" | "freq" | "frequency" | "omega")) {
+            if names.iter().any(|name| matches!(name.as_str(), "x" | "y" | "z" | "t" | "freq" | "frequency" | "omega")) {
                 return Err(format!("Stationary material {key:?} must use parameter-only expressions."));
             }
         }
@@ -254,12 +255,12 @@ fn solve_simplex<const N: usize, const D: usize, const F: usize>(case: &Prepared
     let selection_plan = plan.selections.as_ref().ok_or("Scenario selectionPlan is required.")?;
     let source_by_cell = selection_plan.uses_cell_map("domainSources", map);
     let bound = selection_plan.bind(model, map, &mesh_tags)?;
-    let source_data = crate::domain_source::prepare(plan.domain_source.as_ref(), bound.get("domainSources").map(Vec::as_slice))?;
-    let mut source_samples = source_data.as_ref().map(|_| Vec::with_capacity(cells.len()));
+    let source_data = crate::domain_source::prepare_routes(&plan.domain_sources, bound.get("domainSources").map(Vec::as_slice))?;
+    let mut source_samples = source_data.iter().map(|_| Vec::with_capacity(cells.len())).collect::<Vec<Vec<Vec<Vec<C>>>>>();
     let materials = bound.get("materials").ok_or("Selection plan must define materials.")?.iter()
         .map(|row| (row.tag, row.row.clone())).collect::<HashMap<_,_>>();
     check_stationary_material_scope(package, &materials)?;
-    let compiled = crate::material::CompiledMaterialAssignments::compile(&case.profile, &materials)?;
+    let compiled = crate::material::CompiledMaterialAssignments::compile_for_study(&case.profile, &materials,"stationary")?;
     let raw_values = compiled.position_independent_values(parameters, 0.)?;
     let bindings = plan.material_bindings.as_ref().ok_or("Scenario materialBindings are required.")?;
     if bindings.uses_position() { return Err("Position-dependent material bindings are not supported for stationary scalar cases.".into()); }
@@ -277,7 +278,7 @@ fn solve_simplex<const N: usize, const D: usize, const F: usize>(case: &Prepared
         if values.len() != names.len() || names.iter().any(|name| !values.contains_key(name)) { return Err("Material bindings yield inconsistent symbols across cells.".into()); }
         let symbols = names.iter().map(|name| C { re:values[name].value, im:0. }).collect::<Vec<_>>();
         generic_cells.push(SimplexCell { nodes:*cell, quadrature:quadrature.iter().map(|(basis,weight)| SimplexVolumePoint { basis:*basis, weight:*weight, symbols:symbols.clone() }).collect() });
-        if let (Some((load_plan, sources)), Some(all)) = (&source_data, &mut source_samples) {
+        for (route_index, (_, load_plan, sources)) in source_data.iter().enumerate() {
             let coefficients = values.iter().map(|(name, value)| (name.clone(), C { re:value.value, im:0. })).collect();
             let mut sampled = Vec::with_capacity(quadrature.len());
             for (basis, _) in &quadrature {
@@ -285,7 +286,7 @@ fn solve_simplex<const N: usize, const D: usize, const F: usize>(case: &Prepared
                 let source_key = if source_by_cell { cell_index } else { *tag };
                 sampled.push(crate::domain_source::sample_load(load_plan, sources, source_key, point, parameters, None, &coefficients)?);
             }
-            all.push(sampled);
+            source_samples[route_index].push(sampled);
         }
     }
     let selected = bound.get("boundaries").ok_or("Selection plan must define boundaries.")?;
@@ -360,8 +361,10 @@ fn solve_simplex<const N: usize, const D: usize, const F: usize>(case: &Prepared
         symbol_names:&name_refs, boundaries:&boundaries, essential:&essential, essential_plan, periodic:periodic_map, mean };
     let options = nodal_p1::SolveOptions { backend:&case.settings.backend, ordering:&case.settings.ordering,
         threads:case.settings.threads, residual_tolerance:policy.residual_tolerance };
-    let solution = problem.solve_with_volume_loads(&options,cache,
-        source_data.as_ref().zip(source_samples.as_ref()).map(|((load_plan, _), samples)| (&load_plan.form, samples.as_slice())))?;
+    let load_routes = source_data.iter().zip(&source_samples)
+        .map(|((_, load_plan, _), samples)| (&load_plan.form, samples.as_slice()))
+        .collect::<Vec<_>>();
+    let solution = problem.solve_with_volume_load_routes(&options,cache,&load_routes)?;
     validate_real_samples(&solution.real,&solution.imaginary,policy.imaginary_tolerance,"Stationary solution")?;
     if policy.validate_auxiliary { validate_real_samples(&solution.auxiliary_real,&solution.auxiliary_imaginary,policy.imaginary_tolerance,"Stationary auxiliary")?; }
     let recovery = plan.recovery.as_ref().ok_or("Scenario scalar recovery is required.")?;
@@ -470,5 +473,151 @@ mod tests {
         assert!(validate_real_samples(&[f64::INFINITY],&[0.],1e-10,"auxiliary").is_err());
         assert!(validate_real_samples(&[0.],&[1e-3],1e-10,"auxiliary").is_err());
         assert!(validate_real_samples(&[0.],&[],1e-10,"auxiliary").is_err());
+    }
+
+    #[test]
+    fn tetrahedron_vector_flux_matches_scalar_for_permuted_cells() {
+        use crate::prepared_case::{CaseKind, Output, PreparedCase, SolverSettings};
+        use std::path::PathBuf;
+        let package: Value = serde_json::from_str(include_str!("scenarios/thermal3d.json")).unwrap();
+        let case = PreparedCase { request:json!({"studyId":"study"}), profile:"thermal-3d".into(), study_id:"study".into(),
+            kind:CaseKind::Stationary, settings:SolverSettings { formulation:"T".into(), element_order:1,
+                quadrature:"standard".into(), backend:"faer".into(), ordering:"auto".into(), threads:1 },
+            output:Output::Stationary { csv:"out.csv".into(), field_files:false, field_filename:None },
+            model_path:PathBuf::new(), mesh_path:PathBuf::new(), map_path:PathBuf::new(), output_directory:PathBuf::new() };
+        let mut model = json!({"scenario":{"profileId":"thermal-3d","dimension":3,"physics":"thermal"},"model":{
+            "materials":[{"selectionId":"domain","thermalConductivity":{"expression":"1","unit":"W/(m*K)"}}],
+            "physics":{"fixed":{"id":"fixed","type":"dirichlet","selectionId":"fixed","value":{"expression":"0","unit":"K"}},
+                "load":{"id":"load","type":"neumann","selectionId":"load","value":{"expression":"0","unit":"W/m^2"},
+                    "fieldValues":[{"expression":"1","unit":"W/m^2"},{"expression":"0","unit":"W/m^2"},{"expression":"0","unit":"W/m^2"}]}},
+            "study":[{"id":"study"}], "mesh":{}}});
+        let map = json!({"schema":"fullmeta-mesh-map/6","dimension":3,
+            "physicalGroups":[{"selectionId":"domain","physicalTag":1}],
+            "boundarySelections":[{"selectionId":"fixed","physicalTag":2},{"selectionId":"load","physicalTag":3}]});
+        let nodes = [[0.,0.,0.],[1.,0.,0.],[0.,1.,0.],[0.,0.,1.]];
+        let facets = [([0,2,3],2),([1,2,3],3)];
+        let mut expected: Option<Vec<C>> = None;
+        for connectivity in [[0,1,2,3],[1,0,2,3],[3,2,1,0]] {
+            let cells = [(connectivity,1)];
+            model["model"]["physics"]["load"]["value"]["expression"] = json!("0");
+            model["model"]["physics"]["load"]["fieldValues"] = json!([
+                {"expression":"1","unit":"W/m^2"},{"expression":"0","unit":"W/m^2"},{"expression":"0","unit":"W/m^2"}]);
+            let solve = |model: &Value| solve_with_result(&case,&package,model,&map,
+                Mesh::Tetrahedron {nodes:&nodes,cells:&cells,facets:&facets},&HashMap::new(),&mut SolverCache::default()).unwrap();
+            let vector = solve(&model).data.series["primary"].clone();
+            model["model"]["physics"]["load"].as_object_mut().unwrap().remove("fieldValues");
+            model["model"]["physics"]["load"]["value"]["expression"] = json!("0.5773502691896258");
+            let scalar = solve(&model).data.series["primary"].clone();
+            for (a,b) in vector.iter().zip(&scalar) { assert!((a.re-b.re).abs()<1e-10); }
+            if let Some(reference) = &expected {
+                for (a,b) in vector.iter().zip(reference) { assert!((a.re-b.re).abs()<1e-10); }
+            }
+            expected=Some(vector);
+        }
+    }
+
+    #[test]
+    fn matched_surface_periodicity_rejects_phase_and_incompatible_facets() {
+        let mut package: Value = serde_json::from_str(include_str!("scenarios/thermal3d.json")).unwrap();
+        package["preparedScalar"]["periodic"] = json!({"mode":"matchedNodes","phase":"zero","phaseTolerance":1e-12,
+            "essentialMapping":"directRepresentative","requireModelMapAgreement":true,"rejectMeshPairs":false});
+        let policy = RuntimePolicy::from_package(&package).unwrap();
+        let pair = json!({"id":"p","dimension":3,"lowerSelectionId":"lo","upperSelectionId":"hi",
+            "translation":[{"expression":"1","unit":"m"},{"expression":"0","unit":"m"},{"expression":"0","unit":"m"}]});
+        let mut model = json!({"scenario":{"profileId":"thermal-3d","dimension":3,"physics":"thermal"},"model":{"parameters":[],"mesh":{"periodicPairIds":["p"],"periodicPairs":[pair.clone()]},
+            "physics":{"periodic":{"id":"periodic","type":"periodicCondition","periodicPairId":"p"}}}});
+        let map = json!({"periodicPairs":[pair],"boundarySelections":[{"id":"lo","physicalTag":1},{"id":"hi","physicalTag":2}]});
+        let nodes = [[0.,0.,0.],[0.,1.,0.],[0.,1.,1.],[0.,0.,1.],
+            [1.,0.,0.],[1.,1.,0.],[1.,1.,1.],[1.,0.,1.]];
+        let facets = [([0,1,2],1),([0,2,3],1),([4,5,6],2),([4,6,7],2)];
+        let result = prepare_periodic(&policy,&model,&map,&nodes,&facets,&HashMap::new(),3).unwrap().unwrap();
+        for (lo,hi) in [(0,4),(1,5),(2,6),(3,7)] { assert_eq!(result.node_to_dof[lo],result.node_to_dof[hi]); }
+        let second = json!({"id":"q","dimension":3,"lowerSelectionId":"lowY","upperSelectionId":"highY",
+            "translation":[{"expression":"0","unit":"m"},{"expression":"1","unit":"m"},{"expression":"0","unit":"m"}]});
+        let mut two_model = model.clone();
+        two_model["model"]["mesh"]["periodicPairIds"] = json!(["p","q"]);
+        two_model["model"]["mesh"]["periodicPairs"].as_array_mut().unwrap().push(second.clone());
+        two_model["model"]["physics"]["periodicY"] = json!({"id":"periodicY","type":"periodicCondition","periodicPairId":"q"});
+        let mut two_map = map.clone();
+        two_map["periodicPairs"].as_array_mut().unwrap().push(second);
+        two_map["boundarySelections"].as_array_mut().unwrap().extend([
+            json!({"id":"lowY","physicalTag":3}),json!({"id":"highY","physicalTag":4})]);
+        let two_facets = [([0,1,2],1),([0,2,3],1),([4,5,6],2),([4,6,7],2),
+            ([0,4,7],3),([0,7,3],3),([1,5,6],4),([1,6,2],4)];
+        let both = prepare_periodic(&policy,&two_model,&two_map,&nodes,&two_facets,&HashMap::new(),3).unwrap().unwrap();
+        assert_eq!(both.dof_count,2);
+        for group in [[0,1,4,5],[2,3,6,7]] {
+            for node in group { assert_eq!(both.node_to_dof[node],both.node_to_dof[group[0]]); }
+        }
+        let mismatched = [([0,1,2],1),([0,2,3],1),([4,5,7],2),([5,6,7],2)];
+        assert!(prepare_periodic(&policy,&model,&map,&nodes,&mismatched,&HashMap::new(),3).is_err());
+        model["model"]["physics"]["periodic"]["phaseVector"] = json!([
+            {"expression":"1","unit":"rad/m"},{"expression":"0","unit":"rad/m"},{"expression":"0","unit":"rad/m"}]);
+        assert!(prepare_periodic(&policy,&model,&map,&nodes,&facets,&HashMap::new(),3).is_err());
+    }
+
+    #[test]
+    fn matched_tetrahedral_surfaces_preserve_linear_temperature_solution() {
+        use crate::prepared_case::{CaseKind, Output, PreparedCase, SolverSettings};
+        use std::path::PathBuf;
+        let mut package: Value = serde_json::from_str(include_str!("scenarios/thermal3d.json")).unwrap();
+        package["preparedScalar"]["periodic"] = json!({"mode":"matchedNodes","phase":"zero","phaseTolerance":1e-12,
+            "essentialMapping":"directRepresentative","requireModelMapAgreement":true,"rejectMeshPairs":false});
+        let case = PreparedCase { request:json!({"studyId":"study"}), profile:"thermal-3d".into(), study_id:"study".into(),
+            kind:CaseKind::Stationary, settings:SolverSettings {formulation:"T".into(),element_order:1,quadrature:"standard".into(),backend:"faer".into(),ordering:"auto".into(),threads:1},
+            output:Output::Stationary {csv:"out.csv".into(),field_files:false,field_filename:None},
+            model_path:PathBuf::new(),mesh_path:PathBuf::new(),map_path:PathBuf::new(),output_directory:PathBuf::new() };
+        let pair = json!({"id":"p","dimension":3,"lowerSelectionId":"lo","upperSelectionId":"hi",
+            "translation":[{"expression":"1","unit":"m"},{"expression":"0","unit":"m"},{"expression":"0","unit":"m"}]});
+        let model = json!({"scenario":{"profileId":"thermal-3d","dimension":3,"physics":"thermal"},"model":{
+            "parameters":[],"materials":[{"selectionId":"domain","thermalConductivity":{"expression":"1","unit":"W/(m*K)"}}],
+            "mesh":{"periodicPairIds":["p"],"periodicPairs":[pair.clone()]},
+            "physics":{"periodic":{"id":"periodic","type":"periodicCondition","periodicPairId":"p"},
+                "bottom":{"id":"bottom","type":"dirichlet","selectionId":"bottom","value":{"expression":"0","unit":"K"}},
+                "top":{"id":"top","type":"dirichlet","selectionId":"top","value":{"expression":"300","unit":"K"}}},
+            "study":[{"id":"study"}]}});
+        let map = json!({"schema":"fullmeta-mesh-map/6","dimension":3,"periodicPairs":[pair],
+            "physicalGroups":[{"selectionId":"domain","physicalTag":1}],
+            "boundarySelections":[{"id":"lo","physicalTag":1},{"id":"hi","physicalTag":2},
+                {"id":"bottom","physicalTag":3},{"id":"top","physicalTag":4}]});
+        let nodes = [[0.,0.,0.],[1.,0.,0.],[1.,1.,0.],[0.,1.,0.],
+            [0.,0.,0.5],[1.,0.,0.5],[1.,1.,0.5],[0.,1.,0.5],
+            [0.,0.,1.],[1.,0.,1.],[1.,1.,1.],[0.,1.,1.]];
+        let cells = [([0,1,2,6],1),([0,2,3,6],1),([0,3,7,6],1),([0,7,4,6],1),([0,4,5,6],1),([0,5,1,6],1),
+            ([4,5,6,10],1),([4,6,7,10],1),([4,7,11,10],1),([4,11,8,10],1),([4,8,9,10],1),([4,9,5,10],1)];
+        let facets = [([0,3,7],1),([0,7,4],1),([4,7,11],1),([4,11,8],1),
+            ([1,2,6],2),([1,6,5],2),([5,6,10],2),([5,10,9],2),
+            ([0,1,2],3),([0,2,3],3),([8,9,10],4),([8,10,11],4)];
+        let solve = |model: &Value| solve_with_result(&case,&package,model,&map,
+            Mesh::Tetrahedron {nodes:&nodes,cells:&cells,facets:&facets},&HashMap::new(),&mut SolverCache::default()).unwrap();
+        let solution = solve(&model);
+        for (value, point) in solution.data.series["primary"].iter().zip(nodes) {
+            assert!((value.re - 300.*point[2]).abs()<1e-9);
+        }
+        let mut driven = model.clone();
+        driven["model"]["physics"]["source"] = json!({"id":"source","type":"domainSource","selectionId":"domain",
+            "values":[{"expression":"8","unit":"W/m^3"}]});
+        let solution = solve(&driven);
+        for (value, point) in solution.data.series["primary"].iter().zip(nodes) {
+            let z = point[2];
+            assert!((value.re - (300.*z + 4.*z*(1.-z))).abs()<1e-9);
+        }
+        let mut conflicting = model.clone();
+        conflicting["model"]["physics"]["extra"] = json!({"id":"extra","type":"dirichlet","selectionId":"lo",
+            "value":{"expression":"0","unit":"K"}});
+        let error = match solve_with_result(&case,&package,&conflicting,&map,
+            Mesh::Tetrahedron {nodes:&nodes,cells:&cells,facets:&facets},&HashMap::new(),&mut SolverCache::default()) {
+            Ok(_) => panic!("periodic and prescribed boundary must conflict"), Err(error) => error,
+        };
+        assert!(error.contains("also carries a prescribed boundary condition"), "{error}");
+        let mut neumann = model.clone();
+        neumann["model"]["physics"].as_object_mut().unwrap().remove("top");
+        neumann["model"]["physics"].as_object_mut().unwrap().remove("bottom");
+        neumann["model"]["study"][0]["meanTemperature"] = json!({"expression":"100","unit":"K"});
+        let solution = solve(&neumann);
+        for value in &solution.data.series["primary"] { assert!((value.re-100.).abs()<1e-8); }
+        neumann["model"]["physics"]["source"] = driven["model"]["physics"]["source"].clone();
+        assert!(solve_with_result(&case,&package,&neumann,&map,
+            Mesh::Tetrahedron {nodes:&nodes,cells:&cells,facets:&facets},&HashMap::new(),&mut SolverCache::default()).is_err());
     }
 }

@@ -1,0 +1,227 @@
+{
+  "application": "fem",
+  "metadata": {
+    "name": "Free elastic plate: eigenmodes",
+    "id": "elastic_plate_3d_eigenmodes"
+  },
+  "model": {
+    "geometry": {
+      "features": [
+        {
+          "id": "plate",
+          "name": "Plate",
+          "position": [
+            {
+              "expression": "0",
+              "unit": "m"
+            },
+            {
+              "expression": "0",
+              "unit": "m"
+            },
+            {
+              "expression": "0",
+              "unit": "m"
+            }
+          ],
+          "size": [
+            {
+              "expression": "a",
+              "unit": "m"
+            },
+            {
+              "expression": "b",
+              "unit": "m"
+            },
+            {
+              "expression": "h",
+              "unit": "m"
+            }
+          ],
+          "type": "box"
+        }
+      ],
+      "tolerance": {
+        "expression": "1e-9",
+        "unit": "m"
+      }
+    },
+    "integrationOperators": [],
+    "materials": [
+      {
+        "density": {
+          "expression": "2700",
+          "unit": "kg/m^3"
+        },
+        "densityLossFactor": "0",
+        "id": "plate_material",
+        "name": "Illustrative aluminium-like material",
+        "poissonRatio": "0.33",
+        "selectionId": "plate_domain",
+        "youngModulus": {
+          "expression": "70000000000",
+          "unit": "Pa"
+        }
+      }
+    ],
+    "mesh": {
+      "elementFamily": "tetrahedron",
+      "gmsh": {
+        "algorithm3D": 1,
+        "elementOrder": 1,
+        "optimize": true,
+        "optimizeNetgen": true,
+        "optimizeThreshold": 0.25,
+        "smoothing": 10,
+        "threads": 1
+      },
+      "maxSize": {
+        "expression": "0.004",
+        "unit": "m"
+      },
+      "meshSizeControls": [],
+      "minSize": {
+        "expression": "0.002",
+        "unit": "m"
+      },
+      "periodicPairs": []
+    },
+    "parameters": [
+      {
+        "description": "",
+        "expression": "0.2",
+        "id": "parameter",
+        "name": "p1",
+        "symbol": "a",
+        "unit": "m"
+      },
+      {
+        "description": "",
+        "expression": "0.1",
+        "id": "parameter_2",
+        "name": "p1",
+        "symbol": "b",
+        "unit": "m"
+      },
+      {
+        "description": "",
+        "expression": "0.004",
+        "id": "parameter_3",
+        "name": "p1",
+        "symbol": "h",
+        "unit": "m"
+      }
+    ],
+    "physics": {
+      "domainSelectionIds": [
+        "plate_domain"
+      ],
+      "formulation": "displacement",
+      "id": "physics",
+      "name": "Linear elasticity",
+      "type": "elasticity",
+      "frequency": {
+        "unit": "Hz",
+        "expression": "1152"
+      }
+    },
+    "pointwiseVariables": [],
+    "results": [
+      {
+        "type": "field",
+        "name": "Transverse displacement mode",
+        "quantity": {
+          "part": "magnitude",
+          "component": "uz",
+          "type": "fieldComponent"
+        },
+        "id": "mode_shape"
+      }
+    ],
+    "selections": [
+      {
+        "addresses": [
+          {
+            "membership": {
+              "plate": "inside"
+            }
+          }
+        ],
+        "entity": "domain",
+        "id": "plate_domain",
+        "name": "Plate domain"
+      },
+      {
+        "addresses": [
+          {
+            "membership": {
+              "plate": "boundary"
+            }
+          }
+        ],
+        "coordinateExpression": "x",
+        "entity": "boundary",
+        "id": "driven_side",
+        "name": "Side at x = 0"
+      },
+      {
+        "addresses": [
+          {
+            "membership": {
+              "plate": "boundary"
+            }
+          }
+        ],
+        "coordinateExpression": "y",
+        "entity": "boundary",
+        "id": "driven_side_copy",
+        "name": "Side at y = 0"
+      }
+    ],
+    "study": [
+      {
+        "physicsId": "physics",
+        "output": {
+          "fieldFiles": true
+        },
+        "solver": {
+          "backend": "faer",
+          "constitutiveQuadrature": "standard",
+          "ordering": "default",
+          "threads": 1
+        },
+        "discretization": {
+          "elementOrder": 1,
+          "fieldFormulation": "displacement"
+        },
+        "type": "eigenfrequency",
+        "name": "Two eigenmodes near 1152 Hz",
+        "eigenfrequency": {
+          "residualTolerance": 1E-08,
+          "krylovDimension": 48,
+          "modeCount": 2,
+          "shift": {
+            "real": {
+              "expression": "0",
+              "unit": "Hz"
+            },
+            "imaginary": {
+              "expression": "7238.229",
+              "unit": "Hz"
+            }
+          }
+        },
+        "id": "eigenmodes"
+      }
+    ],
+    "units": "m",
+    "variables": []
+  },
+  "modelFormat": "fem-model/2",
+  "scenario": {
+    "dimension": 3,
+    "physics": "elasticity",
+    "profileId": "elastic-3d"
+  },
+  "x-fullmeta-schema": "../../applications/fem/fem.schema.json"
+}

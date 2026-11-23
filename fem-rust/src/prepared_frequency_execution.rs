@@ -22,8 +22,38 @@ struct ComputedCase {
     field_files: bool,
 }
 
-#[derive(Clone, Copy)]
-enum NumericalFamily { Scalar, Vector }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NumericalFamily { Scalar, Vector, Hcurl2d }
+
+fn frequency_family_for_formulation(
+    package: &Value,
+    formulation: &str,
+    has_nonzero_longitudinal_wavenumber: bool,
+    fallback: NumericalFamily,
+) -> Result<NumericalFamily, String> {
+    let declaration = package
+        .get("harmonicLongitudinalWavenumber")
+        .and_then(|value| value.get("formulations"))
+        .and_then(|value| value.get(formulation));
+
+    let Some(declaration) = declaration else {
+        return if has_nonzero_longitudinal_wavenumber {
+            Err("Nonzero longitudinal wavenumber has no selected formulation contract.".into())
+        } else {
+            Ok(fallback)
+        };
+    };
+
+    match declaration.get("numericalFamily").and_then(Value::as_str) {
+        Some("deRhamTriangle") => Ok(NumericalFamily::Hcurl2d),
+        Some("scalarSimplexP1") => Ok(NumericalFamily::Scalar),
+        Some("vectorSimplexP1") => Ok(NumericalFamily::Vector),
+        Some(other) => Err(format!(
+            "Unsupported contract-declared longitudinal numerical family {other:?}."
+        )),
+        None => Ok(fallback),
+    }
+}
 
 fn safe_case_csv(name: &str) -> bool {
     name.len() <= 120
@@ -76,17 +106,36 @@ fn compute(
         .map(Vec::as_slice)
         .unwrap_or(&[]);
     let symbols = crate::model_expression::resolve_parameters(parameters, &input.model)?;
+    let longitudinal_wavenumber=crate::longitudinal::prescribed_wavenumber(
+        &package,&input.model,&case.study_id,&case.settings.formulation,&symbols)?;
+    let family = frequency_family_for_formulation(
+        &package,
+        &case.settings.formulation,
+        longitudinal_wavenumber != crate::C::default(),
+        family,
+    )?;
     let text =
         fs::read_to_string(&input.mesh_path).map_err(|e| format!("Could not read mesh: {e}"))?;
     let config = match family {
         NumericalFamily::Scalar => package.get("preparedFrequencyScalar").and_then(|v| v.get(&case.settings.formulation)),
         NumericalFamily::Vector => package.get("preparedVector"),
+        NumericalFamily::Hcurl2d => package.get("preparedHcurl2d"),
     }.ok_or("Frequency numerical formulation policy is missing.")?;
     let format = config
         .get("meshFormat")
         .and_then(Value::as_str)
         .ok_or("Frequency scalar meshFormat is required.")?;
-    let data = if matches!(family, NumericalFamily::Vector) {
+    let data = if matches!(family,NumericalFamily::Hcurl2d) {
+        crate::solver_common::stage_started("assembly");
+        match format{
+            "fullmeta-v2"=>{
+                crate::prepared_scalar_execution::check_dense_2d_records(&text)?;
+                let mesh=crate::mesh2d::parse_mesh_v2(&text)?;
+                crate::prepared_hcurl2d_model::solve(&case,&package,&input.model,&input.map,&mesh,&symbols,cache)?
+            }
+            other=>return Err(format!("H(curl) direct-sum mesh format {other:?} is unsupported.")),
+        }
+    } else if matches!(family, NumericalFamily::Vector) {
         crate::solver_common::stage_started("assembly");
         match format {
             "fullmeta-v2" => {
@@ -187,11 +236,16 @@ fn compute(
         })
         .ok_or("Scenario frequencyFieldPrefix must be a safe filename prefix.")?;
     let field_filename = format!("{prefix}{:.6}Hz.json", input.frequency);
+    // The contract-selected operator formulation also owns the result plan at
+    // zero kz. A full-polarization option stays on its declared direct-sum
+    // field space even when the longitudinal derivative vanishes.
+    let result_formulation =
+        crate::longitudinal::operator_formulation(&package, &case.settings.formulation);
     let plan =
-        crate::scenario_plan::ScenarioPlan::from_package(&package, &case.settings.formulation)?
+        crate::scenario_plan::ScenarioPlan::from_package(&package, result_formulation)?
             .result
             .ok_or("Scenario result plan is required.")?;
-    let variable_names = if matches!(family, NumericalFamily::Vector) {
+    let variable_names = if matches!(family,NumericalFamily::Vector) {
         if config.get("globalVariables").and_then(Value::as_str) != Some("ignore") { return Err("Unsupported vector global-variable policy.".into()); }
         Vec::new()
     } else { input
@@ -206,7 +260,7 @@ fn compute(
                 .map(str::to_string)
         })
         .collect() };
-    let field_files = if matches!(family, NumericalFamily::Vector) {
+    let field_files = if matches!(family, NumericalFamily::Vector|NumericalFamily::Hcurl2d) {
         input.model.pointer("/model/study").and_then(Value::as_array).and_then(|studies|
             studies.iter().find(|study| study.get("id").and_then(Value::as_str) == Some(case.study_id.as_str())))
             .and_then(|study| study.pointer("/output/fieldFiles")).and_then(Value::as_bool).unwrap_or(true)
@@ -451,6 +505,75 @@ mod tests {
         assert!(!safe_case_csv(".hidden.csv"));
         assert!(!safe_case_csv("../outside.csv"));
         assert!(!safe_case_csv(".fullmeta-case-../outside.csv"));
+    }
+
+    #[test]
+    fn zero_kz_uses_the_formulations_declared_numerical_family() {
+        let package = serde_json::json!({
+            "harmonicLongitudinalWavenumber": {
+                "formulations": {
+                    "Full": { "numericalFamily": "deRhamTriangle" }
+                }
+            }
+        });
+        let family = frequency_family_for_formulation(
+            &package,
+            "Full",
+            false,
+            NumericalFamily::Scalar,
+        )
+        .unwrap();
+        assert!(matches!(family, NumericalFamily::Hcurl2d));
+    }
+
+    #[test]
+    fn zero_kz_preserves_the_default_family_when_no_formulation_is_declared() {
+        let package = serde_json::json!({
+            "harmonicLongitudinalWavenumber": {
+                "formulations": {
+                    "Full": { "numericalFamily": "deRhamTriangle" }
+                }
+            }
+        });
+        let family = frequency_family_for_formulation(
+            &package,
+            "Ez",
+            false,
+            NumericalFamily::Scalar,
+        )
+        .unwrap();
+        assert!(matches!(family, NumericalFamily::Scalar));
+    }
+
+    #[test]
+    fn nonzero_kz_still_requires_a_formulation_contract() {
+        let error = frequency_family_for_formulation(
+            &serde_json::json!({}),
+            "Full",
+            true,
+            NumericalFamily::Scalar,
+        )
+        .unwrap_err();
+        assert!(error.contains("Nonzero longitudinal wavenumber"));
+    }
+
+    #[test]
+    fn unsupported_contract_numerical_family_is_reported() {
+        let package = serde_json::json!({
+            "harmonicLongitudinalWavenumber": {
+                "formulations": {
+                    "Full": { "numericalFamily": "unknown" }
+                }
+            }
+        });
+        let error = frequency_family_for_formulation(
+            &package,
+            "Full",
+            false,
+            NumericalFamily::Scalar,
+        )
+        .unwrap_err();
+        assert!(error.contains("Unsupported contract-declared"));
     }
 
     #[test]

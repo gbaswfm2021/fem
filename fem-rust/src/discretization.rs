@@ -14,6 +14,7 @@ pub(crate) enum Cell {
 pub(crate) enum Family {
     Lagrange,
     Nedelec,
+    NedelecH1DirectSum,
 }
 
 pub(crate) struct Discretization {
@@ -44,6 +45,7 @@ impl Discretization {
         let family = match value.get("family").and_then(Value::as_str) {
             Some("lagrange") => Family::Lagrange,
             Some("nedelec") => Family::Nedelec,
+            Some("nedelecH1DirectSum") => Family::NedelecH1DirectSum,
             _ => return Err("Unsupported finite-element family.".into()),
         };
         let components = value
@@ -78,6 +80,9 @@ impl Discretization {
             (Cell::Tetrahedron, Family::Lagrange) => orders.iter().all(|&order| order == 1),
             (Cell::Tetrahedron, Family::Nedelec) => {
                 components == 3 && orders.iter().all(|&order| order == 1 || order == 2)
+            }
+            (Cell::Triangle, Family::NedelecH1DirectSum) => {
+                components == 3 && orders.iter().all(|&order| order == 1)
             }
             _ => false,
         };

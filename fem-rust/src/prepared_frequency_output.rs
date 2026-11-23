@@ -96,6 +96,8 @@ pub(crate) fn build(case: &PreparedCase, package: &Value, model: &Value, map: &V
         ("ordering".into(),json!(case.settings.ordering)), ("threads".into(),json!(case.settings.threads)),
         ("quadrature".into(),json!(case.settings.quadrature)), ("residual".into(),json!(result.solution.residual)),
         ("unknowns".into(),json!(result.solution.field_dofs)), ("maximum".into(),json!(maximum)),
+        ("longitudinalWavenumberReal".into(),json!(result.longitudinal_wavenumber.re)),
+        ("longitudinalWavenumberImaginary".into(),json!(result.longitudinal_wavenumber.im)),
     ]), complex, series: fields, matrices: HashMap::new() })
 }
 

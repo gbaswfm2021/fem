@@ -1,7 +1,7 @@
 // Development runtime package. Full visible, native and numerical acceptance
 // remains tracked separately from catalog registration and declaration checks.
 import { createSchemaProjectPackage } from '../../platform/ui/widgets/model-editor/widget.js';
-import { bindRuntimePolicy, schemaAtPath, validateModelRules, validateModelWithRules } from './js/runtime/model-api.js';
+import { bindRuntimePolicy, validateModelRules, validateModelWithRules } from './js/runtime/model-api.js';
 import { loadWorkspaceJson, modelWithArrayItemDraft } from '../../platform/js/services.js';
 import { createSchemaTreeActionPlans, resolveTreeDescriptor } from '../../platform/ui/widgets/tree/widget.js';
 import { activeModelSchema,activateModelSchema,loadModelSchema } from './schema-documents.js';
@@ -29,13 +29,14 @@ import { selectionAdapter } from './ui/selection-adapter.js';
 import { integrationTreeItem, meshSizeTreeItem, periodicPairTreeItem, selectionTreeItem } from './js/selection-tree.js';
 import { studyTreeItem, sweepTreeItem } from './js/study-tree.js';
 import { fieldPlotTreeItem, globalPlotTreeItem } from './js/result-tree.js';
+import { studyEditorOptions } from './js/study-editor-options.js';
 import { materialTreeItem } from './js/material-tree.js';
 import { materialPropertyDescriptors } from './js/material-properties.js';
 import { definitionTreeItem, uniqueDefinitionSymbol } from './js/definition-tree.js';
 import { prepareArrayDeletion, deleteArrayItem } from './js/tree-deletion.js';
 import { saveFemDocument } from './js/document-save.js';
 import { createEditorDomain } from './js/editor-domain.js';
-import { addPhysicsCondition, conditionToggleAvailability, deletePhysicsCondition, duplicateArrayAvailability, duplicateArrayItem, duplicatePhysicsCondition, guardArrayItem, guardPhysicsCondition, guardPhysicsRoot, prepareConditionDeletion, preparePhysicsCondition, togglePhysicsCondition } from './js/physics-tree.js';
+import { addPhysicsCondition, conditionSpecsFromMenu, conditionToggleAvailability, deletePhysicsCondition, duplicateArrayAvailability, duplicateArrayItem, duplicatePhysicsCondition, guardArrayItem, guardPhysicsCondition, guardPhysicsRoot, prepareConditionDeletion, preparePhysicsCondition, togglePhysicsCondition } from './js/physics-tree.js';
 
 const workspaceUrl = new URL('../../', import.meta.url);
 const uiProfileSchemaUrl = new URL('platform/ui/widgets/model-editor/fullmeta-ui-profile-1.schema.json', workspaceUrl);
@@ -58,9 +59,10 @@ function expectedRuntimeCompatibility(schema) {
   }));
 }
 
-function scenarioProfiles(documents) {
+function scenarioProfiles(documents, scenarioContracts = []) {
   const entries = [];
   const seen = new Set();
+  const contractsById = new Map(scenarioContracts.map(entry => [entry.registry?.id, entry.contract]));
   for (const document of documents) {
     const profile = document?.['x-fem-scenario']?.profile;
     if (profile === undefined) continue;
@@ -73,7 +75,7 @@ function scenarioProfiles(documents) {
     }
     if (seen.has(profile.id)) throw new Error(`FEM scenario profile ${profile.id} is declared more than once.`);
     seen.add(profile.id);
-    entries.push({ document, profile });
+    entries.push({ document, profile, contract: contractsById.get(profile.id) || null });
   }
   if (!entries.length) throw new Error('The FEM schema graph has no scenario profile declarations.');
   return entries;
@@ -117,9 +119,7 @@ function profileEntryForModel(entries, model) {
 }
 
 function editorOptionsFor(entries, model) {
-  const options = profileEntryForModel(entries, model)?.document?.['x-fem-scenario']?.editorOptions;
-  return options && typeof options === 'object' && !Array.isArray(options)
-    ? structuredClone(options) : {};
+  return studyEditorOptions(profileEntryForModel(entries, model)?.document?.['x-fem-scenario'],model);
 }
 
 function uiProfilesFrom(entries, declarations) {
@@ -166,11 +166,13 @@ function quantityVectorComponentsFor(entries, { source, model, component } = {})
   const physics = model?.model?.physics || component?.physics || component;
   const formulation = physics?.formulation;
   if (!entry || typeof formulation !== 'string' || !entry.profile.formulations?.includes(formulation)) return [];
-  if (source === 'domainSource') {
+  if (source === 'domainSource' || source === 'additionalDomainSource') {
     const declaration = entry.document?.['x-fem-physics'];
-    const layout = declaration?.domainSourceLayout;
+    const layout = source === 'domainSource'
+      ? declaration?.domainSourceLayout
+      : declaration?.domainSourceLayoutsByType?.[source] || declaration?.domainSourceLayout;
     const labels = layout?.labelsByFormulation?.[formulation] || layout?.componentLabels;
-    const values = declaration?.boundaryDefaultsByFormulation?.[formulation]?.domainSource?.values;
+    const values = declaration?.boundaryDefaultsByFormulation?.[formulation]?.[source]?.values;
     if (!Array.isArray(labels) || !Array.isArray(values) || labels.length !== values.length) return [];
     return labels.map((label, index) => ({ symbol: label, label, unit: values[index]?.unit }));
   }
@@ -191,8 +193,11 @@ export async function createApplicationPackage(options = {}) {
   // it has not necessarily invoked the runtime package loader first.
   if(options.model&&options.modelLocation)await activateModelSchema(options.model,options.modelLocation);
   else if(options.schemaUrl)await loadModelSchema(options.schemaUrl,'fem');
-  const { schema, sources, documents } = activeModelSchema();
-  const profileEntries = scenarioProfiles(documents);
+  const { schema, sources, documents, scenarioContracts = [] } = activeModelSchema();
+  const physicsMenuEntries = schema['x-fullmeta-ui-tree']?.actionMenus?.find(rule =>
+    rule.when?.scope === 'item' && JSON.stringify(rule.when.path) === JSON.stringify(['model', 'physics']))?.entries || [];
+  const conditionSpecs = conditionSpecsFromMenu(physicsMenuEntries);
+  const profileEntries = scenarioProfiles(documents, scenarioContracts);
   const uiProfileSchema = await loadWorkspaceJson(uiProfileSchemaUrl, workspaceUrl);
   if (uiProfileSchema?.properties?.schema?.const !== 'fullmeta-ui-profile/1') {
     throw new Error('The shared Model Editor UI profile schema is missing or has an unsupported version.');
@@ -232,13 +237,9 @@ export async function createApplicationPackage(options = {}) {
     },
     editorOptionsForModel(value) { return editorOptionsFor(profileEntries, value); },
     modelEditorSchemaForPath(value, path, schemaOptions) {
-      // Named Physics conditions are additional properties, not declared
-      // interface fields. Keep the real parent schema for tree projection.
-      if (Array.isArray(path) && path.length === 2 && path[0] === 'model' && path[1] === 'physics') {
-        return schemaAtPath(value, path, schemaOptions, base.modelSchema);
-      }
-      return projectSettingsSchema({model:value,path,schema,
-        scenario:profileEntryForModel(profileEntries,value)?.document?.['x-fem-scenario'],
+      const scenarioEntry=profileEntryForModel(profileEntries,value);
+      return projectSettingsSchema({model:value,path,schema,scenarioPackage:scenarioEntry?.contract,
+        scenario:scenarioEntry?.document?.['x-fem-scenario'],
         getSchema:target=>base.modelEditorSchema.modelEditorSchemaForPath(value,target,schemaOptions)});
     },
   };
@@ -328,9 +329,6 @@ export async function createApplicationPackage(options = {}) {
       });
     },
     treeActionPlans(context) {
-      const physicsEntries = schema['x-fullmeta-ui-tree']?.actionMenus?.find(rule =>
-        rule.when?.scope === 'item' && JSON.stringify(rule.when.path) === JSON.stringify(['model', 'physics']))?.entries || [];
-      const conditionSpecs = new Map(physicsEntries.filter(entry => entry.conditionType && entry.itemName).map(entry => [entry.action, entry]));
       const physicsProfile = profileEntryForModel(profileEntries, context.model)?.document?.['x-fem-physics'];
       const conditionDeletion = target => ({ model: context.model, target,
         profile: physicsProfile, validate: value => validateModelRules(value, {}, schema), maximumErrors: schema['x-fullmeta-rules']?.maximumErrors });
@@ -339,7 +337,10 @@ export async function createApplicationPackage(options = {}) {
       const femStudyKind = scenario?.supportsStationary ? 'stationary'
         : studyType === 'frequencyDomain' ? 'wave' : null;
       const plan = createSchemaTreeActionPlans({ ...context,
-        capabilities: { ...context.capabilities, femStudyKind }, descriptor: schema['x-fullmeta-ui-tree'],
+        capabilities: { ...context.capabilities, femStudyKind,
+          femSupportsTransient:scenario?.supportedStudyTypes?.includes('transient')===true,
+          femSupportsEigenfrequency:scenario?.supportedStudyTypes?.includes('eigenfrequency')===true,
+          femSupportsPropagationMode:scenario?.supportedStudyTypes?.includes('propagationMode')===true }, descriptor: schema['x-fullmeta-ui-tree'],
         itemFactories: { ...base.editorFactories,
           femIntegrationOperator: integrationTreeItem,
           femMeshSizeControl: meshSizeTreeItem,
@@ -423,7 +424,7 @@ export async function createApplicationPackage(options = {}) {
               return { disabled: true, reason: 'Choose a supported Physics formulation with a declared primary field first.' };
             }
             if (action === 'add-global-variable-plot' && !insertion) {
-              return { disabled: true, reason: 'Add a harmonic Study with a parameter sweep and a global variable first.' };
+              return { disabled: true, reason: 'Add a transient Study or a harmonic Study with a parameter sweep, and a global variable first.' };
             }
             if (action === 'add-material-assignment' && !insertion) {
               return { disabled: true, reason: 'Select an unassigned Physics domain and provide the active profile material defaults first.' };

@@ -74,6 +74,7 @@ the linked packages show complete examples, including schema and output data.
 
 | Capability and request | Starting package | Numerical and policy declarations |
 | --- | --- | --- |
+| Transient `transientPlan` | All eight packages: acoustic, elastic, electromagnetic and thermal in 2D/3D | `transientForms`, `transientSelectionPlan`, `boundaryLaws`, declared `boundaryForms`, initial-field metadata, material bindings, `stateOutputs`, and `tensorRecovery` where applicable. Uses the shared sparse backward-Euler runner. |
 | Stationary `scalarSimplexP1` / `stationaryPlan` | [thermal2d.json](thermal2d.json), [thermal3d.json](thermal3d.json) | `preparedScalar`, `weakForms`, `boundaryForms`, `essentialForms`, `recoveries`, `materialBindings`, `selectionPlan`, `boundaryInputs`, `nullspaces`, `resultPlans`. Declare the nullspace/mean policy needed by an unanchored problem. |
 | Frequency `scalarSimplexP1` / `frequencyPlan` | [acoustic2d.json](acoustic2d.json), [acoustic3d.json](acoustic3d.json), [em2d.json](em2d.json) | `preparedFrequencyScalar` keyed by formulation, plus `weakForms`, `boundaryForms`, `essentialForms`, `recoveries`, `materialBindings`, `selectionPlan`, `boundaryInputs`, and `resultPlans`. |
 | Frequency `vectorSimplexP1` / `frequencyPlan` | [elastic2d.json](elastic2d.json), [elastic3d.json](elastic3d.json) | `preparedVector`, `weakForms` including `matrixCoefficients`, `boundaryForms`, `essentialForms`, `tensorRecoveries`, `materialBindings`, `selectionPlan`, `boundaryInputs`, and `resultPlans`. |
@@ -88,6 +89,13 @@ field catalogs, result defaults, and Study fingerprint. Existing packages also
 show their `capabilities` and `schemaContributions`. Do not set
 `solverModule` together with `execution`; a new package does not need a Rust
 scenario file or a compatibility label.
+
+`x-fem-scenario.editorOptions` declares the default editor controls.
+`editorOptionsByStudyType` may add existing controls for a particular Study
+kind, using `true` values only. The application applies those additions only
+when that kind is advertised in `supportedStudyTypes` and the model contains
+such a Study. The transient controls in thermal and elastic packages do
+not enable the Study by themselves; see [the transient contract](../../docs/transient_study_contract.md).
 
 Within `weakForms`, specify each element's cell, family, field components and
 supported orders, and express the test/trial operators and coefficients using
@@ -140,6 +148,12 @@ The common editor-facing server, preflight, meshing, run records and Study
 lifecycle are shared by the generic execution paths.
 Stationary Studies use `stationaryPlan`; frequency-domain preparation supports
 the declared `frequencyPlan` and `configuredFrequencyRequest` contracts.
+All eight packages also declare the shared `transientPlan`. Their
+`transientForms`, `transientSelectionPlan`, `boundaryLaws`, `boundaryForms`,
+material bindings, initial-field metadata and output declarations select the
+implemented scenario-neutral sparse backward-Euler path. The exact equations,
+tested scope and remaining acceptance checks are in the
+[transient contract](../../docs/transient_study_contract.md).
 
 Scenario result and Study metadata belong in the package contract. Declare
 solver-consumed Study fields and defaults through

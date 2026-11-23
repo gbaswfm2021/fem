@@ -474,6 +474,16 @@ fn checked_study_csv(
         {
             return Err(format!("{source}: malformed numeric row {rows}."));
         }
+        if request.get("studyType").and_then(Value::as_str)==Some("transient") {
+            let expected=coordinates.get(rows-1).ok_or_else(||format!("{source}: extra transient row."))?;
+            for (header,key) in [("case_index","caseIndex"),("sample_index","sampleIndex"),("t","timeSeconds")] {
+                let column=headers.iter().position(|value|*value==header).ok_or_else(||format!("{source}: missing {header} column."))?;
+                let actual=cells[column].parse::<f64>().map_err(|_|format!("{source}: invalid {header}."))?;
+                let value=expected[key].as_f64().ok_or_else(||format!("{source}: missing saved {key}."))?;
+                let tolerance=32.*f64::EPSILON*actual.abs().max(value.abs()).max(f64::MIN_POSITIVE);
+                if (actual-value).abs()>tolerance{return Err(format!("{source}: {header} differs from saved transient row {rows}."));}
+            }
+        }
     }
     if rows == 0 || rows != coordinates.len() {
         return Err(format!(
@@ -567,6 +577,12 @@ fn resolve_field_run(
     let request = checked_run_json(run, "request.json")?;
     let run_relative = format!("{}/{}", storage_name(runs_directory)?, run.id);
     let files = list_field_files(run, &run_relative, &request)?;
+    if run.record.pointer("/study/snapshot/type").and_then(Value::as_str)==Some("transient") {
+        return resolve_transient_field_run(input,action,scope,run,&request,&run_relative,&files);
+    }
+    if run.record.pointer("/study/snapshot/type").and_then(Value::as_str).is_some_and(|kind|matches!(kind,"eigenfrequency"|"propagationMode")) {
+        return resolve_eigenfrequency_field_run(input,action,scope,run,&request,&run_relative,&files);
+    }
     let (parameter_cases, saved_metadata) = run_result_data(run, &request, &Value::Null)?;
     let expected_count = run
         .record
@@ -1120,6 +1136,16 @@ pub(super) fn run_result_data(
     dataset: &Value,
 ) -> Result<(Value, Value)> {
     let metadata = result_table_metadata(run, request, dataset)?;
+    if request.get("studyType").and_then(Value::as_str)==Some("transient") {
+        let cases=request.get("cases").and_then(Value::as_array).ok_or("Transient result cases are missing.")?;
+        let mut values=Vec::new();
+        for case in cases {
+            let prepared=crate::transient_request::PreparedTransientCase::from_json(case)?;
+            let parameters=case.get("globalParameters").and_then(Value::as_object).ok_or("Transient result parameters are invalid.")?;
+            for _ in &prepared.grid.output_times {values.push(Value::Object(parameters.clone()));}
+        }
+        return Ok((json!(values),metadata));
+    }
     let Some(cases) = request.get("frequencyCases") else {
         return Ok((json!([{}]), metadata));
     };
@@ -1172,6 +1198,9 @@ fn result_table_metadata(run: &Run, request: &Value, dataset: &Value) -> Result<
         Some(value) => value.get("parameters").and_then(Value::as_array).ok_or_else(|| format!("Run {} has invalid saved sweep dimensions. Run the Study again to refresh its saved result metadata.", run.id))?,
         None => &empty_axes,
     };
+    if study.get("type").and_then(Value::as_str)==Some("transient") {
+        return transient_result_table_metadata(run,request,dataset,axes);
+    }
     if request.get("frequencyCases").is_none()
         && axes.is_empty()
         && study.get("type").and_then(Value::as_str) == Some("stationary")
@@ -1304,6 +1333,43 @@ fn result_table_metadata(run: &Run, request: &Value, dataset: &Value) -> Result<
         );
     }
     Ok(json!({"columns":columns,"coordinates":coordinates,"defaultXColumn":default_x}))
+}
+
+fn transient_result_table_metadata(run:&Run,request:&Value,dataset:&Value,axes:&[Value])->Result<Value>{
+    if request.get("studyType").and_then(Value::as_str)!=Some("transient") {return Err("Transient run request has the wrong Study type.".into());}
+    let definitions=run.record.pointer("/model/snapshot/model/parameters").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]);
+    let mut columns=vec![json!({"key":"t","label":"Time","unit":"s","displayScale":1.0,"role":"parameter"})];
+    let mut seen=HashSet::from(["t".to_string()]);
+    let x_column=dataset.get("xColumn").and_then(Value::as_str);
+    let requested=axes.iter().map(|axis|axis.get("parameter").and_then(Value::as_str).ok_or_else(||"Transient sweep parameter is missing.".to_string()))
+        .collect::<Result<Vec<_>>>()?;
+    for key in requested.into_iter().chain(x_column).chain(dataset.get("parameterColumns").and_then(Value::as_array)
+        .into_iter().flatten().filter_map(Value::as_str)).chain(dataset.get("filters").and_then(Value::as_object)
+        .into_iter().flat_map(|rows|rows.keys().map(String::as_str))) {
+        if seen.insert(key.to_string()) {
+            if let Some(column)=saved_parameter_column(run,definitions,key)? {columns.push(column);}
+            else if axes.iter().any(|axis|axis.get("parameter").and_then(Value::as_str)==Some(key)) {
+                return Err(format!("Transient run is missing a saved definition for sweep parameter {key}.").into());
+            }
+        }
+    }
+    let cases=request.get("cases").and_then(Value::as_array).filter(|rows|!rows.is_empty()).ok_or("Transient run has no saved cases.")?;
+    let mut coordinates=Vec::new();
+    for (case_index,case) in cases.iter().enumerate() {
+        let prepared=crate::transient_request::PreparedTransientCase::from_json(case)?;
+        for (sample_index,&time) in prepared.grid.output_times.iter().enumerate() {
+            let mut values=Map::new();values.insert("t".into(),json!(time));
+            for column in columns.iter().skip(1) {
+                let key=column["key"].as_str().ok_or("Transient parameter column has no key.")?;
+                let value=prepared.parameters.get(key).map(|v|v.value).filter(|v|v.is_finite())
+                    .ok_or_else(||format!("Transient case {case_index} is missing parameter {key}."))?;
+                values.insert(key.into(),json!(value));
+            }
+            coordinates.push(json!({"caseIndex":case_index,"sampleIndex":sample_index,"timeSeconds":time,"values":values}));
+        }
+    }
+    if coordinates.is_empty(){return Err("Transient run has no saved output times.".into());}
+    Ok(json!({"columns":columns,"coordinates":coordinates,"defaultXColumn":"t"}))
 }
 
 fn saved_parameter_column(run: &Run, definitions: &[Value], key: &str) -> Result<Option<Value>> {
@@ -1474,6 +1540,39 @@ fn saved_fingerprint(record: &Value, snapshot: &Value, study_id: &str) -> Option
 #[cfg(test)]
 mod freshness_tests {
     use super::*;
+
+    #[test]
+    fn transient_table_coordinates_preserve_case_specific_times_and_parameters() {
+        let run=Run{id:"time".into(),directory:PathBuf::new(),record:json!({
+            "study":{"snapshot":{"type":"transient","parameterSweep":{"parameters":[{"parameter":"a"}]}}},
+            "model":{"snapshot":{"model":{"parameters":[{"symbol":"a","name":"Amplitude","unit":"1"}]}}}})};
+        let case=|a,end|json!({"time":{"startSeconds":0.,"endSeconds":end,"maxStepSeconds":end,"maxSteps":1,"outputTimesSeconds":[0.,end]},
+            "globalParameters":{"a":a},"globalParameterDimensions":{"a":[0.,0.,0.,0.,0.]},"parameterOverrides":[]});
+        let request=json!({"studyType":"transient","cases":[case(1.,1e-12),case(2.,2e-12)]});
+        let (values,meta)=run_result_data(&run,&request,&json!({"xColumn":"t"})).unwrap();
+        assert_eq!(values.as_array().unwrap().len(),4);
+        assert_eq!(meta["defaultXColumn"],"t");assert_eq!(meta["columns"][0]["unit"],"s");assert_eq!(meta["columns"][1]["key"],"a");
+        assert_eq!(meta["coordinates"][1]["values"]["t"],1e-12);
+        assert_eq!(meta["coordinates"][3]["values"]["t"],2e-12);
+        assert_eq!(meta["coordinates"][3]["values"]["a"],2.);
+        assert_eq!(meta["coordinates"][3]["sampleIndex"],1);
+    }
+
+    #[test]
+    fn transient_history_rejects_time_or_case_tampering() {
+        let mut fixture=Fixture::new();fixture.directory("output");
+        let csv="case_index,sample_index,t,probe_re,probe_im\n0,0,0,1,0\n0,1,0.000000000001,2,0\n";
+        fixture.file("output/history.csv",csv);
+        let case=json!({"time":{"startSeconds":0.,"endSeconds":1e-12,"maxStepSeconds":1e-12,"maxSteps":1,"outputTimesSeconds":[0.,1e-12]},
+            "globalParameters":{},"globalParameterDimensions":{},"parameterOverrides":[]});
+        fixture.file("request.json",&json!({"studyType":"transient","cases":[case]}).to_string());
+        let run=Run{id:"time".into(),directory:fixture.root.clone(),record:json!({"study":{"snapshot":{"type":"transient"}},
+            "model":{"snapshot":{"model":{"parameters":[],"variables":[{"symbol":"probe"}]}}},"artifacts":{"csv":"output/history.csv","csvBytes":csv.len()}})};
+        let action=json!({"series":[{"column":"probe"}]});let dataset=json!({"xColumn":"t"});
+        assert!(checked_study_csv(&run,&action,&dataset).is_ok());
+        fs::write(fixture.root.join("output/history.csv"),csv.replace("0.000000000001","0.000000000002")).unwrap();
+        assert!(checked_study_csv(&run,&action,&dataset).unwrap_err().contains("differs from saved transient"));
+    }
 
     #[test]
     fn frequency_labels_use_engineering_units() {
@@ -1658,6 +1757,102 @@ mod freshness_tests {
     }
 
     #[test]
+    fn transient_field_index_keeps_time_samples_distinct_within_a_case() {
+        let mut fixture=Fixture::new();
+        fixture.directory("output");fixture.file("output/a.json","{}");fixture.file("output/b.json","{}");
+        let mut run=Run {id:"checked".into(),directory:fixture.root.clone(),record:json!({
+            "study":{"snapshot":{"type":"transient"}},"artifacts":{"fieldFiles":[
+                {"name":"b.json","caseIndex":0,"sampleIndex":1,"timeSeconds":0.5},
+                {"name":"a.json","caseIndex":0,"sampleIndex":0,"timeSeconds":0.0}]}})};
+        let files=list_field_files(&run,"fem_runs/checked",&Value::Null).unwrap();
+        assert_eq!(files.len(),2);assert_eq!(files[0]["name"],"a.json");assert_eq!(files[1]["timeSeconds"],0.5);
+        run.record["artifacts"]["fieldFiles"][1]["sampleIndex"]=json!(1);
+        assert!(list_field_files(&run,"fem_runs/checked",&Value::Null).unwrap_err().contains("repeats"));
+    }
+
+    #[test]
+    fn transient_selection_uses_case_and_sample_without_frequency() {
+        let case=json!({"time":{"startSeconds":0.,"endSeconds":2e-12,"maxStepSeconds":1e-12,"maxSteps":2,"outputTimesSeconds":[0.,1e-12,2e-12]},
+            "globalParameters":{},"globalParameterDimensions":{},"parameterOverrides":[]});
+        let request=json!({"cases":[case.clone(),case]});
+        let files=vec![json!({"name":"a.json","caseIndex":0,"sampleIndex":0,"timeSeconds":0.,"label":"a"}),
+            json!({"name":"b.json","caseIndex":0,"sampleIndex":1,"timeSeconds":1e-12,"label":"b"}),
+            json!({"name":"d.json","caseIndex":0,"sampleIndex":2,"timeSeconds":2e-12,"label":"d"}),
+            json!({"name":"c.json","caseIndex":1,"sampleIndex":2,"timeSeconds":2e-12,"label":"c"})];
+        let (selected,cases,times)=select_transient_sample(&files,&request,&json!({"caseIndex":0,"timeSeconds":0.9e-12})).unwrap();
+        assert_eq!(selected["name"],"b.json");assert_eq!(cases.len(),2);assert_eq!(times.len(),3);
+        assert!(select_transient_sample(&files,&request,&json!({"caseIndex":0,"sampleIndex":3})).is_err());
+        let mut corrupt=files.clone();corrupt[1]["timeSeconds"]=json!(2e-12);
+        assert!(select_transient_sample(&corrupt,&request,&json!({})).unwrap_err().contains("disagrees"));
+    }
+
+    #[test]
+    fn transient_result_resolves_checked_sample_with_study_identity() {
+        let mut fixture=Fixture::new();fixture.directory("runs");fixture.directory("runs/checked");fixture.directory("runs/checked/output");
+        let raw=json!({"schema":"fullmeta-transient-field/1","studyId":"study","caseIndex":0,"sampleIndex":1,"timeSeconds":1e-12,
+            "fields":{"p":{"real":[1.],"imag":[0.],"unit":"Pa"}}});
+        fixture.file("runs/checked/output/time.json",&raw.to_string());
+        let mut initial=raw.clone();initial["sampleIndex"]=json!(0);initial["timeSeconds"]=json!(0.);
+        fixture.file("runs/checked/output/initial.json",&initial.to_string());
+        let mut model:Value=serde_json::from_str(include_str!("../../examples/acoustic_room_2d/fem_model.json")).unwrap();
+        model["model"]["study"][0]["type"]=json!("transient");
+        let run=Run {id:"checked".into(),directory:fixture.root.join("runs/checked"),record:json!({
+            "study":{"id":"study","snapshot":{"type":"transient"}},"model":{"snapshot":model},
+            "artifacts":{"fieldFileCount":2,"fieldFiles":[{"name":"initial.json","caseIndex":0,"sampleIndex":0,"timeSeconds":0.},{"name":"time.json","caseIndex":0,"sampleIndex":1,"timeSeconds":1e-12}]}})};
+        let runs_directory=fixture.root.join("runs");
+        let scope=ResultScope {root:&fixture.root,project:&fixture.root,document:&fixture.root,runs_directory:&runs_directory,model:&model};
+        let request=json!({"schema":"fullmeta-transient-study-plan/1","cases":[{"time":{"startSeconds":0.,"endSeconds":1e-12,
+            "maxStepSeconds":1e-12,"maxSteps":1,"outputTimesSeconds":[0.,1e-12]},"globalParameters":{},"globalParameterDimensions":{},"parameterOverrides":[]}]});
+        let files=list_field_files(&run,"runs/checked",&request).unwrap();
+        let result=resolve_transient_field_run(&json!({"caseIndex":0,"sampleIndex":1}),
+            &json!({"type":"field","quantity":{"component":"p","part":"real"}}),&scope,&run,&request,"runs/checked",&files).unwrap();
+        assert_eq!(result["studyId"],"study");assert_eq!(result["timeSeconds"],1e-12);
+        assert_eq!(result["sampleIndex"],1);assert_eq!(result["availableTimes"].as_array().unwrap().len(),2);
+    }
+
+    #[test]
+    fn propagation_mode_result_resolves_direct_kz_and_rejects_bad_units() {
+        let mut fixture=Fixture::new();
+        fixture.directory("runs");fixture.directory("runs/guide");fixture.directory("runs/guide/output");
+        let mut model:Value=serde_json::from_str(include_str!("../../examples/acoustic_room_2d/fem_model.json")).unwrap();
+        model["model"]["study"][0]["type"]=json!("propagationMode");
+        let raw=json!({"schema":"fullmeta-propagation-mode/1","studyType":"propagationMode","studyId":"study",
+            "caseIndex":0,"modeIndex":0,"frequencyHz":1.,"longitudinalWavenumber":{
+                "realRadPerMetre":3.25,"imaginaryRadPerMetre":-0.125,"unit":"rad/m"},
+            "relativeResidual":1e-10,"dimension":2,"nodes":[[0.,0.,0.]],"triangles":[],
+            "fields":{"p":{"real":[1.],"imag":[0.],"unit":"Pa"}}});
+        fixture.file("runs/guide/output/mode-0.json",&raw.to_string());
+        let index=json!({"name":"mode-0.json","caseIndex":0,"modeIndex":0,"label":"Propagation mode",
+            "longitudinalWavenumber":raw["longitudinalWavenumber"],"relativeResidual":1e-10});
+        let run=Run{id:"guide".into(),directory:fixture.root.join("runs/guide"),record:json!({
+            "study":{"id":"study","snapshot":{"type":"propagationMode"}},"model":{"snapshot":model},
+            "artifacts":{"fieldFileCount":1,"fieldFiles":[index]}})};
+        let request=json!({"schema":"fullmeta-propagation-mode-study-plan/1","cases":[{
+            "globalParameters":{},"globalParameterDimensions":{},"parameterOverrides":[]}]});
+        let files=vec![index];
+        let runs_directory=fixture.root.join("runs");
+        let scope=ResultScope{root:&fixture.root,project:&fixture.root,document:&fixture.root,
+            runs_directory:&runs_directory,model:&run.record["model"]["snapshot"]};
+        let action=json!({"type":"field","quantity":{"component":"p","part":"real"}});
+        let result=resolve_eigenfrequency_field_run(&json!({"caseIndex":0,"modeIndex":0}),&action,&scope,&run,
+            &request,"runs/guide",&files).unwrap();
+        assert_eq!(result["propagationMode"],true);
+        assert_eq!(result["eigenfrequency"],false);
+        assert_eq!(result["longitudinalWavenumber"]["realRadPerMetre"],3.25);
+        assert_eq!(result["longitudinalWavenumber"]["imaginaryRadPerMetre"],-0.125);
+        assert_eq!(result["longitudinalWavenumber"]["unit"],"rad/m");
+        assert_eq!(result["availableModes"].as_array().unwrap().len(),1);
+
+        drop(scope);
+        let mut malformed=raw;malformed["longitudinalWavenumber"]["unit"]=json!("1/m");
+        fixture.file("runs/guide/output/mode-0.json",&malformed.to_string());
+        let scope=ResultScope{root:&fixture.root,project:&fixture.root,document:&fixture.root,
+            runs_directory:&runs_directory,model:&run.record["model"]["snapshot"]};
+        assert!(resolve_eigenfrequency_field_run(&json!({"caseIndex":0,"modeIndex":0}),&action,&scope,&run,
+            &request,"runs/guide",&files).unwrap_err().contains("invalid longitudinal-wavenumber unit"));
+    }
+
+    #[test]
     fn study_fingerprint_reads_verified_legacy_snapshots_and_rejects_tampering() {
         let original = study_fingerprint::tests::specimen();
         let expected = study_input_fingerprint(&original, "study")
@@ -1790,6 +1985,171 @@ fn study_display_name<'a>(model: &'a Value, study_id: &'a str) -> &'a str {
         .unwrap_or(study_id)
 }
 
+/// Select a physical time sample within one prepared sweep case. Cases and
+/// sample indices are independent; a case may have many output times.
+fn select_transient_sample(files:&[Value],request:&Value,input:&Value)->Result<(Value,Vec<Value>,Vec<Value>)> {
+    let cases=request.get("cases").and_then(Value::as_array).filter(|v|!v.is_empty()).ok_or("Transient request has no prepared cases.")?;
+    for key in ["caseIndex","sampleIndex"] {
+        if input.get(key).is_some_and(|v|!v.is_null() && v.as_u64().is_none()) {return Err(format!("Transient {key} must be a nonnegative integer."));}
+    }
+    if input.get("timeSeconds").is_some_and(|v|!v.is_null() && v.as_f64().is_none_or(|v|!v.is_finite())) {
+        return Err("Transient timeSeconds must be finite.".into());
+    }
+    let available_cases=files.iter().filter_map(|file|file.get("caseIndex").and_then(Value::as_u64))
+        .collect::<std::collections::BTreeSet<_>>().into_iter().map(|index|json!({"caseIndex":index,"label":format!("Case {}",index as u128+1)})).collect::<Vec<_>>();
+    let case=input.get("caseIndex").and_then(Value::as_u64).or_else(||available_cases.first().and_then(|v|v["caseIndex"].as_u64()))
+        .ok_or("Transient run has no available field cases.")?;
+    let case_usize=usize::try_from(case).map_err(|_|"Transient case index is out of range.")?;
+    let prepared=crate::transient_request::PreparedTransientCase::from_json(cases.get(case_usize).ok_or("Transient case index is out of range.")?)?;
+    let candidates=files.iter().filter(|file|file["caseIndex"].as_u64()==Some(case)).collect::<Vec<_>>();
+    if candidates.is_empty() {return Err(format!("Transient case {case} has no field samples."));}
+    if candidates.len()!=prepared.grid.output_times.len() {return Err(format!("Transient case {case} has incomplete field samples."));}
+    for file in &candidates {
+        let index=usize::try_from(file["sampleIndex"].as_u64().ok_or("Transient sample index is invalid.")?).map_err(|_|"Transient sample index is out of range.")?;
+        let expected=*prepared.grid.output_times.get(index).ok_or("Transient sample index is absent from the prepared schedule.")?;
+        let actual=file["timeSeconds"].as_f64().filter(|v|v.is_finite()).ok_or("Transient sample time is invalid.")?;
+        if (actual-expected).abs()>32.*f64::EPSILON*actual.abs().max(expected.abs()).max(f64::MIN_POSITIVE) {return Err("Transient sample time disagrees with the prepared schedule.".into());}
+    }
+    let selected=if let Some(sample)=input.get("sampleIndex").and_then(Value::as_u64) {
+        candidates.iter().copied().find(|entry|entry["sampleIndex"].as_u64()==Some(sample))
+            .ok_or("The requested transient sample is unavailable.")?
+    } else if let Some(time)=input.get("timeSeconds").and_then(Value::as_f64).filter(|v|v.is_finite()) {
+        candidates.iter().copied().min_by(|a,b|(a["timeSeconds"].as_f64().unwrap()-time).abs()
+            .total_cmp(&(b["timeSeconds"].as_f64().unwrap()-time).abs())).unwrap()
+    } else {candidates[0]};
+    let available_times=candidates.iter().map(|file|json!({"sampleIndex":file["sampleIndex"],"timeSeconds":file["timeSeconds"],"label":file["label"]})).collect();
+    Ok((selected.clone(),available_cases,available_times))
+}
+
+fn resolve_transient_field_run(input:&Value,action:&Value,scope:&ResultScope<'_>,run:&Run,
+    request:&Value,run_relative:&str,files:&[Value])->Result<Value> {
+    if request.get("schema").and_then(Value::as_str)!=Some("fullmeta-transient-study-plan/1") {
+        return Err("Transient run request has an unsupported plan schema.".into());
+    }
+    if input.get("filters").is_some_and(|v|v.as_object().is_some_and(|v|!v.is_empty())) {
+        return Err("Transient result parameter filters are not yet supported; select a case index.".into());
+    }
+    let expected=run.record.pointer("/artifacts/fieldFileCount").and_then(Value::as_u64);
+    if files.is_empty() || expected.is_some_and(|v|v!=files.len() as u64) {return Err("Transient run has no complete field output.".into());}
+    let (selected,available_cases,available_times)=select_transient_sample(files,request,input)?;
+    let case=selected["caseIndex"].as_u64().ok_or("Transient selected case is invalid.")?;
+    let sample=selected["sampleIndex"].as_u64().ok_or("Transient selected sample is invalid.")?;
+    let time=selected["timeSeconds"].as_f64().ok_or("Transient selected time is invalid.")?;
+    let study_id=run.record.pointer("/study/id").and_then(Value::as_str).ok_or("The run has no Study ID.")?;
+    let name=selected["name"].as_str().ok_or("Transient selected field has no filename.")?;
+    let relative=format!("{run_relative}/output/{name}");
+    let artifact=checked_file_maybe(scope.project,&relative)?.ok_or_else(||format!("Field artifact is missing: {relative}"))?;
+    let raw=read_json(&artifact)?;
+    let raw_time=raw.get("timeSeconds").and_then(Value::as_f64).filter(|v|v.is_finite()).ok_or("Transient field artifact has invalid time.")?;
+    if raw.get("schema").and_then(Value::as_str)!=Some("fullmeta-transient-field/1") || raw.get("studyId").and_then(Value::as_str)!=Some(study_id)
+        || raw.get("caseIndex").and_then(Value::as_u64)!=Some(case) || raw.get("sampleIndex").and_then(Value::as_u64)!=Some(sample)
+        || (raw_time-time).abs()>32.*f64::EPSILON*raw_time.abs().max(time.abs()).max(f64::MIN_POSITIVE) {
+        return Err(format!("Transient field artifact {relative} disagrees with its index."));
+    }
+    let profile=scope.model.pointer("/scenario/profileId").and_then(Value::as_str).ok_or("The model has no profile ID.")?;
+    let scenario=crate::model_schema::scenario_metadata_for_profile(profile)?;
+    let sources=scenario.pointer("/fields/plotSources").and_then(Value::as_array);
+    let component=action.pointer("/quantity/component").and_then(Value::as_str).ok_or("The selected field result requires a component.")?;
+    let pointwise=sources.is_some_and(|v|v.iter().any(|v|v=="pointwise"))
+        && definitions_containing(scope.model.pointer("/model/pointwiseVariables"),component).is_some();
+    let material=sources.is_some_and(|v|v.iter().any(|v|v=="material"))
+        && crate::model_schema::material_properties_for_profile(profile)?.iter().any(|value|value["symbol"]==component);
+    let quantity=if material {raw.get("materialFieldsByCell")} else {raw.get("fields")};
+    if !pointwise && quantity.and_then(|v|v.get(component)).is_none_or(Value::is_null) {
+        return Err(format!("Field artifact {relative} is missing the requested component {component}."));
+    }
+    let mut response=json!({"action":action,"runId":run.id,"studyId":study_id,"studyName":study_display_name(scope.model,study_id),
+        "modelFreshness":"current","transient":true,"stationary":false,"caseIndex":case,"sampleIndex":sample,"timeSeconds":time,
+        "path":relative,"url":artifact_url(scope.root,&artifact)?,"availableCases":available_cases,"availableTimes":available_times,
+        "availableFrequenciesGHz":[],"selectedFilters":{},"selectionAdjustments":[]});
+    let cases=request["cases"].as_array().ok_or("Transient request has no cases.")?;
+    let selected_case=cases.get(usize::try_from(case).map_err(|_|"Transient case index is out of range.")?)
+        .ok_or("Transient case index is out of range.")?;
+    response["caseParameters"]=selected_case["globalParameters"].clone();
+    let coordinates=cases.iter().enumerate().map(|(index,_)|json!({"caseIndex":index})).collect::<Vec<_>>();
+    let parameters=Value::Array(cases.iter().map(|entry|entry["globalParameters"].clone()).collect());
+    match checked_field_evaluation(run,&coordinates,&parameters,Some(case),pointwise.then_some(component)) {
+        Ok(Some(evaluation))=>response["fieldEvaluation"]=evaluation,
+        Err(error) if pointwise=>return Err(error),
+        _=>{}
+    }
+    if let Some(mesh)=checked_field_mesh(scope,run,case,cases.len()==1) {response["meshArtifact"]=mesh;}
+    Ok(response)
+}
+
+fn resolve_eigenfrequency_field_run(input:&Value,action:&Value,scope:&ResultScope<'_>,run:&Run,
+    request:&Value,run_relative:&str,files:&[Value])->Result<Value>{
+    let propagation=run.record.pointer("/study/snapshot/type").and_then(Value::as_str)==Some("propagationMode");
+    let expected_plan=if propagation{"fullmeta-propagation-mode-study-plan/1"}else{"fullmeta-eigenfrequency-study-plan/1"};
+    let (mode_schema,mode_name,eigen_key,real_key,imaginary_key)=if propagation{
+        ("fullmeta-propagation-mode/1","Propagation mode","longitudinalWavenumber","realRadPerMetre","imaginaryRadPerMetre")
+    }else{("fullmeta-eigenfrequency-mode/1","Eigenmode","temporalEigenvalue","realPerSecond","imaginaryPerSecond")};
+    if request.get("schema").and_then(Value::as_str)!=Some(expected_plan){
+        return Err(format!("{} run request has an unsupported plan schema.",if propagation{"Propagation-mode"}else{"Eigenfrequency"}));
+    }
+    if input.get("filters").is_some_and(|value|value.as_object().is_some_and(|value|!value.is_empty())){
+        return Err(format!("{} result parameter filters are not yet supported; select a case index.",if propagation{"Propagation-mode"}else{"Eigenfrequency"}));
+    }
+    let expected=run.record.pointer("/artifacts/fieldFileCount").and_then(Value::as_u64);
+    if files.is_empty()||expected.is_some_and(|value|value!=files.len() as u64){return Err(format!("{} run has no complete field output.",if propagation{"Propagation-mode"}else{"Eigenfrequency"}));}
+    let cases=request.get("cases").and_then(Value::as_array).filter(|cases|!cases.is_empty()).ok_or("Mode request has no parameter cases.")?;
+    let available_cases=cases.iter().enumerate().map(|(case_index,case)|json!({"caseIndex":case_index,"label":format!("Case {}",case_index+1),"globalParameters":case["globalParameters"]})).collect::<Vec<_>>();
+    let case=input.get("caseIndex").and_then(Value::as_u64).map(usize::try_from).transpose().map_err(|_|"Eigenfrequency case index is out of range.")?
+        .unwrap_or(0);let case_row=cases.get(case).ok_or("Eigenfrequency case index is unavailable.")?;
+    let candidates=files.iter().filter(|file|file.get("caseIndex").and_then(Value::as_u64)==Some(case as u64)).collect::<Vec<_>>();
+    if candidates.is_empty(){return Err(format!("Mode case {case} has no saved modes."));}
+    let modes=candidates.iter().map(|file|{
+        let index=file.get("modeIndex").and_then(Value::as_u64).ok_or("Mode field index requires a mode index.")?;
+        Ok(json!({"modeIndex":index,"label":file.get("label").and_then(Value::as_str).unwrap_or(mode_name),
+            "eigenvalue":file.get("eigenvalue"),"temporalEigenvalue":file.get("temporalEigenvalue"),
+            "longitudinalWavenumber":file.get("longitudinalWavenumber"),"relativeResidual":file.get("relativeResidual")}))
+    }).collect::<Result<Vec<_>>>()?;
+    let mode=input.get("modeIndex").and_then(Value::as_u64).map(usize::try_from).transpose().map_err(|_|"Eigenfrequency mode index is out of range.")?
+        .unwrap_or_else(||modes[0]["modeIndex"].as_u64().unwrap_or(0) as usize);
+    let selected=candidates.iter().copied().find(|file|file.get("modeIndex").and_then(Value::as_u64)==Some(mode as u64)).ok_or("The requested mode is unavailable.")?;
+    let study_id=run.record.pointer("/study/id").and_then(Value::as_str).ok_or("The run has no Study ID.")?;
+    let name=selected.get("name").and_then(Value::as_str).ok_or("Mode index has no filename.")?;
+    let relative=format!("{run_relative}/output/{name}");let artifact=checked_file_maybe(scope.project,&relative)?.ok_or_else(||format!("Field artifact is missing: {relative}"))?;
+    let raw=read_json(&artifact)?;
+    if raw.get("schema").and_then(Value::as_str)!=Some(mode_schema)||raw.get("studyId").and_then(Value::as_str)!=Some(study_id)
+        ||raw.get("caseIndex").and_then(Value::as_u64)!=Some(case as u64)||raw.get("modeIndex").and_then(Value::as_u64)!=Some(mode as u64){
+        return Err(format!("Eigenfrequency mode artifact {relative} disagrees with its index."));
+    }
+    if propagation {
+        for key in [real_key,imaginary_key] {
+            if raw.pointer(&format!("/{eigen_key}/{key}")).and_then(Value::as_f64).is_none_or(|value|!value.is_finite()) {
+                return Err(format!("Propagation-mode artifact {relative} has a non-finite longitudinal eigenvalue."));
+            }
+        }
+        if raw.pointer(&format!("/{eigen_key}/unit")).and_then(Value::as_str)!=Some("rad/m") {
+            return Err(format!("Propagation-mode artifact {relative} has an invalid longitudinal-wavenumber unit."));
+        }
+    }
+    let profile=scope.model.pointer("/scenario/profileId").and_then(Value::as_str).ok_or("The model has no profile ID.")?;
+    let scenario=crate::model_schema::scenario_metadata_for_profile(profile)?;let sources=scenario.pointer("/fields/plotSources").and_then(Value::as_array);
+    let component=action.pointer("/quantity/component").and_then(Value::as_str).ok_or("The selected field result requires a component.")?;
+    let pointwise=sources.is_some_and(|values|values.iter().any(|value|value=="pointwise"))
+        &&definitions_containing(scope.model.pointer("/model/pointwiseVariables"),component).is_some();
+    let material=sources.is_some_and(|values|values.iter().any(|value|value=="material"))
+        &&crate::model_schema::material_properties_for_profile(profile)?.iter().any(|value|value["symbol"]==component);
+    let fields=if material{raw.get("materialFieldsByCell")}else{raw.get("fields")};
+    if !pointwise&&fields.and_then(|value|value.get(component)).is_none_or(Value::is_null){return Err(format!("Field artifact {relative} is missing the requested component {component}."));}
+    let mut response=json!({"action":action,"runId":run.id,"studyId":study_id,"studyName":study_display_name(scope.model,study_id),
+        "modelFreshness":"current","eigenfrequency":!propagation,"propagationMode":propagation,"transient":false,"stationary":false,"caseIndex":case,"modeIndex":mode,
+        "frequencyHz":raw["frequencyHz"],"eigenvalue":raw[eigen_key],"longitudinalWavenumber":raw["longitudinalWavenumber"],
+        "temporalEigenvalue":raw["temporalEigenvalue"],"complexFrequencyHz":raw["complexFrequencyHz"],"relativeResidual":raw["relativeResidual"],
+        "path":relative,"url":artifact_url(scope.root,&artifact)?,"availableCases":available_cases,"availableModes":modes,
+        "availableTimes":[],"availableFrequenciesGHz":[],"selectedFilters":{},"selectionAdjustments":[]});
+    response["caseParameters"]=case_row["globalParameters"].clone();
+    let coordinates=cases.iter().enumerate().map(|(index,_)|json!({"caseIndex":index})).collect::<Vec<_>>();
+    let parameters=Value::Array(cases.iter().map(|entry|entry["globalParameters"].clone()).collect());
+    match checked_field_evaluation(run,&coordinates,&parameters,Some(case as u64),pointwise.then_some(component)){
+        Ok(Some(evaluation))=>response["fieldEvaluation"]=evaluation,Err(error) if pointwise=>return Err(error),_=>{}
+    }
+    if let Some(mesh)=checked_field_mesh(scope,run,case as u64,cases.len()==1){response["meshArtifact"]=mesh;}
+    Ok(response)
+}
+
 fn run_timestamp<'a>(record: &'a Value, id: &'a str) -> &'a str {
     record
         .get("completedAt")
@@ -1872,6 +2232,41 @@ fn list_field_files(
             detail
         )
     };
+    let eigenfrequency=run.record.pointer("/study/snapshot/type").and_then(Value::as_str)==Some("eigenfrequency");
+    let propagation=run.record.pointer("/study/snapshot/type").and_then(Value::as_str)==Some("propagationMode");
+    if eigenfrequency||propagation{
+        let indexed=run.record.pointer("/artifacts/fieldFiles").and_then(Value::as_array).ok_or("Eigenfrequency run has no indexed field artifacts.")?;
+        let mut files=Vec::with_capacity(indexed.len());let mut seen=std::collections::HashSet::new();
+        for item in indexed{
+            let name=item.get("name").and_then(Value::as_str).ok_or("Eigenfrequency field index requires a filename.")?;
+            let case=item.get("caseIndex").and_then(Value::as_u64).filter(|value|*value<=9_007_199_254_740_991).ok_or("Eigenfrequency field index requires a safe case index.")?;
+            let mode=item.get("modeIndex").and_then(Value::as_u64).filter(|value|*value<=9_007_199_254_740_991).ok_or("Eigenfrequency field index requires a safe mode index.")?;
+            if !seen.insert((case,mode)){return Err("Eigenfrequency field index repeats a case and mode.".into());}check_indexed_file(name)?;
+            files.push(json!({"name":name,"caseIndex":case,"modeIndex":mode,"label":item.get("label").and_then(Value::as_str).unwrap_or(if propagation{"Propagation mode"}else{"Eigenmode"}),
+                "temporalEigenvalue":item.get("temporalEigenvalue"),"complexFrequencyHz":item.get("complexFrequencyHz"),
+                "longitudinalWavenumber":item.get("longitudinalWavenumber"),"frequencyHz":item.get("frequencyHz"),"relativeResidual":item.get("relativeResidual")}));
+        }
+        files.sort_by(|a,b|a["caseIndex"].as_u64().cmp(&b["caseIndex"].as_u64()).then_with(||a["modeIndex"].as_u64().cmp(&b["modeIndex"].as_u64())));
+        return Ok(files);
+    }
+    let transient=run.record.pointer("/study/snapshot/type").and_then(Value::as_str)==Some("transient");
+    if transient {
+        let indexed=run.record.pointer("/artifacts/fieldFiles").and_then(Value::as_array)
+            .ok_or("Transient run has no indexed field artifacts.")?;
+        let mut files=Vec::with_capacity(indexed.len());let mut seen=std::collections::HashSet::new();
+        for item in indexed {
+            let name=item.get("name").and_then(Value::as_str).ok_or("Transient field index requires a filename.")?;
+            let case=item.get("caseIndex").and_then(Value::as_u64).filter(|v|*v<=9_007_199_254_740_991).ok_or("Transient field index requires a safe case index.")?;
+            let sample=item.get("sampleIndex").and_then(Value::as_u64).filter(|v|*v<=9_007_199_254_740_991).ok_or("Transient field index requires a safe sample index.")?;
+            let time=item.get("timeSeconds").and_then(Value::as_f64).filter(|v|v.is_finite()).ok_or("Transient field index requires a finite time.")?;
+            if !seen.insert((case,sample)) {return Err("Transient field index repeats a case and sample.".into());}
+            check_indexed_file(name)?;
+            files.push(json!({"name":name,"caseIndex":case,"sampleIndex":sample,"timeSeconds":time,
+                "label":format!("Case {} · t = {} s",case as u128+1,time)}));
+        }
+        files.sort_by(|a,b|a["caseIndex"].as_u64().cmp(&b["caseIndex"].as_u64()).then_with(||a["sampleIndex"].as_u64().cmp(&b["sampleIndex"].as_u64())));
+        return Ok(files);
+    }
     let stationary = run
         .record
         .pointer("/study/snapshot/type")

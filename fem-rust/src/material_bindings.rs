@@ -39,6 +39,7 @@ struct Binding {
 pub(crate) struct MaterialBindings {
     bindings: Vec<Binding>,
     uses_position: bool,
+    uses_time: bool,
 }
 
 impl MaterialBindings {
@@ -54,6 +55,7 @@ impl MaterialBindings {
         let mut bindings = Vec::with_capacity(rows.len());
         let mut targets = HashSet::new();
         let mut uses_position = false;
+        let mut uses_time = false;
         for (index, row) in rows.iter().enumerate() {
             let path = format!("materialBindings[{index}]");
             let text = |key: &str| -> Result<&str, String> {
@@ -86,6 +88,7 @@ impl MaterialBindings {
             let source = if row.get("source").is_some() {
                 let name = text("source")?;
                 uses_position |= ["x", "y", "z"].contains(&name);
+                uses_time |= name == "t";
                 Source::Alias(name.to_string())
             } else if row.get("expression").is_some() {
                 let source = row
@@ -102,6 +105,7 @@ impl MaterialBindings {
                 uses_position |= ["x", "y", "z"]
                     .iter()
                     .any(|symbol| compiled.uses_symbol(symbol));
+                uses_time |= compiled.uses_symbol("t");
                 Source::Expression(compiled)
             } else {
                 Source::Constant(number(row.get("constant"), &format!("{path}.constant"))? * scale)
@@ -204,6 +208,7 @@ impl MaterialBindings {
         Ok(Self {
             bindings,
             uses_position,
+            uses_time,
         })
     }
 
@@ -212,6 +217,10 @@ impl MaterialBindings {
     pub(crate) fn uses_position(&self) -> bool {
         self.uses_position
     }
+
+    /// Direct references only; callers must also inspect material inputs and
+    /// parameter dependencies before caching a transient operator.
+    pub(crate) fn uses_time(&self) -> bool { self.uses_time }
 
     /// Resolve aliases and derived real symbols, checking each declared unit and
     /// constraint. Material symbols override caller symbols of the same name;
@@ -419,6 +428,16 @@ mod tests {
                 .unwrap_err()
                 .contains("bounds")
         );
+    }
+
+    #[test]
+    fn transient_binding_reports_direct_time_dependency() {
+        let plan=MaterialBindings::from_json(&json!([
+            {"target":"elapsed","source":"t","unit":"s"}
+        ])).unwrap();
+        assert!(plan.uses_time());
+        let context=HashMap::from([("t".into(),quantity(2.,"s"))]);
+        assert_eq!(plan.evaluate(&HashMap::new(),&context,"material").unwrap()["elapsed"].value,2.);
     }
 
     #[test]

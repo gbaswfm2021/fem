@@ -31,6 +31,12 @@ pub(crate) enum Mesh<'a> {
 pub(crate) struct FrequencyResult {
     pub(crate) solution: nodal_p1::Solution,
     pub(crate) recovered_nodes: Vec<[C; 3]>,
+    pub(crate) longitudinal_wavenumber: C,
+}
+
+enum FrequencyExecution {
+    Solved(FrequencyResult),
+    Assembled(nodal_p1::LinearSystem),
 }
 
 struct Policy {
@@ -214,6 +220,42 @@ pub(crate) fn solve(
     periodic: Option<&crate::scalar2d::PeriodicDofMap>,
     cache: &mut SolverCache,
 ) -> Result<FrequencyResult, String> {
+    match execute(case,package,model,map,mesh,parameters,periodic,cache,false)? {
+        FrequencyExecution::Solved(result)=>Ok(result),
+        FrequencyExecution::Assembled(_)=>Err("Frequency scalar solve returned an assembly-only result.".into()),
+    }
+}
+
+/// Assemble the selected scalar frequency operator into sparse master rows
+/// without solving it. This is shared by the propagation-mode adapter, which
+/// samples the declared quadratic longitudinal operator at three wavenumbers.
+pub(crate) fn assemble(
+    case: &PreparedCase,
+    package: &Value,
+    model: &Value,
+    map: &Value,
+    mesh: Mesh<'_>,
+    parameters: &HashMap<String, Scalar>,
+    periodic: Option<&crate::scalar2d::PeriodicDofMap>,
+    cache: &mut SolverCache,
+) -> Result<nodal_p1::LinearSystem, String> {
+    match execute(case,package,model,map,mesh,parameters,periodic,cache,true)? {
+        FrequencyExecution::Assembled(system)=>Ok(system),
+        FrequencyExecution::Solved(_)=>Err("Frequency scalar assembly unexpectedly solved the operator.".into()),
+    }
+}
+
+fn execute(
+    case: &PreparedCase,
+    package: &Value,
+    model: &Value,
+    map: &Value,
+    mesh: Mesh<'_>,
+    parameters: &HashMap<String, Scalar>,
+    periodic: Option<&crate::scalar2d::PeriodicDofMap>,
+    cache: &mut SolverCache,
+    assemble_only: bool,
+) -> Result<FrequencyExecution, String> {
     let frequency = match &case.kind {
         CaseKind::Frequency { frequency_hz, .. }
             if frequency_hz.is_finite() && *frequency_hz > 0. =>
@@ -228,7 +270,14 @@ pub(crate) fn solve(
     if case.settings.element_order != 1 {
         return Err("Frequency scalar driver supports first-order elements only.".into());
     }
-    let plan = ScenarioPlan::from_package(package, &case.settings.formulation)?;
+    let mut plan = ScenarioPlan::from_package(package, &case.settings.formulation)?;
+    let longitudinal_wavenumber = crate::longitudinal::prescribed_wavenumber(
+        package, model, &case.study_id, &case.settings.formulation, parameters,
+    )?;
+    if let CaseKind::Frequency { case: prepared_case, .. } = &case.kind {
+        crate::longitudinal::validate_prepared_case_value(prepared_case, longitudinal_wavenumber)?;
+    }
+    plan.set_longitudinal_wavenumber(longitudinal_wavenumber)?;
     if plan.volume.shape().1 != 1 || !plan.coefficient_matrices.is_empty() {
         return Err(
             "Frequency scalar driver requires one scalar field and scalar coefficients.".into(),
@@ -269,11 +318,13 @@ pub(crate) fn solve(
                 periodic,
                 cache,
                 frequency,
+                longitudinal_wavenumber,
                 &plan,
                 &policy,
                 &topology,
                 quadrature,
                 &|facet| simplex_topology::edge_normal(nodes, facet, 0),
+                assemble_only,
             )
         }
         Mesh::Tetrahedron {
@@ -309,11 +360,13 @@ pub(crate) fn solve(
                 periodic,
                 cache,
                 frequency,
+                longitudinal_wavenumber,
                 &plan,
                 &policy,
                 &topology,
                 quadrature,
                 &|facet| simplex_topology::face_normal(nodes, facet, 0),
+                assemble_only,
             )
         }
     }
@@ -331,12 +384,14 @@ fn solve_simplex<const N: usize, const D: usize, const F: usize>(
     periodic: Option<&crate::scalar2d::PeriodicDofMap>,
     cache: &mut SolverCache,
     frequency: f64,
+    longitudinal_wavenumber: C,
     plan: &ScenarioPlan,
     policy: &Policy,
     topology: &SimplexTopology<F>,
     quadrature: Vec<([f64; N], f64)>,
     normal: &dyn Fn(&Facet<F>) -> Result<([f64; 3], f64), String>,
-) -> Result<FrequencyResult, String> {
+    assemble_only: bool,
+) -> Result<FrequencyExecution, String> {
     if map.get("schema").and_then(Value::as_str) != Some("fullmeta-mesh-map/6")
         || map.get("dimension").and_then(Value::as_u64) != Some(D as u64)
     {
@@ -356,8 +411,8 @@ fn solve_simplex<const N: usize, const D: usize, const F: usize>(
     let selection_plan = plan.selections.as_ref().ok_or("Scenario selectionPlan is required.")?;
     let source_by_cell = selection_plan.uses_cell_map("domainSources", map);
     let selected = selection_plan.bind(model, map, &mesh_tags)?;
-    let source_data = crate::domain_source::prepare(plan.domain_source.as_ref(), selected.get("domainSources").map(Vec::as_slice))?;
-    let mut source_samples = source_data.as_ref().map(|_| Vec::with_capacity(cells.len()));
+    let source_data = crate::domain_source::prepare_routes(&plan.domain_sources, selected.get("domainSources").map(Vec::as_slice))?;
+    let mut source_samples = source_data.iter().map(|_| Vec::with_capacity(cells.len())).collect::<Vec<Vec<Vec<Vec<C>>>>>();
     let material_rows = selected
         .get("materials")
         .ok_or("Selection plan must declare materials.")?
@@ -397,7 +452,7 @@ fn solve_simplex<const N: usize, const D: usize, const F: usize>(
             )?
         };
         let mut points = Vec::with_capacity(quadrature.len());
-        let mut loads = source_data.as_ref().map(|_| Vec::with_capacity(quadrature.len()));
+        let mut loads = source_data.iter().map(|_| Vec::with_capacity(quadrature.len())).collect::<Vec<Vec<Vec<C>>>>();
         for (i, ((basis, weight), position)) in quadrature.iter().zip(&positions).enumerate() {
             let values = sample_values(
                 bindings,
@@ -408,9 +463,9 @@ fn solve_simplex<const N: usize, const D: usize, const F: usize>(
                 *position,
                 &format!("cell {index} quadrature {i}"),
             )?;
-            if let (Some((load_plan, sources)), Some(loads)) = (&source_data, &mut loads) {
+            for (route_index, (_, load_plan, sources)) in source_data.iter().enumerate() {
                 let source_key = if source_by_cell { index } else { *tag };
-                loads.push(crate::domain_source::sample_load(load_plan, sources, source_key, *position, parameters, Some(frequency), &values)?);
+                loads[route_index].push(crate::domain_source::sample_load(load_plan, sources, source_key, *position, parameters, Some(frequency), &values)?);
             }
             let symbols = policy
                 .volume_inputs
@@ -455,7 +510,7 @@ fn solve_simplex<const N: usize, const D: usize, const F: usize>(
             nodes: *cell,
             quadrature: points,
         });
-        if let (Some(all), Some(loads)) = (&mut source_samples, loads) { all.push(loads); }
+        for (all, loads) in source_samples.iter_mut().zip(loads) { all.push(loads); }
     }
     let selected_boundaries = selected
         .get("boundaries")
@@ -638,7 +693,14 @@ fn solve_simplex<const N: usize, const D: usize, const F: usize>(
         periodic: periodic_map,
         mean: None,
     };
-    let solution = problem.solve_with_volume_loads(
+    let load_routes = source_data.iter().zip(&source_samples)
+        .map(|((_, load_plan, _), samples)| (&load_plan.form, samples.as_slice()))
+        .collect::<Vec<_>>();
+    if assemble_only {
+        let system=problem.assemble_with_volume_load_routes(&mut cache.assembly,&load_routes)?;
+        return Ok(FrequencyExecution::Assembled(system));
+    }
+    let solution = problem.solve_with_volume_load_routes(
         &nodal_p1::SolveOptions {
             backend: &case.settings.backend,
             ordering: &case.settings.ordering,
@@ -646,7 +708,7 @@ fn solve_simplex<const N: usize, const D: usize, const F: usize>(
             residual_tolerance: 1e-7,
         },
         cache,
-        source_data.as_ref().zip(source_samples.as_ref()).map(|((load_plan, _), samples)| (&load_plan.form, samples.as_slice())),
+        &load_routes,
     )?;
     let recovery = plan
         .recovery
@@ -663,10 +725,11 @@ fn solve_simplex<const N: usize, const D: usize, const F: usize>(
     }
     let recovered_nodes =
         problem.recover_nodes(&solution, recovery, sampling, &recovery_symbols)?;
-    Ok(FrequencyResult {
+    Ok(FrequencyExecution::Solved(FrequencyResult {
         solution,
         recovered_nodes,
-    })
+        longitudinal_wavenumber,
+    }))
 }
 
 #[cfg(test)]
@@ -734,9 +797,64 @@ mod tests {
         .is_err());
     }
 
-    
+    #[test]
+    fn finite_kz_acoustic_uniform_plane_wave_has_expected_pressure_and_axial_velocity() {
+        use crate::prepared_case::{Output, SolverSettings};
+        let package: Value = serde_json::from_str(include_str!("scenarios/acoustic2d.json")).unwrap();
+        let kz = 2.0_f64;
+        let sound_speed = 343.0_f64;
+        let density = 1.225_f64;
+        let omega = sound_speed * kz;
+        let frequency = omega / std::f64::consts::TAU;
+        let quantity = |expression: &str, unit: &str| json!({"expression":expression,"unit":unit});
+        let model = json!({"scenario":{"profileId":"acoustic-2d"},"model":{
+            "parameters":[],"variables":[],"pointwiseVariables":[],"integrations":[],
+            "mesh":{"periodicPairIds":[]},
+            "study":[{"id":"harmonic","type":"frequencyDomain","physicsId":"wave",
+                "longitudinalWavenumber":{"real":quantity("2","rad/m"),"imaginary":quantity("0","rad/m")}}],
+            "materials":[{"id":"fluid","selectionId":"solid","density":quantity("1.225","kg/m^3"),
+                "soundSpeed":quantity("343","m/s"),"lossFactor":"0"}],
+            "physics":{"id":"wave","type":"acoustics","formulation":"pressure","dirichlet":{
+                "id":"dirichlet","type":"dirichlet","selectionId":"outer","value":quantity("1","Pa")}}
+        }});
+        let map = json!({"schema":"fullmeta-mesh-map/6","dimension":2,
+            "physicalGroups":[{"selectionId":"solid","physicalTag":1}],
+            "boundarySelections":[{"selectionId":"outer","physicalTag":2}]});
+        let nodes = [[0.,0.,0.],[1.,0.,0.],[1.,1.,0.],[0.,1.,0.],[0.5,0.5,0.]];
+        let cells = [([0,1,4],1),([1,2,4],1),([2,3,4],1),([3,0,4],1)];
+        let facets = [([0,1],2),([1,2],2),([2,3],2),([3,0],2)];
+        let case = PreparedCase {request:json!({"studyId":"harmonic"}),profile:"acoustic-2d".into(),study_id:"harmonic".into(),
+            kind:CaseKind::Frequency {frequency_hz:frequency,case:json!({"longitudinalWavenumber":{"real":kz,"imaginary":0.,"unit":"rad/m"}})},
+            settings:SolverSettings {formulation:"pressure".into(),element_order:1,quadrature:"standard".into(),
+                backend:"faer".into(),ordering:"amd".into(),threads:1},output:Output::Frequency {sweep_csv:"result.csv".into()},
+            model_path:Default::default(),mesh_path:Default::default(),map_path:Default::default(),output_directory:Default::default()};
+        let parameters = crate::model_expression::resolve_parameters(&[],&model).unwrap();
+        let result = solve(&case,&package,&model,&map,Mesh::Triangle {nodes:&nodes,cells:&cells,facets:&facets},
+            &parameters,None,&mut crate::SolverCache::default()).unwrap();
+        assert!(result.solution.residual < 1e-7);
+        let expected_vz = kz / (omega * density);
+        for (index,value) in result.solution.real.iter().enumerate() {assert!((value-1.).abs()<1e-8,"pressure node {index}: {value}");}
+        for (index,value) in result.solution.imaginary.iter().enumerate() {assert!(value.abs()<1e-8,"pressure imaginary node {index}: {value}");}
+        for value in &result.recovered_nodes {
+            assert!(value[0].re.hypot(value[0].im)<1e-8);
+            assert!(value[1].re.hypot(value[1].im)<1e-8);
+            assert!((value[2].re-expected_vz).hypot(value[2].im)<1e-8);
+        }
 
-    
-
-    
+        // Exercise the active finite-kz force-density route and its physical
+        // units through the current FEM-local core runtime. A constant axial
+        // force couples through the reduced test gradient and moves the
+        // unconstrained interior pressure degree of freedom.
+        let mut forced_model=model.clone();
+        forced_model["model"]["physics"]["force"]=json!({"id":"force","name":"Axial body force",
+            "type":"additionalDomainSource","selectionId":"solid","values":[
+                quantity("0","N/m^3"),quantity("0","N/m^3"),quantity("1","N/m^3")
+            ]});
+        let forced=solve(&case,&package,&forced_model,&map,Mesh::Triangle {nodes:&nodes,cells:&cells,facets:&facets},
+            &parameters,None,&mut crate::SolverCache::default()).unwrap();
+        assert!(forced.solution.residual<1e-7);
+        assert!((forced.solution.real[4]-1.).hypot(forced.solution.imaginary[4])>1e-6,
+            "active axial force did not change the interior pressure: {:?}+i{:?}",
+            forced.solution.real,forced.solution.imaginary);
+    }
 }

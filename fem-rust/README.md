@@ -16,9 +16,30 @@ runtime or platform DLLs:
 
     node prebuilt-tools/build-local-bundle.mjs --offline
 
+Thermal-family validation shared by the 2D and 3D packages is authored in
+`validation/thermal-common.json`. After editing it, run
+`node prebuilt-tools/sync-thermal-validation.mjs --write` to compile the
+declarations and update both scenario packages. The FEM build checks that
+the independently deployable packages contain the generated rules.
+
+Scenario packages can opt in to generated early boundary-vector length checks
+with `validationGeneration.boundaryVectorCounts`. The source of each count is
+the formulation's `boundaryInputs` vector declaration. After changing an
+opted-in contract, run `node prebuilt-tools/sync-boundary-count-validation.mjs --write`;
+the FEM build checks that the executable and declarative rules are
+current. The generator checks primary vectors and declared array fallback
+paths, and rejects conflicting component layouts. The solver retains its own
+input checks. After changing component-level semantic rules, run
+`node prebuilt-tools/sync-vector-component-guards.mjs --write` to regenerate
+the array guards used by semantic-only validation.
+
+`validationGeneration.formulationOrders` similarly generates metadata checks
+from the scenario's declared mesh formulation orders. After changing those
+declarations, run `node prebuilt-tools/sync-formulation-order-validation.mjs --write`.
+
 The candidate is written to `target/fem-local-bundle/x86_64-pc-windows-gnu/release/`.
 Build FEM's browser WASM separately with
-`node ../js/runtime/build-wasm.mjs`. Test the candidate bundle before staging
+`node prebuilt-tools/build-wasm.mjs`. Test the candidate bundle before staging
 or packaging it. Pass `--stage` to the local-bundle command to install the four
 files in FEM's runtime; the command first saves the previous bundle under
 `target/runtime-before-local-bundle-*`. The regular build described below instead copies the DLLs
@@ -44,7 +65,7 @@ To refresh the DLLs from a full platform source checkout, run `node prebuilt-too
 
 This FEM-only build does not rebuild shared WASM or other applications and does not refresh the workspace-wide runtime fingerprint.
 
-FEM's browser code loads its own core and model WASM modules from `applications/fem/js/runtime/wasm/`. With a full platform source checkout, regenerate these application copies and their JavaScript bridges with `node applications/fem/js/runtime/build-wasm.mjs` from the workspace root. This developer command builds from the platform sources without replacing the platform's deployed WASM files. Distribute the generated FEM copies with the application; the FEM-only native build above uses the already supplied SDK and DLLs and does not require platform implementation sources. The shared platform editor still has its own WASM dependency, so this packaging alone does not establish compatibility with every older editor.
+FEM's browser code loads its own core and model WASM modules from `applications/fem/js/runtime/wasm/`. With a full platform source checkout, regenerate these application copies and their JavaScript bridges with `node applications/fem/fem-rust/prebuilt-tools/build-wasm.mjs` from the workspace root. This developer command builds from the platform sources without replacing the platform's deployed WASM files. Distribute the generated FEM copies with the application; the FEM-only native build above uses the already supplied SDK and DLLs and does not require platform implementation sources. The shared platform editor still has its own WASM dependency, so this packaging alone does not establish compatibility with every older editor.
 
 | Location | Responsibility |
 | --- | --- |
@@ -154,7 +175,7 @@ recompiling dependencies.
 
 The registered thermal schema and executable mapping are scenario metadata. The schema supplies thermal model constraints and `x-fem-validation` options to common preflight. The thermal module retains guards on constitutive finiteness, boundary correspondence, mesh-map consistency, connected-component heat compatibility, temperature references and the assembled solve. Adding or updating a runner rebuilds the single dispatcher executable. Browser model WASM continues to perform supplied-schema structural/edit checks.
 
-The kernel solves `-div(k grad(T)) = 0` with linear triangular elements and constant isotropic conductivity on each material selection. Conductivity, prescribed temperature and prescribed outward heat flux accept constant parameter expressions through the shared quantity core, with units compatible with `W/(m*K)`, `K` and `W/m^2`. Spatial material/boundary expressions are explicitly unsupported. Conductivity and temperature signs are unrestricted; invalid divisions, non-finite systems, factorization failures and residual errors still fail the solve. Positive outward flux removes heat; unspecified exterior edges are insulated. A Physics periodic condition references an enabled matched mesh pair and enforces equal temperatures at paired nodes. Its wave vector must be zero; prescribed temperature or flux cannot also be assigned to periodic edges. Each connected component without prescribed temperature uses the stationary Study's optional `meanTemperature` quantity, default `0 K`, as an area-weighted mean constraint. Such a component must have zero net prescribed heat flux within numerical tolerance; the reference does not supply missing heat. Extra nullspaces caused by degenerate constitutive assignments can still cause factorization failure. Shared corners must have consistent prescribed temperatures. The solver reduces periodic degrees of freedom before solving and writes the expanded temperature field at every mesh node. Thermal global/pointwise variables, parameter sweeps, volumetric heat sources and transient studies remain unavailable. Optional schema resource limits use `study.solverResourceLimitsByProfile.<profile>.maximumNodes` and `maximumCells`; absent limits impose no arbitrary mesh-count cap.
+The stationary thermal solver supports positive, material-wise constant isotropic conductivity, prescribed temperature or heat flux, optional Domain Sources and zero-phase matched periodic conditions. Pure-Neumann components require a compatible heat balance and a mean-temperature constraint. A scenario-neutral sparse backward-Euler Transient Study is also implemented for all eight scenarios; its JSON-declared equations, boundaries, material laws, initial states, outputs and verification limits are documented in the [transient contract](docs/transient_study_contract.md) and the [scenario notes](docs/notes_thermal2d.md), [3D thermal guide](docs/therm3d.md) and [3D thermal scenario notes](docs/notes_thermal3d.md).
 
 `--solve` consumes a prepared model, triangular FullMeta mesh, and dimension-2 `fullmeta-mesh-map/6` sidecar. An example request is:
 

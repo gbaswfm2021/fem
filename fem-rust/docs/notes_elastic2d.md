@@ -216,9 +216,9 @@ Before treating an implementation as verified, check:
 
 Plane strain, plane stress, generalized plane strain, a plate/shell model, and full 3D elasticity answer different physical questions. Formulation selection must follow the geometry and expected motion, while the primary field and weak form determine the compatible element family.
 
-## Future eigenfrequency study
+## Lossless second-order frequency eigenproblem (reference)
 
-An eigenfrequency Study is not implemented. With no body force or boundary drive, zero density loss, and frequency-independent elastic properties and density, the in-plane momentum equation in section 1 becomes
+This familiar frequency-domain reduction is retained as an analytical reference, not as the implemented Study contract. The universal eigenfrequency Study below uses the first-order transient state system and solves directly for the complex temporal rate `s`. With no body force or boundary drive, zero density loss, and frequency-independent elastic properties and density, the in-plane momentum equation in section 1 becomes
 
 ```math
 -\nabla\cdot\boldsymbol\sigma(\mathbf u)=\lambda\rho\mathbf u,
@@ -243,9 +243,120 @@ M_{ij}=\int_\Omega\rho\,\mathbf N_i\cdot\mathbf N_j\,dA.
 
 The vector basis functions `N_i` describe in-plane displacement; `M` is the consistent density-weighted mass matrix. These integrals are per unit thickness. Apply homogeneous displacement constraints to both matrices; a free connected body has three rigid-body zero modes. A nonzero eigenvector is a mode shape, and for positive eigenvalues `f = sqrt(lambda)/(2 pi)`. Loss, impedance or frequency-dependent coefficients require a more general eigenproblem.
 
+## Prescribed longitudinal-wavenumber harmonic study and fixed-frequency propagation modes
+
+**Prescribed-`kz` harmonic solving is implemented for the plane-strain parent formulation.** It uses the 3D isotropic constitutive law on a 2D cross-section, with all three primary components `(u_x,u_y,u_z)`. The `planeStress` contract rejects nonzero `kz`; at `kz = 0`, the established two-component plane-strain route remains in use. Finite-`kz` results are cross-sectional amplitudes, with result metadata recording the complex `kz` in `rad/m` and the factor `exp(-i*kz*z)`. Geometry, materials, body forces and boundary drives must be z-invariant and share that dependence.
+
+The generic sparse weak form uses the formal test-side `+i*kz` and trial-side `-i*kz` substitutions. Domain Source remains three-component body-force density, and Additional Domain Source remains the nine row-major components of prescribed eigenstress; the scenario contract routes both through the three-dimensional reduced operator. The native axial plane-wave check uses `omega^2*rho = kz^2*(lambda+2*mu)`, verifies all three displacement components, residual, longitudinal metadata and recovered 3D stress. A second analytic shear-wave check confirms decreasing finite-`kz` displacement error as a structured triangular mesh is refined from 4 to 8 divisions per side. An additional finite-`kz` response check activates body force, spatially varying eigenstress, and natural traction separately; each gives a small residual and changes the solution from the unloaded baseline. In row-major gradient order `(xx,xy,xz,yx,yy,yz,zx,zy,zz)`, the six-component stress matrix in `elastic2d.json` maps to `(sigma_xx,sigma_yy,sigma_zz,sigma_xy,sigma_yz,sigma_xz)`.
+
+### Implemented fixed-frequency propagation-mode Study
+
+The `propagationMode` Study is implemented for the `planeStrain` parent only. At the selected real frequency it uses the 3D constitutive law over the 2D cross-section and three displacement components `(ux,uy,uz)`; it is not classical two-component plane strain. Plane stress remains unavailable for this Study.
+
+The scenario-neutral adapter samples the source-free longitudinal weak operator from the existing sparse assembler and forms $P(k_z)=P_0+k_zP_1+k_z^2P_2$. In particular, the linear $P_1$ contribution is retained. A shared sparse first-companion generalized pencil returns $k_z$ itself as a generally complex eigenvalue. The code does not assume the Hermitian special case or synthesize reciprocal `+/-` modes. It verifies the polynomial at additional sample points and checks each reported mode against the original polynomial residual. Source/drive loads are omitted, while supported homogeneous constraints and operator terms are retained.
+
+Each current mode artifact stores all three displacement amplitudes and six cell-local Cauchy stress amplitudes recovered with the declared 3D longitudinal constitutive law, along with frequency, complex `kz` in `rad/m`, and residual. Each stress component is emitted in Pa and retains cell-local values at material boundaries. The six stress components are `sigma_xx`, `sigma_yy`, `sigma_zz`, `sigma_xy`, `sigma_yz`, and `sigma_xz`. The isotropic plane-strain parent uses `lambda+2*mu` for all three normal-strain diagonal coefficients in the longitudinal tensor recovery. Direction/energy-flux classification is not currently emitted. The search controls are mode count, a complex inverse-length target/shift, Krylov dimension and residual tolerance. The numerical adapter currently accepts first-order triangular elements and only the declared plane-strain-parent operator. Acceptance compares both longitudinal and shear branches with analytic isotropic bulk dispersion, verifies all three displacement components, six recovered stresses, and the original-polynomial residual. See the [fixed-frequency propagation-mode implementation plan](implement_2d_propagation_mode_study.md) for the shared assembly, verification results, limits, and completed cylindrical acoustic UI demonstration.
+
+The prescribed-`kz` harmonic operator is
+
+
+For the three-component cross-sectional displacement amplitude, define
+
+```math
+\nabla_k=\nabla_t-i k_z\mathbf e_z,\qquad \varepsilon_k(\mathbf u)=\tfrac12\bigl(\nabla_k\mathbf u+(\nabla_k\mathbf u)^T\bigr),\qquad \sigma_k=\mathsf C:\varepsilon_k(\mathbf u).
+```
+
+Using the 3D constitutive tensor $\mathsf C$, the harmonic momentum equation is
+
+```math
+\nabla_k\!\cdot\sigma_k+\omega^2\rho^*\mathbf u=-\mathbf f.
+```
+
+For test amplitude $\mathbf v$, the corresponding weak volume equation, with boundary traction terms included in $\ell$, is
+
+```math
+\int_\Omega\varepsilon_{-k}(\overline{\mathbf v}):\mathsf C:\varepsilon_k(\mathbf u)\,dA-\omega^2\int_\Omega\rho^*\overline{\mathbf v}\cdot\mathbf u\,dA=\ell(\mathbf v).
+```
+
+The $-k_z$ on the conjugated test amplitude is the formal integration-by-parts partner; it does not conjugate the eigenvalue. The fixed-frequency mode study must retain $k_z$ itself as the eigenvalue. A suitable mixed or augmented discretization can target the generalized pencil
+
+```math
+A(\omega)\mathbf x=k_z B(\omega)\mathbf x,\qquad \mathbf x\ne0,
+```
+
+where the state contains displacement components and any auxiliary variables and constraints needed by the continuous first-order formulation. This is an alternative mathematical route; the current implementation uses the sparse quadratic polynomial and companion described above. It retains homogeneous constraints and checks each mode against the original polynomial. Boundary terms or material laws outside the current declared contract still require an implementation extension.
+
+### Finite-$k_z$ wave equation and lossless Hermitian reference
+
+The following quadratic and augmented Hermitian forms are continuous/discrete mathematical references for the lossless isotropic model. The current propagation Study uses the generic sparse first-companion linearization of the assembled quadratic polynomial, not this scenario-specific Hermitian block pencil. These Hermitian properties therefore are not assumptions of the shared solver.
+
+Using the 3D constitutive tensor, the prescribed-$k_z$ displacement wave equation is
+
+```math
+-\nabla_k\!\cdot\bigl(\mathsf C:\varepsilon_k(\mathbf u)\bigr)-\omega^2\rho\mathbf u=\mathbf f,\qquad
+\nabla_k=\nabla_t-ik_z\mathbf e_z.
+```
+
+For a source-free, lossless material with real positive density and Hermitian elastic tensor, real nonzero $\omega$, and boundary/interface conditions that remove the weak boundary form, define $E\mathbf u=\operatorname{sym}(\mathbf e_z\otimes\mathbf u)$ and $\varepsilon_0=\operatorname{sym}(\nabla_t\mathbf u)$. The quadratic displacement equation can be written with $k_z$ as its eigenvalue as
+
+```math
+(K_0+k_zK_1+k_z^2K_2)\mathbf u=0,
+```
+
+where the Hermitian operators are defined by their weak forms:
+
+```math
+\begin{aligned}
+\langle\mathbf v,K_0\mathbf u\rangle&=\int_\Omega\varepsilon_0(\mathbf v)^*:\mathsf C:\varepsilon_0(\mathbf u)-\omega^2\rho\,\mathbf v^*\!\cdot\mathbf u\,dA,\\
+\langle\mathbf v,K_1\mathbf u\rangle&=i\int_\Omega(E\mathbf v)^*:\mathsf C:\varepsilon_0(\mathbf u)-\varepsilon_0(\mathbf v)^*:\mathsf C:E\mathbf u\,dA,\\
+\langle\mathbf v,K_2\mathbf u\rangle&=\int_\Omega(E\mathbf v)^*:\mathsf C:E\mathbf u\,dA.
+\end{aligned}
+```
+
+With the augmented state $\mathbf x=(\mathbf u,\mathbf w)^T$ and $\mathbf w=k_z\mathbf u$, a generalized Hermitian pencil having $k_z$ itself as eigenvalue is
+
+```math
+A(\omega)=\begin{bmatrix}-K_0&0\\0&K_2\end{bmatrix},\qquad
+B(\omega)=\begin{bmatrix}K_1&K_2\\K_2&0\end{bmatrix},\qquad
+A\mathbf x=k_zB\mathbf x.
+```
+
+The pencil is Hermitian but $B$ need not be positive definite or invertible. For $\langle\mathbf x,B\mathbf x\rangle\ne0$, the Hermitian quotient makes $k_z$ real; the argument does not cover zero-flux or evanescent modes. No direction pairing is imposed by the implemented general study. This Hermitian block pencil is not the code path. The current sparse companion route verifies its recovered modes against the original polynomial and filters non-finite/infinite descriptor roots; its generic solver does not assume Hermiticity. Loss or frequency-dependent complex properties still require a separate assessment of the material and operator contracts.
+
+## Transient study
+
+The [scenario JSON](../src/scenarios/elastic2d.json) advertises transient Studies for plane stress and plane strain. The shared runner binds displacement and velocity, space/time-dependent materials, body forces, initial fields, prescribed displacement, traction and instantaneous impedance boundaries, then samples declared tensor stress outputs. Synthetic native coordinator cases exercise both reductions, nonzero forces and prescribed displacement with compatible initial velocity. Initial rates are checked for supported differentiable traces; unsupported initial derivatives are rejected. Live editor and deployed-host workflows still need visible verification. Nonzero harmonic loss requires a separately declared causal time-domain law.
+
+The native `scenario_operators_obey_physical_energy_and_heat_balances` test checks kinetic-plus-strain energy balance for the assembled plane-stress and plane-strain forms. Spatial refinement covers both reductions on structured and perturbed-interior simplex meshes.
+
+When this Study is present, the scenario enables its declared global-variable, pointwise-variable, integration-operator and parameter-sweep controls. Requested times can produce a checked global history CSV, with field snapshots optional; see [the shared transient contract](transient_study_contract.md) for output and supported limits.
+
+For displacement $\mathbf u$, velocity $\mathbf v$, density $\rho$, body force density $\mathbf f$, and instantaneous isotropic stress $\boldsymbol\sigma(\mathbf u)$, the declared first-order system is
+
+```math
+\dot{\mathbf u}-\mathbf v=0,\qquad
+\partial_t(\rho\mathbf v)-\nabla\!\cdot\boldsymbol\sigma(\mathbf u)=\mathbf f.
+```
+
+The density derivative is a product derivative when density depends on time. With $M_0$ the unweighted nodal mass, $M_\rho$ the density-weighted mass, and $K_\sigma$ the declared elasticity operator, the sparse block equation is
+
+```math
+\begin{pmatrix}M_0&0\\0&0\end{pmatrix}
+\begin{pmatrix}\dot{\mathbf u}\\\dot{\mathbf v}\end{pmatrix}
++\frac{d}{dt}\!\left[\begin{pmatrix}0&0\\0&M_\rho\end{pmatrix}
+\begin{pmatrix}\mathbf u\\\mathbf v\end{pmatrix}\right]
++\begin{pmatrix}0&-M_0\\K_\sigma&0\end{pmatrix}
+\begin{pmatrix}\mathbf u\\\mathbf v\end{pmatrix}
+=\begin{pmatrix}0\\\mathbf f+\mathbf f_\Gamma\end{pmatrix}.
+```
+
+The Domain Source is body-force density in N/m³ and traction enters the momentum load. Its instantaneous impedance law $\boldsymbol\sigma\mathbf n=-Z\mathbf v$ adds $Z$ to the boundary velocity block; complex or frequency-dependent impedance requires a separate causal time-domain model. A prescribed displacement $\mathbf g(t)$ also constrains velocity in each backward-Euler step to $[\mathbf g(t_n)-\mathbf g(t_{n-1})]/\Delta t$. Initial displacement is checked against the prescribed value, and initial velocity is checked against the continuous boundary rate where the expression is differentiable by the declared evaluator. The two 2D formulations retain their plane-stress or plane-strain constitutive choices. Time-domain inputs are real, not harmonic phasors.
+
+The [shared transient reference](transient_study_contract.md) records the weak forms, coefficient laws, boundary and result contracts, sparse time step, and required verification.
+
 ## Domain Source
 
-The current implementation supports multiple Domain Source entries under PHYSICS, each with an existing domain selection and expressions in spatial coordinates. Overlapping entries add; no entry means zero source. The project model stores selections and expressions, while the scenario contract declares their physical interpretation and weak-form contribution. This implementation is undergoing verification; its availability in a deployed installation depends on compatible FEM and platform runtimes.
+The current implementation supports Domain Source and Additional Domain Source as separate PHYSICS feature types. Each entry has its own domain selection and expression components; multiple entries of either type add, including on overlapping selections, while an absent type contributes zero. Expressions are sampled at volume quadrature points using physical coordinates and model parameters. Where harmonic studies are supported, their evaluations additionally provide `freq`, `frequency`, and `omega`; transient studies additionally provide time `t` in seconds. The scenario JSON declares each type’s physical meaning, units, component order and weak-form route. This implementation is undergoing verification; its availability in a deployed installation depends on compatible FEM and platform runtimes.
 
 The source is an in-plane body-force density in N/m³. It contributes `integral(test · f) dA` per unit out-of-plane thickness, for either plane stress or plane strain.
 
@@ -267,3 +378,49 @@ For example, model the in-plane response of a rectangular plate with a Domain So
 Here `plate_domain` is the ID of an existing domain selection, and `F0` and `L` must be defined in PARAMETERS. This is a force per unit volume applied throughout that selection. A traction boundary condition instead applies force per unit area on a selected boundary. The in-plane 2D formulation does not model out-of-plane plate bending; use an appropriate model for that motion.
 
 See the [implementation plan](implement_domain_sources.md) for expression evaluation, generic assembly and verification requirements.
+
+## Boundary vector count validation
+
+Enabled Cartesian displacement and traction vectors must each have exactly two components for either formulation. Semantic model validation checks the primary `fieldValues` count from the scenario’s declared boundary input; the solver retains its own check. Enabled vectors with an invalid type or component count receive a semantic validation error. To repair one in the editor, turn off “Specify field components” and turn it back on to recreate the declared defaults; this reset replaces the existing components. Disabled conditions skip these semantic checks.
+
+
+## Additional Domain Source
+
+`additionalDomainSource` is a prescribed eigenstress **S** in the elastic constitutive equation, not a body force. Plane-stress and plane-strain formulations each accept the four row-major in-plane components `(S_xx, S_xy, S_yx, S_yy)` in Pa. Because strain is symmetric, only the symmetric part of **S** contributes. The existing `domainSource` remains body-force density in N/m³.
+
+~~~text
+epsilon(u) = sym(grad(u))
+sigma(u) = C : epsilon(u) - S
+partial_t(u) = velocity
+rho * partial_t(velocity) - div(sigma(u)) = body_force
+
+Additional weak load: integral(sym(grad(test)) : S) dA
+~~~
+
+The 2D integral is per unit out-of-plane thickness. The transient solver evolves displacement and velocity in this first-order state form. In that system the eigenstress is a load on the momentum equation, so the JSON routes its symmetric-gradient load to the velocity test field. The JSON declares the tensor component order, units, and symmetric-gradient load route for both plane formulations; the same physical source is used in harmonic and transient studies. The [elastic 2D contract](../src/scenarios/elastic2d.json) supplies the route without an elasticity-specific assembler branch.
+
+## Universal Eigenfrequency Study
+
+The eigenfrequency Study is implemented in the shared FEM runtime and declared by all eight scenario packages. Each package points to the same generic preparation and execution route; its existing transient form contract supplies the state layout, derivative terms, spatial operators, materials, and boundary laws. The assembler does not branch on scenario ID.
+
+For the selected formulation, stack its declared transient fields into $u$. With coefficients independent of time and the unknown eigenvalue, its source-free homogeneous transient system has the form
+
+```math
+M\,\dot u + K u = 0.
+```
+
+A modal solution $u(t)=\phi e^{st}$ gives the generalized sparse pencil
+
+```math
+(K+sM)\phi=0,\qquad \phi\ne0.
+```
+
+The eigenvalue is the complex temporal rate $s$ itself, in inverse seconds. The implementation does not square it, assume a Hermitian pencil, or impose reciprocal $+/-$ mode pairing. Under the application’s $e^{+i\omega t}$ harmonic convention, the derived complex frequency is $f_c=-i s/(2\pi)$. The UI shift is described as $s^{-1}$; its persisted unit token is $\mathrm{Hz}$, which has the same SI dimension and scale in the current legacy host.
+
+The shared sparse solver uses shift-invert Arnoldi and sparse shifted solves. It applies homogeneous essential constraints and declared periodic reductions to both operators, discards infinite descriptor modes, checks the generalized residual, normalizes each mode, and records the parameter-case and mesh identity. Excitation terms are omitted: package-declared volume sources, prescribed natural loads, and incident fields are removed before the modal assembly. Essential constraints and homogeneous boundary operators, such as impedance terms, are retained.
+
+Spatially varying coefficients and parameter sweeps are supported when each case resolves to a linear time-invariant operator. Coefficients or boundary data depending on time, frequency, the eigenvalue, or the unknown state are outside this Study’s contract. The reusable nodal adapter currently supports simplex P1; the oriented tetrahedral edge adapter supports orders 1 and 2. A requested element order outside those adapters is not supported by the modal runner.
+
+For thermal scenarios, $s$ describes diffusion decay; a mode need not have an oscillatory frequency. The distinct 2D fixed-frequency propagation Study, which solves for $k_z$, is implemented for Acoustic 2D, EM2D, and the plane-strain-parent Elastic 2D contract.
+
+Current fixed-frequency propagation acceptance passes 12 Rust tests, 10 generic sparse-eigensolver tests, and 65 FEM Node contract/result/UI tests. The propagation tests cover declared JSON preparation and result resolution, all three enabled formulations, acoustic rigid-wall dispersion/cutoff and the pressure-Dirichlet guide, signed direct-`kz` targeting, impedance-operator retention with incident-load removal, parameter-case reassembly, EM2D PEC dispersion/refinement for both polarizations, and elastic longitudinal/shear branches with three-component displacement, six stress outputs, and residual checks. The full native Rust suite reports 333 passed, 27 failed, and 3 ignored; those 27 failures reproduce omissions of `N/m^3`, `W/m^3`, or `W*s/(m^3*K)` in the fixed shared Core quantity service and are unrelated to propagation-mode assertions. The FEM frontend and FEM-local runtime bundle build successfully. The wider FEM verification history is recorded in the [universal Eigenfrequency implementation plan](implement_universal_eigenfrequency_study.md).

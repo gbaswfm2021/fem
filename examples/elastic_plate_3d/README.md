@@ -2,6 +2,8 @@
 
 Open `fem_model.json` as a FEM model and run its **Driven response** Study. The sweep plots the maximum magnitude of transverse displacement, and the field result selects `uz` at 1095 Hz, near the peak of this example's coarse mesh. Stress components are also available in the field output. The sweep is a driven-response calculation; it is not an eigenfrequency Study. It saves a field file for each of its 91 frequencies, so the full run can require substantial disk space.
 
+For a source-free modal counterpart using the same plate dimensions, material, and mesh settings, open the [free elastic plate eigenmodes example](../elastic_plate_3d_eigenmodes/README.md). Its first computed mode is about 1097.7 Hz, close to the driven-response peak; see the modal example for interpretation and mesh limitations.
+
 The plate measures 200 × 100 × 4 mm and uses an illustrative isotropic material: density 2700 kg/m³, Young's modulus 70 GPa and Poisson ratio 0.33. The density loss factor is 0.01, with effective density `rho*(1 - i*0.01)` under `exp(+i omega t)`; this illustrative damping is not a measured aluminium property. A uniform 2500 Pa transverse traction is applied to the x = 0 side face, giving a nominal 1 N resultant. The remaining faces are free. The sweep covers 450–1800 Hz at 15 Hz intervals.
 
 ## Accuracy and verification

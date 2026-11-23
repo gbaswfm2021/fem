@@ -96,7 +96,7 @@
       },
       {
         "description": "",
-        "expression": "0.15",
+        "expression": "0.2",
         "id": "parameter",
         "name": "p1",
         "symbol": "a",
@@ -104,7 +104,7 @@
       },
       {
         "description": "",
-        "expression": "0.15",
+        "expression": "0.1",
         "id": "parameter_2",
         "name": "p1",
         "symbol": "b",
@@ -190,7 +190,7 @@
       },
       {
         "filters": {
-          "fscan": 1750
+          "fscan": 1095
         },
         "frequency": {
           "expression": "1095",
@@ -265,13 +265,13 @@
             {
               "parameter": "fscan",
               "values": {
-                "count": 181,
+                "count": 91,
                 "end": {
-                  "expression": "2000",
+                  "expression": "1800",
                   "unit": "Hz"
                 },
                 "start": {
-                  "expression": "200",
+                  "expression": "450",
                   "unit": "Hz"
                 },
                 "type": "linear"

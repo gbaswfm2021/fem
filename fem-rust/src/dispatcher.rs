@@ -26,6 +26,9 @@ pub(crate) mod simplex_topology;
 pub(crate) mod vector_form;
 pub(crate) mod vector_p1;
 pub(crate) mod weak_form;
+pub(crate) mod longitudinal;
+pub(crate) mod hcurl2d;
+pub(crate) mod prepared_hcurl2d_model;
 pub(crate) mod model_schema;
 mod model_validation;
 mod mesh;
@@ -73,6 +76,27 @@ pub(crate) mod scenario_solver_cli;
 pub(crate) mod solver_common;
 pub(crate) mod solver_options;
 pub(crate) mod solver_request;
+pub(crate) mod transient_step;
+pub(crate) mod transient_plan;
+pub(crate) mod transient_mesh;
+pub(crate) mod transient_edge;
+pub(crate) mod transient_triangle;
+pub(crate) mod transient_model;
+pub(crate) mod transient_initial;
+pub(crate) mod transient_derivative;
+pub(crate) mod transient_runner;
+pub(crate) mod transient_case;
+pub(crate) mod transient_boundary;
+pub(crate) mod transient_periodic;
+pub(crate) mod transient_execution;
+pub(crate) mod eigenfrequency;
+pub(crate) mod eigenfrequency_execution;
+pub(crate) mod propagation_mode_assembly;
+pub(crate) mod propagation_mode_execution;
+pub(crate) mod study_case_parameters;
+pub(crate) mod transient_integration;
+pub(crate) mod transient_result;
+pub(crate) mod transient_request;
 include!(concat!(env!("OUT_DIR"), "/scenario_runners.rs"));
 
 
@@ -701,7 +725,7 @@ fn run(operation_contract: Option<&fullmeta_operation_contracts::ContractIdentit
                     )?;
                 }
                 if parsed.mode == "preparation"
-                    && study_prepare::uses_common_preparation(model, &registry.capabilities)?
+                    && study_prepare::uses_common_preparation(model, &registry.capabilities,study_id)?
                 {
                     let prepared =
                         study_prepare::prepare_validated_study(&value, &registry.capabilities)?;
@@ -1568,13 +1592,11 @@ impl Registry {
             "Profile {profile}, Study {}, preparation",
             study_id.unwrap_or("(default)")
         );
-        let preparation = self
-            .capabilities
-            .pointer("/study/preparationByProfile")
-            .and_then(|profiles| profiles.get(profile))
+        let preparation = study_prepare::preparation_entry_for_study(
+            &self.capabilities,profile,study_prepare::selected_study_type(model,study_id))
             .ok_or_else(|| format!("{context}: preparationByProfile registration is missing."))?;
         match preparation.get("kind").and_then(Value::as_str) {
-            Some("frequencyPlan" | "configuredFrequencyRequest" | "stationaryPlan") => Ok(()),
+            Some("frequencyPlan" | "configuredFrequencyRequest" | "stationaryPlan" | "transientPlan" | "eigenfrequencyPlan" | "propagationModePlan") => Ok(()),
             Some("scenario") => {
                 let id = preparation
                     .get("programId")

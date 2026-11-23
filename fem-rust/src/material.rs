@@ -17,11 +17,27 @@ struct CompiledProperty {
 pub(super) struct CompiledMaterialEvaluator {
     properties: Vec<CompiledProperty>,
     uses_position: bool,
+    uses_time: bool,
 }
 
 struct CompiledMaterialAssignment {
     id: String,
     evaluator: CompiledMaterialEvaluator,
+}
+
+/// Select only properties applicable to the requested Study kind. An absent
+/// `studyTypes` declaration keeps the legacy all-Study behavior.
+fn material_definitions_for_study(definitions: &[Value], study_type: &str) -> Vec<Value> {
+    definitions
+        .iter()
+        .filter(|definition| {
+            definition
+                .get("studyTypes")
+                .and_then(Value::as_array)
+                .is_none_or(|types| types.iter().any(|kind| kind.as_str() == Some(study_type)))
+        })
+        .cloned()
+        .collect()
 }
 
 /// Compiles each domain material once and reuses the expression trees across
@@ -35,6 +51,29 @@ impl CompiledMaterialAssignments {
         profile_id: &str,
         assignments: &HashMap<usize, Value>,
     ) -> Result<Self, String> {
+        Self::compile_for_study(profile_id, assignments, "frequencyDomain")
+    }
+
+    pub(super) fn compile_for_study(
+        profile_id: &str,
+        assignments: &HashMap<usize, Value>,
+        study_type: &str,
+    ) -> Result<Self, String> {
+        let definitions = material_definitions_for_study(
+            crate::model_schema::material_properties_for_profile(profile_id)?,
+            study_type,
+        );
+        Self::compile_with_definitions(profile_id, assignments, &definitions)
+    }
+
+    /// Compile a study-specific material contract declared by a scenario.
+    /// Existing harmonic and stationary callers continue using the profile
+    /// catalogue through `compile`.
+    pub(super) fn compile_with_definitions(
+        profile_id: &str,
+        assignments: &HashMap<usize, Value>,
+        definitions: &[Value],
+    ) -> Result<Self, String> {
         let mut tags = assignments.keys().copied().collect::<Vec<_>>();
         tags.sort_unstable();
         let mut by_tag = HashMap::with_capacity(assignments.len());
@@ -47,10 +86,11 @@ impl CompiledMaterialAssignments {
                 .and_then(Value::as_str)
                 .unwrap_or("assignment")
                 .to_string();
-            let evaluator = CompiledMaterialEvaluator::compile(
+            let evaluator = CompiledMaterialEvaluator::compile_with_definitions(
                 profile_id,
                 material,
                 &format!("material {id}"),
+                definitions,
             )?;
             by_tag.insert(tag, CompiledMaterialAssignment { id, evaluator });
         }
@@ -99,21 +139,70 @@ impl CompiledMaterialAssignments {
         )
     }
 
+    /// Evaluate a material assignment at the current transient quadrature point.
+    pub(super) fn evaluate_at_time(
+        &self,
+        tag: usize,
+        base_symbols: &HashMap<String, Scalar>,
+        time: f64,
+        point: [f64; 3],
+        context: &str,
+    ) -> Result<HashMap<String, Scalar>, String> {
+        let assignment = self.by_tag.get(&tag).ok_or_else(|| {
+            format!("{context} uses physical material tag {tag}, which has no material assignment.")
+        })?;
+        assignment.evaluator.evaluate_at_time(
+            base_symbols,
+            time,
+            point,
+            &format!("material {} in {context}", assignment.id),
+        )
+    }
+
+    /// True only when no compiled assigned property directly references time.
+    /// Parameter and constitutive dependencies must also be checked by callers
+    /// before caching any numerical operator or factorization.
+    pub(super) fn has_explicit_time_dependence(&self) -> bool {
+        self.by_tag
+            .values()
+            .any(|assignment| assignment.evaluator.uses_time())
+    }
+
     pub(super) fn evaluate_batch(
-        &self, tag: usize, base_symbols: &HashMap<String, Scalar>, frequency_hz: f64,
-        points: &[[f64; 3]], context: &str,
+        &self,
+        tag: usize,
+        base_symbols: &HashMap<String, Scalar>,
+        frequency_hz: f64,
+        points: &[[f64; 3]],
+        context: &str,
     ) -> Result<Vec<HashMap<String, Scalar>>, String> {
         let assignment = self.by_tag.get(&tag).ok_or_else(|| {
             format!("{context} uses physical material tag {tag}, which has no material assignment.")
         })?;
-        assignment.evaluator.evaluate_batch(base_symbols, frequency_hz, points,
-            &format!("material {} in {context}", assignment.id))
+        assignment.evaluator.evaluate_batch(
+            base_symbols,
+            frequency_hz,
+            points,
+            &format!("material {} in {context}", assignment.id),
+        )
     }
 }
 
 impl CompiledMaterialEvaluator {
     pub(super) fn compile(profile_id: &str, material: &Value, path: &str) -> Result<Self, String> {
-        let definitions = crate::model_schema::material_properties_for_profile(profile_id)?;
+        let definitions = material_definitions_for_study(
+            crate::model_schema::material_properties_for_profile(profile_id)?,
+            "frequencyDomain",
+        );
+        Self::compile_with_definitions(profile_id, material, path, &definitions)
+    }
+
+    fn compile_with_definitions(
+        profile_id: &str,
+        material: &Value,
+        path: &str,
+        definitions: &[Value],
+    ) -> Result<Self, String> {
         if definitions.is_empty() {
             return Err(format!(
                 "Scenario profile {profile_id:?} declares no material properties."
@@ -121,6 +210,7 @@ impl CompiledMaterialEvaluator {
         }
         let mut properties = Vec::with_capacity(definitions.len());
         let mut uses_position = false;
+        let mut uses_time = false;
         for definition in definitions {
             let key = definition
                 .get("key")
@@ -165,6 +255,7 @@ impl CompiledMaterialEvaluator {
             uses_position |= ["x", "y", "z"]
                 .iter()
                 .any(|axis| expression.uses_symbol(axis));
+            uses_time |= expression.uses_symbol("t");
             let dimension = model_expression::unit(&unit)?.1;
             let minimum = definition
                 .get("minimum")
@@ -196,6 +287,7 @@ impl CompiledMaterialEvaluator {
         Ok(Self {
             properties,
             uses_position,
+            uses_time,
         })
     }
 
@@ -203,44 +295,96 @@ impl CompiledMaterialEvaluator {
         self.uses_position
     }
 
+    /// An operator depending on this material cannot be treated as time-invariant.
+    pub(super) fn uses_time(&self) -> bool {
+        self.uses_time
+    }
+
     pub(super) fn evaluate_batch(
-        &self, base_symbols: &HashMap<String, Scalar>, frequency_hz: f64,
-        points: &[[f64; 3]], path: &str,
+        &self,
+        base_symbols: &HashMap<String, Scalar>,
+        frequency_hz: f64,
+        points: &[[f64; 3]],
+        path: &str,
     ) -> Result<Vec<HashMap<String, Scalar>>, String> {
-        if points.is_empty() { return Ok(Vec::new()); }
-        let hz_dimension=model_expression::unit("Hz")?.1;
-        let mut rows=Vec::with_capacity(points.len());
+        if points.is_empty() {
+            return Ok(Vec::new());
+        }
+        let hz_dimension = model_expression::unit("Hz")?.1;
+        let mut rows = Vec::with_capacity(points.len());
         for point in points {
-            let mut symbols=base_symbols.clone();
-            for (axis,value) in ["x","y","z"].into_iter().zip(*point) {
-                if !value.is_finite() {return Err(format!("{path}: coordinate {axis} is not finite."));}
-                symbols.insert(axis.into(),Scalar{value,dimension:[1.,0.,0.,0.,0.]});
+            let mut symbols = base_symbols.clone();
+            for (axis, value) in ["x", "y", "z"].into_iter().zip(*point) {
+                if !value.is_finite() {
+                    return Err(format!("{path}: coordinate {axis} is not finite."));
+                }
+                symbols.insert(
+                    axis.into(),
+                    Scalar {
+                        value,
+                        dimension: [1., 0., 0., 0., 0.],
+                    },
+                );
             }
-            for (name,value) in [("freq",frequency_hz),("frequency",frequency_hz),("omega",std::f64::consts::TAU*frequency_hz)] {
-                symbols.insert(name.into(),Scalar{value,dimension:hz_dimension});
+            for (name, value) in [
+                ("freq", frequency_hz),
+                ("frequency", frequency_hz),
+                ("omega", std::f64::consts::TAU * frequency_hz),
+            ] {
+                symbols.insert(
+                    name.into(),
+                    Scalar {
+                        value,
+                        dimension: hz_dimension,
+                    },
+                );
             }
             rows.push(symbols);
         }
-        let mut output=vec![HashMap::with_capacity(self.properties.len());points.len()];
+        let mut output = vec![HashMap::with_capacity(self.properties.len()); points.len()];
         for property in &self.properties {
-            let property_path=format!("{path}.{}",property.symbol);
-            let values=match property.expression.evaluate_batch(&rows,&property_path) {
-                Ok(values)=>values,
-                Err(error)=>{
-                    for point in points { if let Err(first)=self.evaluate(base_symbols,frequency_hz,*point,path){return Err(first);} }
+            let property_path = format!("{path}.{}", property.symbol);
+            let values = match property.expression.evaluate_batch(&rows, &property_path) {
+                Ok(values) => values,
+                Err(error) => {
+                    for point in points {
+                        if let Err(first) = self.evaluate(base_symbols, frequency_hz, *point, path)
+                        {
+                            return Err(first);
+                        }
+                    }
                     return Err(error);
                 }
             };
-            for (index,value) in values.into_iter().enumerate() {
-                let invalid_min=property.minimum.is_some_and(|(minimum,exclusive)| if exclusive {value<=minimum}else{value<minimum});
-                let invalid_set=property.implemented_values.as_ref().is_some_and(|set|!set.contains(&value));
-                if invalid_min||invalid_set {
-                    for point in points { if let Err(first)=self.evaluate(base_symbols,frequency_hz,*point,path){return Err(first);} }
-                    return Err(format!("{property_path}: invalid material value at batch row {index}."));
+            for (index, value) in values.into_iter().enumerate() {
+                let invalid_min = property.minimum.is_some_and(|(minimum, exclusive)| {
+                    if exclusive {
+                        value <= minimum
+                    } else {
+                        value < minimum
+                    }
+                });
+                let invalid_set = property
+                    .implemented_values
+                    .as_ref()
+                    .is_some_and(|set| !set.contains(&value));
+                if invalid_min || invalid_set {
+                    for point in points {
+                        if let Err(first) = self.evaluate(base_symbols, frequency_hz, *point, path)
+                        {
+                            return Err(first);
+                        }
+                    }
+                    return Err(format!(
+                        "{property_path}: invalid material value at batch row {index}."
+                    ));
                 }
-                let scalar=Scalar{value,dimension:property.dimension};
-                output[index].insert(property.symbol.clone(),scalar);
-                rows[index].insert(property.symbol.clone(),scalar);
+                let scalar = Scalar {
+                    value,
+                    dimension: property.dimension,
+                };
+                output[index].insert(property.symbol.clone(), scalar);
+                rows[index].insert(property.symbol.clone(), scalar);
             }
         }
         Ok(output)
@@ -250,6 +394,55 @@ impl CompiledMaterialEvaluator {
         &self,
         base_symbols: &HashMap<String, Scalar>,
         frequency_hz: f64,
+        point: [f64; 3],
+        path: &str,
+    ) -> Result<HashMap<String, Scalar>, String> {
+        self.evaluate_in_context(base_symbols, Some(frequency_hz), None, point, path)
+    }
+
+    /// Evaluate prescribed transient material expressions without introducing
+    /// harmonic frequency symbols into the transient context.
+    pub(super) fn evaluate_at_time(
+        &self,
+        base_symbols: &HashMap<String, Scalar>,
+        time: f64,
+        point: [f64; 3],
+        path: &str,
+    ) -> Result<HashMap<String, Scalar>, String> {
+        if !time.is_finite() {
+            return Err(format!("{path}: time must be finite."));
+        }
+        if base_symbols.contains_key("t") {
+            return Err(format!(
+                "{path}: parameter t conflicts with transient time."
+            ));
+        }
+        if self
+            .properties
+            .iter()
+            .any(|property| property.symbol == "t")
+        {
+            return Err(format!(
+                "{path}: material symbol t conflicts with transient time."
+            ));
+        }
+        if self.properties.iter().any(|property| {
+            ["freq", "frequency", "omega"]
+                .iter()
+                .any(|name| property.expression.uses_symbol(name))
+        }) {
+            return Err(format!(
+                "{path}: frequency-dependent material needs a declared causal time-domain model."
+            ));
+        }
+        self.evaluate_in_context(base_symbols, None, Some(time), point, path)
+    }
+
+    fn evaluate_in_context(
+        &self,
+        base_symbols: &HashMap<String, Scalar>,
+        frequency_hz: Option<f64>,
+        time: Option<f64>,
         point: [f64; 3],
         path: &str,
     ) -> Result<HashMap<String, Scalar>, String> {
@@ -266,28 +459,39 @@ impl CompiledMaterialEvaluator {
                 },
             );
         }
-        let hz_dimension = model_expression::unit("Hz")?.1;
-        symbols.insert(
-            "freq".into(),
-            Scalar {
-                value: frequency_hz,
-                dimension: hz_dimension,
-            },
-        );
-        symbols.insert(
-            "frequency".into(),
-            Scalar {
-                value: frequency_hz,
-                dimension: hz_dimension,
-            },
-        );
-        symbols.insert(
-            "omega".into(),
-            Scalar {
-                value: std::f64::consts::TAU * frequency_hz,
-                dimension: hz_dimension,
-            },
-        );
+        if let Some(frequency_hz) = frequency_hz {
+            let hz_dimension = model_expression::unit("Hz")?.1;
+            symbols.insert(
+                "freq".into(),
+                Scalar {
+                    value: frequency_hz,
+                    dimension: hz_dimension,
+                },
+            );
+            symbols.insert(
+                "frequency".into(),
+                Scalar {
+                    value: frequency_hz,
+                    dimension: hz_dimension,
+                },
+            );
+            symbols.insert(
+                "omega".into(),
+                Scalar {
+                    value: std::f64::consts::TAU * frequency_hz,
+                    dimension: hz_dimension,
+                },
+            );
+        }
+        if let Some(time) = time {
+            symbols.insert(
+                "t".into(),
+                Scalar {
+                    value: time,
+                    dimension: model_expression::unit("s")?.1,
+                },
+            );
+        }
 
         let mut output = HashMap::with_capacity(self.properties.len());
         for property in &self.properties {
@@ -510,24 +714,117 @@ pub(super) fn fields_by_assignment_cells<const N: usize>(
 mod batch_tests {
     use super::*;
     #[test]
-    fn spatial_quantity_batches_match_scalar_dependencies_and_errors() {
-        let dimension=[1.,0.,0.,0.,0.];
-        let make=|symbol:&str, expression:&str, minimum:Option<(f64,bool)>| CompiledProperty {
-            symbol:symbol.into(), expression:model_expression::CompiledQuantity::compile(
-                &json!({"expression":expression,"unit":"m"}),"material").unwrap(),
-            dimension,minimum,implemented_values:None,unit:"m".into(),
+    fn legacy_material_evaluator_skips_transient_only_capacity() {
+        let materials = HashMap::from([(
+            7,
+            json!({"id":"thermal","volumetricHeatCapacity":{"expression":"C0*(1+t/tau)","unit":"W*s/(m^3*K)"}}),
+        )]);
+        let compiled = CompiledMaterialAssignments::compile("thermal-2d", &materials).unwrap();
+        let values = compiled
+            .evaluate(7, &HashMap::new(), 1., [0.; 3], "cell")
+            .unwrap();
+        assert!(values.contains_key("k"));
+        assert!(!values.contains_key("Cvol"));
+    }
+    #[test]
+    fn material_can_be_sampled_at_position_and_dimensioned_time() {
+        let property = CompiledProperty {
+            symbol: "a".into(),
+            expression: model_expression::CompiledQuantity::compile(
+                &json!({"expression":"x*(1+t/tau)","unit":"m"}),
+                "material",
+            )
+            .unwrap(),
+            dimension: model_expression::unit("m").unwrap().1,
+            minimum: Some((0., false)),
+            implemented_values: None,
+            unit: "m".into(),
         };
-        let evaluator=CompiledMaterialEvaluator {properties:vec![make("a","2*x",Some((0.,false))),make("b","a+x",None)],uses_position:true};
-        let points=[[0.5,0.,0.],[1.,0.,0.],[1.5,0.,0.]];
-        let base=HashMap::new();
-        let batch=evaluator.evaluate_batch(&base,1.,&points,"material").unwrap();
-        for (i,point) in points.iter().enumerate() {
-            let scalar=evaluator.evaluate(&base,1.,*point,"material").unwrap();
-            assert_eq!(batch[i],scalar);
+        let evaluator = CompiledMaterialEvaluator {
+            properties: vec![property],
+            uses_position: true,
+            uses_time: true,
+        };
+        assert!(evaluator.uses_time());
+        let base = HashMap::from([(
+            "tau".into(),
+            Scalar {
+                value: 2.,
+                dimension: model_expression::unit("s").unwrap().1,
+            },
+        )]);
+        let values = evaluator
+            .evaluate_at_time(&base, 3., [4., 0., 0.], "material")
+            .unwrap();
+        assert!((values["a"].value - 10.).abs() < 1e-12);
+        assert!(
+            evaluator
+                .evaluate_at_time(&base, f64::NAN, [4., 0., 0.], "material")
+                .is_err()
+        );
+        let dispersive = CompiledMaterialEvaluator {
+            properties: vec![CompiledProperty {
+                symbol: "eps".into(),
+                expression: model_expression::CompiledQuantity::compile(
+                    &json!({"expression":"frequency/f0","unit":"1"}),
+                    "material",
+                )
+                .unwrap(),
+                dimension: model_expression::unit("1").unwrap().1,
+                minimum: None,
+                implemented_values: None,
+                unit: "1".into(),
+            }],
+            uses_position: false,
+            uses_time: false,
+        };
+        assert!(
+            dispersive
+                .evaluate_at_time(&base, 1., [0.; 3], "material")
+                .unwrap_err()
+                .contains("causal")
+        );
+    }
+    #[test]
+    fn spatial_quantity_batches_match_scalar_dependencies_and_errors() {
+        let dimension = [1., 0., 0., 0., 0.];
+        let make =
+            |symbol: &str, expression: &str, minimum: Option<(f64, bool)>| CompiledProperty {
+                symbol: symbol.into(),
+                expression: model_expression::CompiledQuantity::compile(
+                    &json!({"expression":expression,"unit":"m"}),
+                    "material",
+                )
+                .unwrap(),
+                dimension,
+                minimum,
+                implemented_values: None,
+                unit: "m".into(),
+            };
+        let evaluator = CompiledMaterialEvaluator {
+            properties: vec![make("a", "2*x", Some((0., false))), make("b", "a+x", None)],
+            uses_position: true,
+            uses_time: false,
+        };
+        let points = [[0.5, 0., 0.], [1., 0., 0.], [1.5, 0., 0.]];
+        let base = HashMap::new();
+        let batch = evaluator
+            .evaluate_batch(&base, 1., &points, "material")
+            .unwrap();
+        for (i, point) in points.iter().enumerate() {
+            let scalar = evaluator.evaluate(&base, 1., *point, "material").unwrap();
+            assert_eq!(batch[i], scalar);
         }
-        assert_eq!((batch[0]["a"].value,batch[0]["b"].value),(1.,1.5));
-        let invalid=[[0.5,0.,0.],[-1.,0.,0.]];
-        let expected=evaluator.evaluate(&base,1.,invalid[1],"material").unwrap_err();
-        assert_eq!(evaluator.evaluate_batch(&base,1.,&invalid,"material").unwrap_err(),expected);
+        assert_eq!((batch[0]["a"].value, batch[0]["b"].value), (1., 1.5));
+        let invalid = [[0.5, 0., 0.], [-1., 0., 0.]];
+        let expected = evaluator
+            .evaluate(&base, 1., invalid[1], "material")
+            .unwrap_err();
+        assert_eq!(
+            evaluator
+                .evaluate_batch(&base, 1., &invalid, "material")
+                .unwrap_err(),
+            expected
+        );
     }
 }

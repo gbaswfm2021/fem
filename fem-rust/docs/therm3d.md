@@ -17,7 +17,7 @@ Temperature `T` in kelvin is the primary unknown. For isotropic conductivity
 ```
 
 `Q` is volumetric heat generation in `W/m^3` and is zero when no Domain Source
-is enabled. The scenario has no transient heat capacity and does not model
+is enabled. The current stationary solver does not use heat capacity and does not model
 convection, radiation, or thermal impedance boundary conditions. Heat can also
 enter or leave through prescribed-temperature or prescribed-flux boundaries.
 
@@ -64,17 +64,22 @@ expressions for these quantities.
 | Condition | Meaning |
 | --- | --- |
 | Dirichlet | Prescribes one real scalar temperature `T = d` in K. The default is `293.15 K`. |
-| Neumann | Prescribes one real scalar **outward normal heat flux** `q · n = q_n` in `W/m^2`. The default is `0 W/m^2`. |
+| Neumann, scalar | Without `fieldValues`, `value` prescribes the real **outward normal heat flux** `q · n = q_n` in `W/m^2`. |
+| Neumann, vector | Three real `fieldValues` expressions `[qx, qy, qz]` in `W/m^2` specify the Cartesian flux; the solver projects it onto the outward normal. The companion scalar `value` must be zero. The default vector is zero. |
 
 Positive Neumann flux removes heat from the domain; negative flux adds heat.
 The solver applies `-q_n A/3` to each node of a triangular boundary face of
 area `A`. An unassigned exterior face has zero prescribed normal flux, so it
-is insulated. The 3D thermal solver uses the scalar boundary `value`; it does
-not implement a three-component `fieldValues` heat-flux condition. It rejects
+is insulated. Both forms use parameter-only expressions. The solver rejects
 conflicting prescribed temperatures at shared nodes, repeated or invalid
 boundary faces, and multiple conditions targeting the same boundary tag.
 
-Periodic thermal-3D conditions and periodic mesh pairs are unsupported.
+Matched periodic surface pairs impose equal temperatures on corresponding
+nodes. Enable the mesh pair and add a periodic Physics condition; thermal
+periodic phase must be zero. Paired surfaces must have matching triangulations
+under their declared translation, and they cannot also carry an ordinary
+prescribed boundary condition. Pair intersections share their common degrees
+of freedom, including nodes at corners and edges.
 
 ### Pure-flux components
 
@@ -120,6 +125,37 @@ The outward normal flux is `-q_x` on the left and `q_x` on the right. Compare
 the calculated temperature and flux with these values and check heat balance;
 use mesh refinement for more complex geometries or material interfaces.
 
+## Transient study
+
+The [thermal3d.json](../src/scenarios/thermal3d.json) package advertises the shared transient Study and declares temperature as the state, volumetric heat capacity `C`, thermal conductivity `k`, and Domain Source `Q`. The sparse backward-Euler coordinator has passed synthetic release-executable cases with nonzero sources and space/time-dependent capacity. Visible editor and older deployed-host verification remain outstanding.
+
+The chosen time-dependent material law is
+
+```math
+C(\mathbf{x},t)\,\frac{\partial T}{\partial t}
+-\nabla\!\cdot\left(k(\mathbf{x},t)\nabla T\right)=Q(\mathbf{x},t).
+```
+
+Here `C` multiplies the temperature rate; the contract does not take the time derivative of `C T`. It requires a positive volumetric heat capacity supplied by the model, with no solver default. Its compatible unit is `W*s/(m^3*K)`, equivalent to J/(m³·K); conductivity uses `W/(m*K)` and the source uses `W/m^3`. Spatially and time-dependent expressions are evaluated at the integration point and time stage. Initial temperature and boundary data must be compatible.
+
+The sparse finite-element system is
+
+```math
+M_C(t)\,\dot{\mathbf T}(t)+K(t)\,\mathbf T(t)=\mathbf f(t),
+\qquad (M_C)_{ij}=\int_\Omega C(\mathbf{x},t)N_iN_j\,dV.
+```
+
+For the backward-Euler step from `t_(n-1)` to `t_n`, the sparse assembler forms
+
+```math
+M_C(t_n)\frac{\mathbf T_n-\mathbf T_{n-1}}{\Delta t}
++K(t_n)\mathbf T_n=\mathbf f(t_n).
+```
+
+Synthetic native release-coordinator cases cover a uniform source and space/time-varying capacity in both thermal dimensions. Declared `boundaryLaws` route prescribed temperature and outward scalar or vector heat flux through the generic transient boundary adapter; time-varying prescribed data are included in coordinator checks. Broader independent temporal and spatial convergence, energy/balance checks and visible editor or older-host compatibility remain to be verified. Frequency-domain dispersion cannot be substituted directly for a causal time-domain material law.
+
+See the [transient equations and contract reference](transient_study_contract.md) for the declared state equations, sparse time-step formulation, units, implementation limits and verification status, and the [3D scenario notes](notes_thermal3d.md) for the corresponding matrix equations.
+
 ## Domain Source
 
 The current implementation supports multiple Domain Source entries under PHYSICS, each with an existing domain selection and expressions in spatial coordinates. Overlapping entries add; no entry means zero source. The project model stores selections and expressions, while the scenario contract declares their physical interpretation and weak-form contribution. This implementation is undergoing verification; its availability in a deployed installation depends on compatible FEM and platform runtimes.
@@ -129,3 +165,7 @@ For stationary conduction, the source is volumetric heat generation. The pure-Ne
 For source density Q in W/m^3, use `-div(k grad T) = Q` and add `integral(test * Q) dV`.
 
 See the [implementation plan](implement_domain_sources.md) for expression evaluation, generic assembly and verification requirements.
+
+## Boundary vector count validation
+
+An enabled Cartesian Neumann heat-flux vector must have exactly three components. The scalar-only normal-flux form remains supported. Semantic model validation checks the primary `fieldValues` count from the scenario’s declared boundary input; the solver retains its own check. Enabled vectors with an invalid type or component count receive a semantic validation error. To repair one in the editor, turn off “Specify field components” and turn it back on to recreate the declared defaults; this reset replaces the existing components. Disabled conditions skip these semantic checks.

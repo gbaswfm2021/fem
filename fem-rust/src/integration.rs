@@ -56,7 +56,7 @@ fn selection_tags(map: &Value, collection: &str) -> Result<HashMap<String, usize
     Ok(result)
 }
 
-fn parse_operators(
+pub(crate) fn parse_operators(
     model: &Value,
     component: &Value,
     map: &Value,
@@ -733,21 +733,8 @@ pub(super) fn evaluate_model_variables(
         domain_cells, boundary_cells, frequency_hz, &sampler)
 }
 
-/// Evaluate the same model declarations with a caller-provided physical field
-/// sampler. `nodes` and the point passed to the sampler use model coordinates.
-/// This permits higher-order and oriented bases without nodal interpolation.
-pub(super) fn evaluate_model_variables_with_field_sampler(
-    model: &Value,
-    component: &Value,
-    map: &Value,
-    dimension: usize,
-    nodes: &[[f64; 3]],
-    domain_cells: &[Simplex],
-    boundary_cells: &[Simplex],
-    frequency_hz: f64,
-    field_sampler: &(dyn Fn(&Simplex, &[f64], [f64; 3]) -> Result<HashMap<String, ComplexValue>, String> + '_),
-) -> Result<Map<String, Value>, String> {
-    let operators = parse_operators(model, component, map)?;
+/// Parse configured global and pointwise definitions for any study kind.
+pub(crate) fn model_expression_definitions(model:&Value) -> Result<(Vec<(String,AstNode)>,Vec<(String,AstNode)>),String> {
     let mut variables = Vec::new();
     for (index, definition) in model
         .pointer("/model/variables")
@@ -795,6 +782,25 @@ pub(super) fn evaluate_model_variables_with_field_sampler(
             })?,
         ));
     }
+    Ok((variables,pointwise))
+}
+
+/// Evaluate the same model declarations with a caller-provided physical field
+/// sampler. `nodes` and the point passed to the sampler use model coordinates.
+/// This permits higher-order and oriented bases without nodal interpolation.
+pub(super) fn evaluate_model_variables_with_field_sampler(
+    model: &Value,
+    component: &Value,
+    map: &Value,
+    dimension: usize,
+    nodes: &[[f64; 3]],
+    domain_cells: &[Simplex],
+    boundary_cells: &[Simplex],
+    frequency_hz: f64,
+    field_sampler: &(dyn Fn(&Simplex, &[f64], [f64; 3]) -> Result<HashMap<String, ComplexValue>, String> + '_),
+) -> Result<Map<String, Value>, String> {
+    let operators = parse_operators(model, component, map)?;
+    let (variables,pointwise)=model_expression_definitions(model)?;
     let parameters = model
         .pointer("/model/parameters")
         .and_then(Value::as_array)

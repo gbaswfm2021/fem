@@ -31,6 +31,11 @@ pub(crate) struct Result {
     pub(crate) data: crate::result_contract::ResultData,
 }
 
+enum Execution {
+    Solved(Result),
+    Assembled(vector_p1::LinearSystem),
+}
+
 /// Bind a material sample with the generic unit/bounds declarations before
 /// it is supplied to the numerical runner. Context names (e.g. frequency)
 /// are merged by the caller and remain scenario independent.
@@ -43,18 +48,49 @@ pub(crate) fn bind_material(plan: &ScenarioPlan, material: &HashMap<String, Scal
 
 /// Evaluate declared tensor/scalar coefficients and integrate the supplied
 /// samples through the same sparse vector runner in either dimension.
-pub(crate) fn solve<const D: usize, const N: usize>(
+pub(crate) fn solve<const D: usize, const FC: usize, const N: usize>(
     plan: &ScenarioPlan, nodes: &[[f64; D]], cells: &[Cell<N>],
-    boundaries: &[vector_p1::BoundaryPoint<'_, D>], essential: &[vector_p1::EssentialPoint<D>], periodic: Option<vector_p1::PeriodicMap<'_>>,
+    boundaries: &[vector_p1::BoundaryPoint<'_, D>], essential: &[vector_p1::EssentialPoint<FC>], periodic: Option<vector_p1::PeriodicMap<'_>>,
     essential_name: &str, mapping: &OutputMapping, mut data: crate::result_contract::ResultData,
     backend: &str, ordering: &str, threads: usize, tolerance: f64, cache: &mut SolverCache,
-    loads: Option<(&crate::weak_form::VolumeLoadPlan, &[Vec<Vec<C>>])>,
+    loads: &[crate::weak_form::VolumeLoadSamples<'_>],
 ) -> std::result::Result<Result, String> {
-    if mapping.vector_components.len() != D || mapping.tensor_matrix.is_empty() {
+    match execute(plan,nodes,cells,boundaries,essential,periodic,essential_name,mapping,data,
+        backend,ordering,threads,tolerance,cache,loads,false)? {
+        Execution::Solved(result)=>Ok(result),
+        Execution::Assembled(_)=>Err("Prepared vector solve returned an assembly-only result.".into()),
+    }
+}
+
+/// Assemble sparse master rows using the same declaration and element path as
+/// the frequency solve, without entering the linear solver. Propagation-mode
+/// adapters use this to construct their sparse operator pencil.
+pub(crate) fn assemble<const D: usize, const FC: usize, const N: usize>(
+    plan: &ScenarioPlan, nodes: &[[f64; D]], cells: &[Cell<N>],
+    boundaries: &[vector_p1::BoundaryPoint<'_, D>], essential: &[vector_p1::EssentialPoint<FC>], periodic: Option<vector_p1::PeriodicMap<'_>>,
+    essential_name: &str, mapping: &OutputMapping, data: crate::result_contract::ResultData,
+    backend: &str, ordering: &str, threads: usize, tolerance: f64, cache: &mut SolverCache,
+    loads: &[crate::weak_form::VolumeLoadSamples<'_>],
+) -> std::result::Result<vector_p1::LinearSystem, String> {
+    match execute(plan,nodes,cells,boundaries,essential,periodic,essential_name,mapping,data,
+        backend,ordering,threads,tolerance,cache,loads,true)? {
+        Execution::Assembled(system)=>Ok(system),
+        Execution::Solved(_)=>Err("Prepared vector assembly unexpectedly solved the operator.".into()),
+    }
+}
+
+fn execute<const D: usize, const FC: usize, const N: usize>(
+    plan: &ScenarioPlan, nodes: &[[f64; D]], cells: &[Cell<N>],
+    boundaries: &[vector_p1::BoundaryPoint<'_, D>], essential: &[vector_p1::EssentialPoint<FC>], periodic: Option<vector_p1::PeriodicMap<'_>>,
+    essential_name: &str, mapping: &OutputMapping, mut data: crate::result_contract::ResultData,
+    backend: &str, ordering: &str, threads: usize, tolerance: f64, cache: &mut SolverCache,
+    loads: &[crate::weak_form::VolumeLoadSamples<'_>], assemble_only: bool,
+) -> std::result::Result<Execution, String> {
+    if mapping.vector_components.len() != FC || mapping.tensor_matrix.is_empty() {
         return Err("Vector output mapping does not match the field dimension.".into());
     }
     let recovery = plan.tensor_recovery.as_ref().ok_or("Vector formulation requires tensor recovery.")?;
-    recovery.require_shape(D, D)?;
+    recovery.require_shape(D, FC)?;
     recovery.require_policy("cellCentroid", "cellAndNodalArithmeticMean")?;
     let essential_plan = plan.essential.get(essential_name).ok_or("Vector formulation lacks the selected essential form.")?;
     // Retain owned matrices while quadrature points borrow them.
@@ -86,10 +122,13 @@ pub(crate) fn solve<const D: usize, const N: usize>(
         numerical.push(vector_p1::Cell { nodes:cell.nodes, quadrature, recovery_symbols:recovery_symbols.clone() });
     }
     let problem = vector_p1::Problem { nodes, cells:&numerical, form:&plan.volume, boundaries, essential, essential_plan, recovery, periodic };
-    let solution = problem.solve_with_volume_loads(backend, ordering, threads, tolerance, cache, loads)?;
+    if assemble_only {
+        return Ok(Execution::Assembled(problem.assemble_with_volume_load_routes(&mut cache.assembly,loads)?));
+    }
+    let solution = problem.solve_with_volume_load_routes(backend, ordering, threads, tolerance, cache, loads)?;
     for (axis, name) in mapping.vector_components.iter().enumerate() {
         if name.is_empty() || data.series.contains_key(name) { return Err("Vector output component names must be nonempty and unique.".into()); }
-        data.series.insert(name.clone(), (0..nodes.len()).map(|node| C { re:solution.real[D*node+axis], im:solution.imaginary[D*node+axis] }).collect());
+        data.series.insert(name.clone(), (0..nodes.len()).map(|node| C { re:solution.real[FC*node+axis], im:solution.imaginary[FC*node+axis] }).collect());
     }
     let labels = recovery.components();
     let mut sums = vec![vec![C::default(); labels.len()]; nodes.len()];
@@ -106,7 +145,7 @@ pub(crate) fn solve<const D: usize, const N: usize>(
         data.series.insert(name.clone(), sums.iter().zip(&counts).map(|(values, &count)| if count == 0 { C::default() } else { C { re:values[axis].re / count as f64, im:values[axis].im / count as f64 } }).collect());
     }
     if data.matrices.insert(mapping.tensor_matrix.clone(), solution.recovered_cells.clone()).is_some() { return Err("Duplicate tensor matrix output name.".into()); }
-    Ok(Result { solution, data })
+    Ok(Execution::Solved(Result { solution, data }))
 }
 
 

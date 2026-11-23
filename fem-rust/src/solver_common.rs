@@ -127,7 +127,7 @@ pub(crate) const TRI_Q: [[f64; 4]; 7] = [
     ],
 ];
 
-#[derive(Clone, Copy, Default, Debug)]
+#[derive(Clone, Copy, Default, Debug, PartialEq)]
 pub(crate) struct C {
     pub(crate) re: f64,
     pub(crate) im: f64,
@@ -388,6 +388,114 @@ pub(crate) struct SolverCache {
     faer: Option<SymbolicCache>,
     #[cfg(feature = "rivrs-backend")]
     rivrs: Option<RivrsCache>,
+}
+
+enum ReusableFactor {
+    Faer(Lu<usize, FaerComplex<f64>>),
+    #[cfg(feature = "rivrs-backend")]
+    Rivrs { solver: SparseLDLT, augmented: bool, dimension: usize },
+}
+
+/// One numerical sparse factorization that serves multiple right-hand sides.
+/// Iterative eigenvalue methods use this so each Arnoldi vector reuses the
+/// same shifted pencil factor instead of refactoring the global matrix.
+pub(crate) struct SparseDirectFactor {
+    factor: ReusableFactor,
+}
+
+pub(crate) fn factor_sparse_system(
+    matrix: &[BTreeMap<usize, C>],
+    backend: &str,
+    ordering: &str,
+    threads: usize,
+    cache: &mut SolverCache,
+) -> Result<SparseDirectFactor, String> {
+    let n = matrix.len();
+    if n == 0 || matrix.iter().any(|row| row.iter().any(|(&j, value)|
+        j >= n || !value.re.is_finite() || !value.im.is_finite())) {
+        return Err("Sparse factorization requires a nonempty square matrix with finite entries.".into());
+    }
+    match backend {
+        "faer" => {
+            let triplets: Vec<Triplet<usize, usize, FaerComplex<f64>>> = matrix.iter().enumerate()
+                .flat_map(|(i,row)|row.iter().map(move |(&j,&v)|Triplet::new(i,j,FaerComplex::new(v.re,v.im))))
+                .collect();
+            let sparse=SparseColMat::<usize,FaerComplex<f64>>::try_new_from_triplets(n,n,&triplets)
+                .map_err(|error|format!("Sparse CSC construction failed: {error:?}"))?;
+            let pattern:Vec<Vec<usize>>=matrix.iter().map(|row|row.keys().copied().collect()).collect();
+            let symbolic=if cache.faer.as_ref().is_some_and(|value|value.pattern==pattern) {
+                cache.faer.as_ref().expect("matched Faer symbolic cache").symbolic.clone()
+            } else {
+                let symbolic=SymbolicLu::try_new(sparse.symbolic())
+                    .map_err(|error|format!("Sparse LU symbolic analysis failed: {error:?}"))?;
+                cache.faer=Some(SymbolicCache{pattern,symbolic:symbolic.clone()});
+                symbolic
+            };
+            let factor=Lu::try_new_with_symbolic(symbolic,sparse.as_ref())
+                .map_err(|error|format!("Sparse LU factorization failed: {error:?}"))?;
+            Ok(SparseDirectFactor{factor:ReusableFactor::Faer(factor)})
+        }
+        "rivrs" => {
+            #[cfg(feature = "rivrs-backend")]
+            {
+                let defect=complex_symmetry_defect(matrix);
+                let augmented=defect>1e-10;
+                let n2=n.checked_mul(2).ok_or("real-block dimension overflow")?;
+                let block_n=if augmented {n2.checked_mul(2).ok_or("augmented real-block dimension overflow")?} else {n2};
+                let (indices,values)=real_block_entries(matrix,augmented,true);
+                let (symbolic,argsort)=SymbolicSparseColMat::<usize>::try_new_from_indices(block_n,block_n,&indices)
+                    .map_err(|error|format!("rivrs real-block sparse structure creation failed: {error:?}"))?;
+                let real_block=SparseColMat::<usize,f64>::new_from_argsort(symbolic,&argsort,&values)
+                    .map_err(|error|format!("rivrs real-block CSC construction failed: {error:?}"))?;
+                let strategy=match ordering {"amd"=>OrderingStrategy::Amd,"metis"=>OrderingStrategy::Metis,
+                    _=>return Err(format!("Unknown rivrs solverOrdering '{ordering}'; use 'amd' or 'metis'."))};
+                let mut solver=SparseLDLT::analyze_with_matrix(&real_block,&AnalyzeOptions{ordering:strategy})
+                    .map_err(|error|format!("rivrs symbolic analysis failed: {error}"))?;
+                solver.refactor(&real_block,&FactorOptions{par:Par::rayon(threads.max(1)),..FactorOptions::default()})
+                    .map_err(|error|format!("rivrs numeric factorization failed: {error}"))?;
+                Ok(SparseDirectFactor{factor:ReusableFactor::Rivrs{solver,augmented,dimension:n}})
+            }
+            #[cfg(not(feature = "rivrs-backend"))]
+            { let _=(ordering,threads,cache); Err("solverBackend 'rivrs' requires building with --features rivrs-backend.".into()) }
+        }
+        _=>Err(format!("Unknown solverBackend '{backend}'; use 'faer' or 'rivrs'.")),
+    }
+}
+
+impl SparseDirectFactor {
+    pub(crate) fn solve(&self, rhs: &[C], threads: usize) -> Result<Vec<C>, String> {
+        if rhs.is_empty() || rhs.iter().any(|value|!value.re.is_finite()||!value.im.is_finite()) {
+            return Err("Sparse factor solve requires a nonempty finite right-hand side.".into());
+        }
+        match &self.factor {
+            ReusableFactor::Faer(lu)=>{
+                let n=rhs.len();
+                let rhs=Col::<FaerComplex<f64>>::from_fn(n,|i|FaerComplex::new(rhs[i].re,rhs[i].im));
+                let solution=lu.solve(&rhs);
+                Ok((0..n).map(|i|C{re:solution[i].re,im:solution[i].im}).collect())
+            }
+            #[cfg(feature = "rivrs-backend")]
+            ReusableFactor::Rivrs{solver,augmented,dimension}=>{
+                let n=*dimension;
+                if rhs.len()!=n{return Err("Sparse factor right-hand side dimension differs from its matrix.".into());}
+                let n2=n.checked_mul(2).ok_or("real-block dimension overflow")?;
+                let block_n=if *augmented {n2.checked_mul(2).ok_or("augmented real-block dimension overflow")?}else{n2};
+                let block_rhs=Col::<f64>::from_fn(block_n,|i|if i<n {rhs[i].re} else if i<n2 {
+                    if *augmented {rhs[i-n].im} else {-rhs[i-n].im}
+                } else {0.});
+                let parallelism=Par::rayon(threads.max(1));
+                let needed=solver.solve_scratch(1);let mut memory=MemBuffer::new(needed);
+                let solution=solver.solve(&block_rhs,&mut MemStack::new(&mut memory),parallelism)
+                    .map_err(|error|format!("rivrs repeated sparse solve failed: {error}"))?;
+                let offset=if *augmented {n2}else{0};
+                let result=(0..n).map(|i|C{re:solution[offset+i],im:solution[offset+n+i]}).collect::<Vec<_>>();
+                if result.iter().any(|value|!value.re.is_finite()||!value.im.is_finite()){
+                    return Err("rivrs repeated sparse solve returned non-finite values.".into());
+                }
+                Ok(result)
+            }
+        }
+    }
 }
 
 pub(crate) fn complex_symmetry_defect(matrix: &[BTreeMap<usize, C>]) -> f64 {
