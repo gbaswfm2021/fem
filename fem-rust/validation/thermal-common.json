@@ -1,0 +1,1819 @@
+{
+  "version": "fullmeta-fem-validation-contribution/1",
+  "rows": [
+    {
+      "obligation": {
+        "constraint": {
+          "type": "memberOf",
+          "subject": {
+            "field": "/type"
+          },
+          "other": {
+            "select": {
+              "from": {
+                "path": "/$defs/femProfiles",
+                "source": "schema"
+              },
+              "kind": "values",
+              "single": true,
+              "value": {
+                "field": "/x-fem-scenario/supportedStudyTypes"
+              },
+              "where": {
+                "other": {
+                  "path": "/scenario/profileId",
+                  "source": "root"
+                },
+                "subject": {
+                  "field": "/x-fem-scenario/profile/id"
+                },
+                "type": "equals"
+              }
+            }
+          }
+        },
+        "diagnostic": {
+          "message": "Study type is not supported by the selected scenario.",
+          "path": "/type"
+        },
+        "id": "thermal_study_type",
+        "name": "Study type is declared by the scenario",
+        "scope": {
+          "nested": [],
+          "path": "/model/study/*",
+          "source": "root"
+        },
+        "stage": "model",
+        "when": {
+          "other": {
+            "literal": "thermal"
+          },
+          "subject": {
+            "path": "/scenario/physics",
+            "source": "root"
+          },
+          "type": "equals"
+        }
+      }
+    },
+    {
+      "obligation": {
+        "constraint": {
+          "subject": {
+            "field": "/parameterSweep"
+          },
+          "type": "forbidden"
+        },
+        "diagnostic": {
+          "message": "A stationary thermal Study cannot declare a parameter sweep.",
+          "path": "/parameterSweep"
+        },
+        "id": "thermal_no_sweep",
+        "name": "Stationary thermal studies have no sweep",
+        "scope": {
+          "nested": [],
+          "path": "/model/study/*",
+          "source": "root"
+        },
+        "stage": "model",
+        "when": {
+          "all": [
+            {
+              "other": {
+                "literal": "thermal"
+              },
+              "subject": {
+                "path": "/scenario/physics",
+                "source": "root"
+              },
+              "type": "equals"
+            },
+            {
+              "other": {
+                "literal": "stationary"
+              },
+              "subject": {
+                "field": "/type"
+              },
+              "type": "equals"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "obligation": {
+        "constraint": {
+          "other": {
+            "literal": 1
+          },
+          "subject": {
+            "field": "/discretization/elementOrder"
+          },
+          "type": "equals"
+        },
+        "diagnostic": {
+          "message": "This formulation supports first-order elements only.",
+          "path": "/discretization/elementOrder"
+        },
+        "id": "study_first_order_only",
+        "name": "Scalar formulations use first-order elements",
+        "scope": {
+          "nested": [],
+          "path": "/model/study/*",
+          "source": "root"
+        },
+        "stage": "model",
+        "when": {
+          "all": [
+            {
+              "subject": {
+                "field": "/discretization/elementOrder"
+              },
+              "type": "required"
+            },
+            {
+              "other": {
+                "literal": [
+                  "pressure",
+                  "Ez",
+                  "Hz",
+                  "T"
+                ]
+              },
+              "subject": {
+                "path": "/model/physics/formulation",
+                "source": "root"
+              },
+              "type": "memberOf"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "obligation": {
+        "constraint": {
+          "check": "expression",
+          "inputs": [
+            {
+              "name": "kind",
+              "operand": {
+                "literal": "definitions"
+              }
+            }
+          ],
+          "subject": {
+            "object": {
+              "callables": {
+                "select": {
+                  "flatten": true,
+                  "from": {
+                    "array": [
+                      {
+                        "select": {
+                          "from": {
+                            "path": "/x-fem-capabilities/expressions/functionArities",
+                            "source": "schema"
+                          },
+                          "kind": "entries",
+                          "value": {
+                            "object": {
+                              "dimensionSupported": {
+                                "literal": true
+                              },
+                              "evaluationSupported": {
+                                "literal": true
+                              },
+                              "kind": {
+                                "literal": "function"
+                              },
+                              "maxArgs": {
+                                "field": "/value/maxArgs"
+                              },
+                              "minArgs": {
+                                "field": "/value/minArgs"
+                              },
+                              "name": {
+                                "field": "/key"
+                              }
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "select": {
+                          "flatten": true,
+                          "from": {
+                            "path": "/model/integrationOperators",
+                            "source": "root"
+                          },
+                          "kind": "items",
+                          "value": {
+                            "array": [
+                              {
+                                "object": {
+                                  "argumentScope": {
+                                    "literal": "integrationArgument"
+                                  },
+                                  "dimensionSupported": {
+                                    "literal": false
+                                  },
+                                  "evaluationSupported": {
+                                    "literal": true
+                                  },
+                                  "kind": {
+                                    "literal": "operator"
+                                  },
+                                  "maxArgs": {
+                                    "literal": 1
+                                  },
+                                  "minArgs": {
+                                    "literal": 1
+                                  },
+                                  "name": {
+                                    "field": "/id"
+                                  },
+                                  "operatorType": {
+                                    "literal": "integration"
+                                  }
+                                }
+                              },
+                              {
+                                "object": {
+                                  "argumentScope": {
+                                    "literal": "integrationArgument"
+                                  },
+                                  "dimensionSupported": {
+                                    "literal": false
+                                  },
+                                  "evaluationSupported": {
+                                    "literal": true
+                                  },
+                                  "kind": {
+                                    "literal": "operator"
+                                  },
+                                  "maxArgs": {
+                                    "literal": 1
+                                  },
+                                  "minArgs": {
+                                    "literal": 1
+                                  },
+                                  "name": {
+                                    "field": "/name"
+                                  },
+                                  "operatorType": {
+                                    "literal": "integration"
+                                  }
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "kind": "items"
+                }
+              },
+              "definitions": {
+                "path": "/model/variables",
+                "source": "root"
+              },
+              "parameters": {
+                "path": "/model/parameters",
+                "source": "root"
+              },
+              "rules": {
+                "literal": {
+                  "builtInSymbols": [
+                    "pi",
+                    "e",
+                    "i"
+                  ],
+                  "definitionLabel": "Global variable",
+                  "definitionPath": "/model/variables",
+                  "definitionScope": "globalExpression",
+                  "frequencySymbols": [],
+                  "integrationArgumentCount": 1
+                }
+              },
+              "symbols": {
+                "select": {
+                  "flatten": true,
+                  "from": {
+                    "array": [
+                      {
+                        "literal": [
+                          {
+                            "allowedScopes": [
+                              "integrationArgument",
+                              "pointwiseExpression"
+                            ],
+                            "kind": "coordinate",
+                            "symbol": "x",
+                            "unit": "m"
+                          },
+                          {
+                            "allowedScopes": [
+                              "integrationArgument",
+                              "pointwiseExpression"
+                            ],
+                            "kind": "coordinate",
+                            "symbol": "y",
+                            "unit": "m"
+                          },
+                          {
+                            "allowedScopes": [
+                              "integrationArgument",
+                              "pointwiseExpression"
+                            ],
+                            "kind": "coordinate",
+                            "symbol": "z",
+                            "unit": "m"
+                          },
+                          {
+                            "allowedScopes": [
+                              "integrationArgument"
+                            ],
+                            "kind": "coordinate",
+                            "symbol": "t",
+                            "unit": "s"
+                          }
+                        ]
+                      },
+                      {
+                        "select": {
+                          "from": {
+                            "literal": [
+                              {
+                                "symbol": "freq",
+                                "unit": "Hz"
+                              },
+                              {
+                                "symbol": "omega",
+                                "unit": "Hz"
+                              }
+                            ]
+                          },
+                          "kind": "items",
+                          "where": {
+                            "other": {
+                              "literal": "thermal"
+                            },
+                            "subject": {
+                              "path": "/scenario/physics",
+                              "source": "root"
+                            },
+                            "type": "notEquals"
+                          }
+                        }
+                      },
+                      {
+                        "select": {
+                          "from": {
+                            "select": {
+                              "from": {
+                                "select": {
+                                  "from": {
+                                    "path": "/$defs/femProfiles",
+                                    "source": "schema"
+                                  },
+                                  "kind": "values",
+                                  "single": true,
+                                  "value": {
+                                    "field": "/x-fem-scenario/fields/formulations"
+                                  },
+                                  "where": {
+                                    "other": {
+                                      "path": "/scenario/profileId",
+                                      "source": "root"
+                                    },
+                                    "subject": {
+                                      "field": "/x-fem-scenario/profile/id"
+                                    },
+                                    "type": "equals"
+                                  }
+                                }
+                              },
+                              "kind": "values",
+                              "single": true,
+                              "value": {
+                                "select": {
+                                  "flatten": true,
+                                  "from": {
+                                    "array": [
+                                      {
+                                        "field": "/fieldVariables"
+                                      },
+                                      {
+                                        "field": "/derivedFieldVariables"
+                                      },
+                                      {
+                                        "field": "/zeroFieldVariables"
+                                      }
+                                    ]
+                                  },
+                                  "kind": "items"
+                                }
+                              },
+                              "where": {
+                                "other": {
+                                  "path": "/model/physics/formulation",
+                                  "source": "root"
+                                },
+                                "subject": {
+                                  "field": "/formulation"
+                                },
+                                "type": "equals"
+                              }
+                            }
+                          },
+                          "kind": "items",
+                          "value": {
+                            "object": {
+                              "allowedScopes": {
+                                "literal": [
+                                  "integrationArgument",
+                                  "pointwiseExpression"
+                                ]
+                              },
+                              "kind": {
+                                "literal": "field"
+                              },
+                              "symbol": {
+                                "field": "/symbol"
+                              },
+                              "unit": {
+                                "field": "/unit"
+                              }
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "select": {
+                          "from": {
+                            "select": {
+                              "from": {
+                                "path": "/$defs/femProfiles",
+                                "source": "schema"
+                              },
+                              "kind": "values",
+                              "single": true,
+                              "value": {
+                                "field": "/x-fem-scenario/materials/properties"
+                              },
+                              "where": {
+                                "other": {
+                                  "path": "/scenario/profileId",
+                                  "source": "root"
+                                },
+                                "subject": {
+                                  "field": "/x-fem-scenario/profile/id"
+                                },
+                                "type": "equals"
+                              }
+                            }
+                          },
+                          "kind": "items",
+                          "value": {
+                            "object": {
+                              "allowedScopes": {
+                                "literal": [
+                                  "integrationArgument",
+                                  "pointwiseExpression"
+                                ]
+                              },
+                              "kind": {
+                                "literal": "field"
+                              },
+                              "symbol": {
+                                "field": "/symbol"
+                              },
+                              "unit": {
+                                "field": "/unit"
+                              }
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "select": {
+                          "from": {
+                            "path": "/model/pointwiseVariables",
+                            "source": "root"
+                          },
+                          "kind": "items",
+                          "value": {
+                            "object": {
+                              "allowedScopes": {
+                                "literal": [
+                                  "integrationArgument"
+                                ]
+                              },
+                              "kind": {
+                                "literal": "field"
+                              },
+                              "symbol": {
+                                "field": "/symbol"
+                              },
+                              "unit": {
+                                "field": "/unit"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "kind": "items"
+                }
+              }
+            }
+          },
+          "subjectInput": "input",
+          "type": "semanticCheck"
+        },
+        "diagnostic": {
+          "message": "Global definitions must use their declared expression scope.",
+          "path": "/model/variables"
+        },
+        "id": "global_definition_expressions",
+        "name": "Global definition expression scope",
+        "scope": {
+          "nested": [],
+          "path": "",
+          "source": "root"
+        },
+        "stage": "model",
+        "when": {
+          "all": [
+            {
+              "minimum": 1,
+              "subject": {
+                "path": "/model/variables",
+                "source": "root"
+              },
+              "type": "minCount"
+            },
+            {
+              "type": "notMemberOf",
+              "subject": {
+                "literal": "transient"
+              },
+              "other": {
+                "select": {
+                  "from": {
+                    "path": "/model/study",
+                    "source": "root"
+                  },
+                  "kind": "items",
+                  "value": {
+                    "field": "/type"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "obligation": {
+        "constraint": {
+          "check": "expression",
+          "inputs": [
+            {
+              "name": "kind",
+              "operand": {
+                "literal": "definitions"
+              }
+            }
+          ],
+          "subject": {
+            "object": {
+              "callables": {
+                "select": {
+                  "from": {
+                    "path": "/x-fem-capabilities/expressions/functionArities",
+                    "source": "schema"
+                  },
+                  "kind": "entries",
+                  "value": {
+                    "object": {
+                      "dimensionSupported": {
+                        "literal": true
+                      },
+                      "evaluationSupported": {
+                        "literal": true
+                      },
+                      "kind": {
+                        "literal": "function"
+                      },
+                      "maxArgs": {
+                        "field": "/value/maxArgs"
+                      },
+                      "minArgs": {
+                        "field": "/value/minArgs"
+                      },
+                      "name": {
+                        "field": "/key"
+                      }
+                    }
+                  }
+                }
+              },
+              "definitions": {
+                "path": "/model/pointwiseVariables",
+                "source": "root"
+              },
+              "parameters": {
+                "path": "/model/parameters",
+                "source": "root"
+              },
+              "rules": {
+                "literal": {
+                  "builtInSymbols": [
+                    "pi",
+                    "e",
+                    "i"
+                  ],
+                  "definitionLabel": "Pointwise variable",
+                  "definitionPath": "/model/pointwiseVariables",
+                  "definitionScope": "pointwiseExpression",
+                  "frequencySymbols": [],
+                  "integrationArgumentCount": 1
+                }
+              },
+              "symbols": {
+                "select": {
+                  "flatten": true,
+                  "from": {
+                    "array": [
+                      {
+                        "literal": [
+                          {
+                            "allowedScopes": [
+                              "integrationArgument",
+                              "pointwiseExpression"
+                            ],
+                            "kind": "coordinate",
+                            "symbol": "x",
+                            "unit": "m"
+                          },
+                          {
+                            "allowedScopes": [
+                              "integrationArgument",
+                              "pointwiseExpression"
+                            ],
+                            "kind": "coordinate",
+                            "symbol": "y",
+                            "unit": "m"
+                          },
+                          {
+                            "allowedScopes": [
+                              "integrationArgument",
+                              "pointwiseExpression"
+                            ],
+                            "kind": "coordinate",
+                            "symbol": "z",
+                            "unit": "m"
+                          }
+                        ]
+                      },
+                      {
+                        "select": {
+                          "from": {
+                            "literal": [
+                              {
+                                "symbol": "freq",
+                                "unit": "Hz"
+                              },
+                              {
+                                "symbol": "omega",
+                                "unit": "Hz"
+                              }
+                            ]
+                          },
+                          "kind": "items",
+                          "where": {
+                            "other": {
+                              "literal": "thermal"
+                            },
+                            "subject": {
+                              "path": "/scenario/physics",
+                              "source": "root"
+                            },
+                            "type": "notEquals"
+                          }
+                        }
+                      },
+                      {
+                        "select": {
+                          "from": {
+                            "select": {
+                              "from": {
+                                "select": {
+                                  "from": {
+                                    "path": "/$defs/femProfiles",
+                                    "source": "schema"
+                                  },
+                                  "kind": "values",
+                                  "single": true,
+                                  "value": {
+                                    "field": "/x-fem-scenario/fields/formulations"
+                                  },
+                                  "where": {
+                                    "other": {
+                                      "path": "/scenario/profileId",
+                                      "source": "root"
+                                    },
+                                    "subject": {
+                                      "field": "/x-fem-scenario/profile/id"
+                                    },
+                                    "type": "equals"
+                                  }
+                                }
+                              },
+                              "kind": "values",
+                              "single": true,
+                              "value": {
+                                "select": {
+                                  "flatten": true,
+                                  "from": {
+                                    "array": [
+                                      {
+                                        "field": "/fieldVariables"
+                                      },
+                                      {
+                                        "field": "/derivedFieldVariables"
+                                      },
+                                      {
+                                        "field": "/zeroFieldVariables"
+                                      }
+                                    ]
+                                  },
+                                  "kind": "items"
+                                }
+                              },
+                              "where": {
+                                "other": {
+                                  "path": "/model/physics/formulation",
+                                  "source": "root"
+                                },
+                                "subject": {
+                                  "field": "/formulation"
+                                },
+                                "type": "equals"
+                              }
+                            }
+                          },
+                          "kind": "items",
+                          "value": {
+                            "object": {
+                              "allowedScopes": {
+                                "literal": [
+                                  "integrationArgument",
+                                  "pointwiseExpression"
+                                ]
+                              },
+                              "kind": {
+                                "literal": "field"
+                              },
+                              "symbol": {
+                                "field": "/symbol"
+                              },
+                              "unit": {
+                                "field": "/unit"
+                              }
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "select": {
+                          "from": {
+                            "select": {
+                              "from": {
+                                "path": "/$defs/femProfiles",
+                                "source": "schema"
+                              },
+                              "kind": "values",
+                              "single": true,
+                              "value": {
+                                "field": "/x-fem-scenario/materials/properties"
+                              },
+                              "where": {
+                                "other": {
+                                  "path": "/scenario/profileId",
+                                  "source": "root"
+                                },
+                                "subject": {
+                                  "field": "/x-fem-scenario/profile/id"
+                                },
+                                "type": "equals"
+                              }
+                            }
+                          },
+                          "kind": "items",
+                          "value": {
+                            "object": {
+                              "allowedScopes": {
+                                "literal": [
+                                  "integrationArgument",
+                                  "pointwiseExpression"
+                                ]
+                              },
+                              "kind": {
+                                "literal": "field"
+                              },
+                              "symbol": {
+                                "field": "/symbol"
+                              },
+                              "unit": {
+                                "field": "/unit"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "kind": "items"
+                }
+              }
+            }
+          },
+          "subjectInput": "input",
+          "type": "semanticCheck"
+        },
+        "diagnostic": {
+          "message": "Pointwise definitions must use their declared expression scope.",
+          "path": "/model/pointwiseVariables"
+        },
+        "id": "pointwise_definition_expressions",
+        "name": "Pointwise definition expression scope",
+        "scope": {
+          "nested": [],
+          "path": "",
+          "source": "root"
+        },
+        "stage": "model",
+        "when": {
+          "all": [
+            {
+              "minimum": 1,
+              "subject": {
+                "path": "/model/pointwiseVariables",
+                "source": "root"
+              },
+              "type": "minCount"
+            },
+            {
+              "type": "notMemberOf",
+              "subject": {
+                "literal": "transient"
+              },
+              "other": {
+                "select": {
+                  "from": {
+                    "path": "/model/study",
+                    "source": "root"
+                  },
+                  "kind": "items",
+                  "value": {
+                    "field": "/type"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "obligation": {
+        "constraint": {
+          "check": "quantity",
+          "inputs": [
+            {
+              "name": "evaluationPolicy",
+              "operand": {
+                "path": "/x-fullmeta-expressionRuntime/real/literal",
+                "source": "schema"
+              }
+            },
+            {
+              "name": "allowedFunctions",
+              "operand": {
+                "path": "/x-fullmeta-expressionRuntime/real/literal/allowedFunctions",
+                "source": "schema"
+              }
+            },
+            {
+              "name": "dimensionTolerance",
+              "operand": {
+                "literal": 1e-10
+              }
+            },
+            {
+              "name": "symbols",
+              "operand": {
+                "binding": "parameters",
+                "path": "/symbols"
+              }
+            },
+            {
+              "name": "expectedUnit",
+              "operand": {
+                "select": {
+                  "from": {
+                    "select": {
+                      "from": {
+                        "select": {
+                          "from": {
+                            "path": "/$defs/femProfiles",
+                            "source": "schema"
+                          },
+                          "kind": "values",
+                          "single": true,
+                          "value": {
+                            "field": "/x-fem-physics/boundaryDefaultsByFormulation"
+                          },
+                          "where": {
+                            "other": {
+                              "path": "/scenario/profileId",
+                              "source": "root"
+                            },
+                            "subject": {
+                              "field": "/x-fem-scenario/profile/id"
+                            },
+                            "type": "equals"
+                          }
+                        }
+                      },
+                      "kind": "entries",
+                      "single": true,
+                      "value": {
+                        "field": "/value"
+                      },
+                      "where": {
+                        "other": {
+                          "path": "/model/physics/formulation",
+                          "source": "root"
+                        },
+                        "subject": {
+                          "field": "/key"
+                        },
+                        "type": "equals"
+                      }
+                    }
+                  },
+                  "kind": "entries",
+                  "single": true,
+                  "value": {
+                    "field": "/value/value/unit"
+                  },
+                  "where": {
+                    "other": {
+                      "ancestor": 1,
+                      "path": "/type"
+                    },
+                    "subject": {
+                      "field": "/key"
+                    },
+                    "type": "equals"
+                  }
+                }
+              }
+            }
+          ],
+          "subject": {
+            "field": "/value"
+          },
+          "subjectInput": "value",
+          "type": "semanticCheck"
+        },
+        "diagnostic": {
+          "message": "Boundary value must match the formulation unit and expression scope.",
+          "path": "/value"
+        },
+        "id": "boundary_quantity_thermal_value",
+        "name": "Boundary value unit and scope thermal",
+        "when": {
+          "type": "notMemberOf",
+          "subject": {
+            "literal": "transient"
+          },
+          "other": {
+            "select": {
+              "from": {
+                "path": "/model/study",
+                "source": "root"
+              },
+              "kind": "items",
+              "value": {
+                "field": "/type"
+              }
+            }
+          }
+        },
+        "scope": {
+          "nested": [],
+          "path": "/model/physics/*",
+          "source": "root",
+          "when": {
+            "all": [
+              {
+                "other": {
+                  "literal": "thermal"
+                },
+                "subject": {
+                  "path": "/scenario/physics",
+                  "source": "root"
+                },
+                "type": "equals"
+              },
+              {
+                "other": {
+                  "literal": [
+                    "dirichlet",
+                    "neumann"
+                  ]
+                },
+                "subject": {
+                  "field": "/type"
+                },
+                "type": "memberOf"
+              },
+              {
+                "other": {
+                  "literal": false
+                },
+                "subject": {
+                  "field": "/enabled"
+                },
+                "type": "notEquals"
+              }
+            ]
+          }
+        },
+        "stage": "model"
+      }
+    },
+    {
+      "obligation": {
+        "constraint": {
+          "check": "expression",
+          "inputs": [
+            {
+              "name": "kind",
+              "operand": {
+                "literal": "definitions"
+              }
+            }
+          ],
+          "subject": {
+            "object": {
+              "callables": {
+                "select": {
+                  "flatten": true,
+                  "from": {
+                    "array": [
+                      {
+                        "select": {
+                          "from": {
+                            "path": "/x-fem-capabilities/expressions/functionArities",
+                            "source": "schema"
+                          },
+                          "kind": "entries",
+                          "value": {
+                            "object": {
+                              "dimensionSupported": {
+                                "literal": true
+                              },
+                              "evaluationSupported": {
+                                "literal": true
+                              },
+                              "kind": {
+                                "literal": "function"
+                              },
+                              "maxArgs": {
+                                "field": "/value/maxArgs"
+                              },
+                              "minArgs": {
+                                "field": "/value/minArgs"
+                              },
+                              "name": {
+                                "field": "/key"
+                              }
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "select": {
+                          "flatten": true,
+                          "from": {
+                            "path": "/model/integrationOperators",
+                            "source": "root"
+                          },
+                          "kind": "items",
+                          "value": {
+                            "array": [
+                              {
+                                "object": {
+                                  "argumentScope": {
+                                    "literal": "integrationArgument"
+                                  },
+                                  "dimensionSupported": {
+                                    "literal": false
+                                  },
+                                  "evaluationSupported": {
+                                    "literal": true
+                                  },
+                                  "kind": {
+                                    "literal": "operator"
+                                  },
+                                  "maxArgs": {
+                                    "literal": 1
+                                  },
+                                  "minArgs": {
+                                    "literal": 1
+                                  },
+                                  "name": {
+                                    "field": "/id"
+                                  },
+                                  "operatorType": {
+                                    "literal": "integration"
+                                  }
+                                }
+                              },
+                              {
+                                "object": {
+                                  "argumentScope": {
+                                    "literal": "integrationArgument"
+                                  },
+                                  "dimensionSupported": {
+                                    "literal": false
+                                  },
+                                  "evaluationSupported": {
+                                    "literal": true
+                                  },
+                                  "kind": {
+                                    "literal": "operator"
+                                  },
+                                  "maxArgs": {
+                                    "literal": 1
+                                  },
+                                  "minArgs": {
+                                    "literal": 1
+                                  },
+                                  "name": {
+                                    "field": "/name"
+                                  },
+                                  "operatorType": {
+                                    "literal": "integration"
+                                  }
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "kind": "items"
+                }
+              },
+              "definitions": {
+                "path": "/model/variables",
+                "source": "root"
+              },
+              "parameters": {
+                "path": "/model/parameters",
+                "source": "root"
+              },
+              "rules": {
+                "literal": {
+                  "builtInSymbols": [
+                    "pi",
+                    "e",
+                    "i"
+                  ],
+                  "definitionLabel": "Global variable",
+                  "definitionPath": "/model/variables",
+                  "definitionScope": "globalExpression",
+                  "frequencySymbols": [],
+                  "integrationArgumentCount": 1
+                }
+              },
+              "symbols": {
+                "select": {
+                  "flatten": true,
+                  "from": {
+                    "array": [
+                      {
+                        "literal": [
+                          {
+                            "allowedScopes": [
+                              "integrationArgument",
+                              "pointwiseExpression"
+                            ],
+                            "kind": "coordinate",
+                            "symbol": "x",
+                            "unit": "m"
+                          },
+                          {
+                            "allowedScopes": [
+                              "integrationArgument",
+                              "pointwiseExpression"
+                            ],
+                            "kind": "coordinate",
+                            "symbol": "y",
+                            "unit": "m"
+                          },
+                          {
+                            "allowedScopes": [
+                              "integrationArgument",
+                              "pointwiseExpression"
+                            ],
+                            "kind": "coordinate",
+                            "symbol": "z",
+                            "unit": "m"
+                          },
+                          {
+                            "allowedScopes": [
+                              "globalExpression",
+                              "pointwiseExpression",
+                              "integrationArgument"
+                            ],
+                            "kind": "time",
+                            "symbol": "t",
+                            "unit": "s"
+                          }
+                        ]
+                      },
+                      {
+                        "select": {
+                          "from": {
+                            "literal": [
+                              {
+                                "symbol": "freq",
+                                "unit": "Hz"
+                              },
+                              {
+                                "symbol": "omega",
+                                "unit": "Hz"
+                              }
+                            ]
+                          },
+                          "kind": "items",
+                          "where": {
+                            "other": {
+                              "literal": "thermal"
+                            },
+                            "subject": {
+                              "path": "/scenario/physics",
+                              "source": "root"
+                            },
+                            "type": "notEquals"
+                          }
+                        }
+                      },
+                      {
+                        "select": {
+                          "from": {
+                            "select": {
+                              "from": {
+                                "select": {
+                                  "from": {
+                                    "path": "/$defs/femProfiles",
+                                    "source": "schema"
+                                  },
+                                  "kind": "values",
+                                  "single": true,
+                                  "value": {
+                                    "field": "/x-fem-scenario/fields/formulations"
+                                  },
+                                  "where": {
+                                    "other": {
+                                      "path": "/scenario/profileId",
+                                      "source": "root"
+                                    },
+                                    "subject": {
+                                      "field": "/x-fem-scenario/profile/id"
+                                    },
+                                    "type": "equals"
+                                  }
+                                }
+                              },
+                              "kind": "values",
+                              "single": true,
+                              "value": {
+                                "select": {
+                                  "flatten": true,
+                                  "from": {
+                                    "array": [
+                                      {
+                                        "field": "/fieldVariables"
+                                      },
+                                      {
+                                        "field": "/derivedFieldVariables"
+                                      },
+                                      {
+                                        "field": "/zeroFieldVariables"
+                                      }
+                                    ]
+                                  },
+                                  "kind": "items"
+                                }
+                              },
+                              "where": {
+                                "other": {
+                                  "path": "/model/physics/formulation",
+                                  "source": "root"
+                                },
+                                "subject": {
+                                  "field": "/formulation"
+                                },
+                                "type": "equals"
+                              }
+                            }
+                          },
+                          "kind": "items",
+                          "value": {
+                            "object": {
+                              "allowedScopes": {
+                                "literal": [
+                                  "integrationArgument",
+                                  "pointwiseExpression"
+                                ]
+                              },
+                              "kind": {
+                                "literal": "field"
+                              },
+                              "symbol": {
+                                "field": "/symbol"
+                              },
+                              "unit": {
+                                "field": "/unit"
+                              }
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "select": {
+                          "from": {
+                            "select": {
+                              "from": {
+                                "path": "/$defs/femProfiles",
+                                "source": "schema"
+                              },
+                              "kind": "values",
+                              "single": true,
+                              "value": {
+                                "field": "/x-fem-scenario/materials/properties"
+                              },
+                              "where": {
+                                "other": {
+                                  "path": "/scenario/profileId",
+                                  "source": "root"
+                                },
+                                "subject": {
+                                  "field": "/x-fem-scenario/profile/id"
+                                },
+                                "type": "equals"
+                              }
+                            }
+                          },
+                          "kind": "items",
+                          "value": {
+                            "object": {
+                              "allowedScopes": {
+                                "literal": [
+                                  "integrationArgument",
+                                  "pointwiseExpression"
+                                ]
+                              },
+                              "kind": {
+                                "literal": "field"
+                              },
+                              "symbol": {
+                                "field": "/symbol"
+                              },
+                              "unit": {
+                                "field": "/unit"
+                              }
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "select": {
+                          "from": {
+                            "path": "/model/pointwiseVariables",
+                            "source": "root"
+                          },
+                          "kind": "items",
+                          "value": {
+                            "object": {
+                              "allowedScopes": {
+                                "literal": [
+                                  "integrationArgument"
+                                ]
+                              },
+                              "kind": {
+                                "literal": "field"
+                              },
+                              "symbol": {
+                                "field": "/symbol"
+                              },
+                              "unit": {
+                                "field": "/unit"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "kind": "items"
+                }
+              }
+            }
+          },
+          "subjectInput": "input",
+          "type": "semanticCheck"
+        },
+        "diagnostic": {
+          "message": "Transient Global definitions must use their declared expression scope.",
+          "path": "/model/variables"
+        },
+        "id": "global_definition_expressions_transient",
+        "name": "Global definition expression scope (transient)",
+        "scope": {
+          "nested": [],
+          "path": "",
+          "source": "root"
+        },
+        "stage": "model",
+        "when": {
+          "all": [
+            {
+              "minimum": 1,
+              "subject": {
+                "path": "/model/variables",
+                "source": "root"
+              },
+              "type": "minCount"
+            },
+            {
+              "type": "memberOf",
+              "subject": {
+                "literal": "transient"
+              },
+              "other": {
+                "select": {
+                  "from": {
+                    "path": "/model/study",
+                    "source": "root"
+                  },
+                  "kind": "items",
+                  "value": {
+                    "field": "/type"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "obligation": {
+        "constraint": {
+          "check": "expression",
+          "inputs": [
+            {
+              "name": "kind",
+              "operand": {
+                "literal": "definitions"
+              }
+            }
+          ],
+          "subject": {
+            "object": {
+              "callables": {
+                "select": {
+                  "from": {
+                    "path": "/x-fem-capabilities/expressions/functionArities",
+                    "source": "schema"
+                  },
+                  "kind": "entries",
+                  "value": {
+                    "object": {
+                      "dimensionSupported": {
+                        "literal": true
+                      },
+                      "evaluationSupported": {
+                        "literal": true
+                      },
+                      "kind": {
+                        "literal": "function"
+                      },
+                      "maxArgs": {
+                        "field": "/value/maxArgs"
+                      },
+                      "minArgs": {
+                        "field": "/value/minArgs"
+                      },
+                      "name": {
+                        "field": "/key"
+                      }
+                    }
+                  }
+                }
+              },
+              "definitions": {
+                "path": "/model/pointwiseVariables",
+                "source": "root"
+              },
+              "parameters": {
+                "path": "/model/parameters",
+                "source": "root"
+              },
+              "rules": {
+                "literal": {
+                  "builtInSymbols": [
+                    "pi",
+                    "e",
+                    "i"
+                  ],
+                  "definitionLabel": "Pointwise variable",
+                  "definitionPath": "/model/pointwiseVariables",
+                  "definitionScope": "pointwiseExpression",
+                  "frequencySymbols": [],
+                  "integrationArgumentCount": 1
+                }
+              },
+              "symbols": {
+                "select": {
+                  "flatten": true,
+                  "from": {
+                    "array": [
+                      {
+                        "literal": [
+                          {
+                            "allowedScopes": [
+                              "integrationArgument",
+                              "pointwiseExpression"
+                            ],
+                            "kind": "coordinate",
+                            "symbol": "x",
+                            "unit": "m"
+                          },
+                          {
+                            "allowedScopes": [
+                              "integrationArgument",
+                              "pointwiseExpression"
+                            ],
+                            "kind": "coordinate",
+                            "symbol": "y",
+                            "unit": "m"
+                          },
+                          {
+                            "allowedScopes": [
+                              "integrationArgument",
+                              "pointwiseExpression"
+                            ],
+                            "kind": "coordinate",
+                            "symbol": "z",
+                            "unit": "m"
+                          },
+                          {
+                            "allowedScopes": [
+                              "globalExpression",
+                              "pointwiseExpression",
+                              "integrationArgument"
+                            ],
+                            "kind": "time",
+                            "symbol": "t",
+                            "unit": "s"
+                          }
+                        ]
+                      },
+                      {
+                        "select": {
+                          "from": {
+                            "literal": [
+                              {
+                                "symbol": "freq",
+                                "unit": "Hz"
+                              },
+                              {
+                                "symbol": "omega",
+                                "unit": "Hz"
+                              }
+                            ]
+                          },
+                          "kind": "items",
+                          "where": {
+                            "other": {
+                              "literal": "thermal"
+                            },
+                            "subject": {
+                              "path": "/scenario/physics",
+                              "source": "root"
+                            },
+                            "type": "notEquals"
+                          }
+                        }
+                      },
+                      {
+                        "select": {
+                          "from": {
+                            "select": {
+                              "from": {
+                                "select": {
+                                  "from": {
+                                    "path": "/$defs/femProfiles",
+                                    "source": "schema"
+                                  },
+                                  "kind": "values",
+                                  "single": true,
+                                  "value": {
+                                    "field": "/x-fem-scenario/fields/formulations"
+                                  },
+                                  "where": {
+                                    "other": {
+                                      "path": "/scenario/profileId",
+                                      "source": "root"
+                                    },
+                                    "subject": {
+                                      "field": "/x-fem-scenario/profile/id"
+                                    },
+                                    "type": "equals"
+                                  }
+                                }
+                              },
+                              "kind": "values",
+                              "single": true,
+                              "value": {
+                                "select": {
+                                  "flatten": true,
+                                  "from": {
+                                    "array": [
+                                      {
+                                        "field": "/fieldVariables"
+                                      },
+                                      {
+                                        "field": "/derivedFieldVariables"
+                                      },
+                                      {
+                                        "field": "/zeroFieldVariables"
+                                      }
+                                    ]
+                                  },
+                                  "kind": "items"
+                                }
+                              },
+                              "where": {
+                                "other": {
+                                  "path": "/model/physics/formulation",
+                                  "source": "root"
+                                },
+                                "subject": {
+                                  "field": "/formulation"
+                                },
+                                "type": "equals"
+                              }
+                            }
+                          },
+                          "kind": "items",
+                          "value": {
+                            "object": {
+                              "allowedScopes": {
+                                "literal": [
+                                  "integrationArgument",
+                                  "pointwiseExpression"
+                                ]
+                              },
+                              "kind": {
+                                "literal": "field"
+                              },
+                              "symbol": {
+                                "field": "/symbol"
+                              },
+                              "unit": {
+                                "field": "/unit"
+                              }
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "select": {
+                          "from": {
+                            "select": {
+                              "from": {
+                                "path": "/$defs/femProfiles",
+                                "source": "schema"
+                              },
+                              "kind": "values",
+                              "single": true,
+                              "value": {
+                                "field": "/x-fem-scenario/materials/properties"
+                              },
+                              "where": {
+                                "other": {
+                                  "path": "/scenario/profileId",
+                                  "source": "root"
+                                },
+                                "subject": {
+                                  "field": "/x-fem-scenario/profile/id"
+                                },
+                                "type": "equals"
+                              }
+                            }
+                          },
+                          "kind": "items",
+                          "value": {
+                            "object": {
+                              "allowedScopes": {
+                                "literal": [
+                                  "integrationArgument",
+                                  "pointwiseExpression"
+                                ]
+                              },
+                              "kind": {
+                                "literal": "field"
+                              },
+                              "symbol": {
+                                "field": "/symbol"
+                              },
+                              "unit": {
+                                "field": "/unit"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "kind": "items"
+                }
+              }
+            }
+          },
+          "subjectInput": "input",
+          "type": "semanticCheck"
+        },
+        "diagnostic": {
+          "message": "Transient Pointwise definitions must use their declared expression scope.",
+          "path": "/model/pointwiseVariables"
+        },
+        "id": "pointwise_definition_expressions_transient",
+        "name": "Pointwise definition expression scope (transient)",
+        "scope": {
+          "nested": [],
+          "path": "",
+          "source": "root"
+        },
+        "stage": "model",
+        "when": {
+          "all": [
+            {
+              "minimum": 1,
+              "subject": {
+                "path": "/model/pointwiseVariables",
+                "source": "root"
+              },
+              "type": "minCount"
+            },
+            {
+              "type": "memberOf",
+              "subject": {
+                "literal": "transient"
+              },
+              "other": {
+                "select": {
+                  "from": {
+                    "path": "/model/study",
+                    "source": "root"
+                  },
+                  "kind": "items",
+                  "value": {
+                    "field": "/type"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

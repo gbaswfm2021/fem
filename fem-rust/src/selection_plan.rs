@@ -276,6 +276,24 @@ mod tests {
     fn mesh() -> HashMap<String, Vec<usize>> { HashMap::from([("materials".into(), vec![7]), ("boundaries".into(), vec![3,4]), ("domainSources".into(), vec![7])]) }
 
     #[test]
+    fn registered_scenario_selection_plans_compile() {
+        for (name, source) in [
+            ("acoustic2d", include_str!("scenarios/acoustic2d.json")),
+            ("acoustic3d", include_str!("scenarios/acoustic3d.json")),
+            ("em2d", include_str!("scenarios/em2d.json")),
+            ("em3d", include_str!("scenarios/em3d.json")),
+            ("elastic2d", include_str!("scenarios/elastic2d.json")),
+            ("elastic3d", include_str!("scenarios/elastic3d.json")),
+            ("thermal2d", include_str!("scenarios/thermal2d.json")),
+            ("thermal3d", include_str!("scenarios/thermal3d.json")),
+        ] {
+            let contract: Value = serde_json::from_str(source).unwrap();
+            SelectionPlan::from_json(&contract["selectionPlan"])
+                .unwrap_or_else(|error| panic!("{name} selectionPlan: {error}"));
+        }
+    }
+
+    #[test]
     fn cell_lookup_follows_declared_section_not_a_fixed_name() {
         let mut value = contract();
         value["collections"][1]["cellMapSection"] = json!("customCells");

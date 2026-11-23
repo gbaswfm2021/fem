@@ -577,7 +577,7 @@
         "cellMapSection": "domainCellSelections",
         "path": "/modelConfiguration/domainSources",
         "mapSection": "physicalGroups",
-        "kind": "array",
+        "kind": "identifiedEntries",
         "missing": "empty",
         "disabled": "skip",
         "duplicates": "keepAll",

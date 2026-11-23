@@ -304,9 +304,9 @@ function configureScenarioSchema(root, document, id) {
     if (!branch) throw new Error(`FEM base schema has no fixed Physics condition variant for ${type}.`);
     const effective = structuredClone(branch);
     if (physics?.featureHandlingByType?.[type] === 'domainSource') {
-      const sourceLayout = physics?.domainSourceLayout;
+      const sourceLayout = physics?.domainSourceLayoutsByType?.[type] || physics?.domainSourceLayout;
       if (!isRecord(sourceLayout) || !Array.isArray(sourceLayout.componentLabels)
-        || sourceLayout.componentLabels.length < 1 || sourceLayout.componentLabels.length > 3
+        || sourceLayout.componentLabels.length < 1 || sourceLayout.componentLabels.length > 9
         || sourceLayout.componentLabels.some(label => typeof label !== 'string' || !label.trim())) {
         throw new Error(`FEM scenario ${id} must label each domain source component.`);
       }

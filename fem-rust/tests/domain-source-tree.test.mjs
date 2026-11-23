@@ -45,7 +45,8 @@ test('all declared formulations support repeatable source lifecycle and guarded 
     const contract = JSON.parse(readFileSync(new URL(`../src/scenarios/${entry.file}`, import.meta.url), 'utf8'));
     const profile = contract.schemaDocument['x-fem-physics'];
     const profileId = entry.id;
-    for (const [formulation, source] of Object.entries(contract.domainSources)) {
+    for (const [formulation, source] of Object.entries(contract.domainSources)
+      .filter(([name]) => Object.hasOwn(profile.boundaryDefaultsByFormulation || {}, name))) {
       let model = { metadata:{id:'fixture'}, scenario:{profileId}, model:{
         physics:{id:'physics',formulation,domainSelectionIds:['domain']},
         selections:[{id:'domain',entity:'domain'}],mesh:{} } };
@@ -56,7 +57,7 @@ test('all declared formulations support repeatable source lifecycle and guarded 
           spec:{conditionType:'domainSource',itemName:'Domain Source'}}).document;
       }
       assert.equal(model.model.physics.sourceA.selectionId,'domain',`${profileId}/${formulation}`);
-      assert.equal(model.model.physics.sourceB.values.length,source.input.components,`${profileId}/${formulation}`);
+      assert.equal(model.model.physics.sourceB.values.length,source.routes.domainSource.input.components,`${profileId}/${formulation}`);
       const target={itemPath:['model','physics','sourceB']};
       target.femConditionGuard=guardPhysicsCondition(model,target,profile);
       model=togglePhysicsCondition(model,target,profile).document;
