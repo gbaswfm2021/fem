@@ -7,6 +7,30 @@ function supportedConditionTypes(profile) {
   ]);
 }
 
+/** Build the immutable Physics action route once when the application package loads. */
+export function conditionSpecsFromMenu(entries) {
+  if (!Array.isArray(entries)) throw new Error('The FEM Physics action menu is malformed.');
+  const specs = new Map();
+  for (const entry of entries) {
+    if (!entry?.conditionType && !entry?.itemName) continue;
+    if (typeof entry.action !== 'string' || !entry.action.trim()
+      || typeof entry.conditionType !== 'string' || !entry.conditionType.trim()
+      || typeof entry.itemName !== 'string' || !entry.itemName.trim()) {
+      throw new Error('The FEM Physics condition action is incomplete.');
+    }
+    const previous = specs.get(entry.action);
+    if (previous && (previous.conditionType !== entry.conditionType
+      || previous.itemName !== entry.itemName)) {
+      throw new Error(`FEM Physics action ${entry.action} targets multiple condition types.`);
+    }
+    if (previous && JSON.stringify(previous) !== JSON.stringify(entry)) {
+      throw new Error(`FEM Physics action ${entry.action} has conflicting declarations.`);
+    }
+    specs.set(entry.action, entry);
+  }
+  return specs;
+}
+
 function ownerId(model) {
   if (!model || typeof model !== 'object') return null;
   if (!owners.has(model)) owners.set(model, `fem-draft-${++nextOwner}`);
