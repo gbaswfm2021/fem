@@ -4475,6 +4475,9 @@
             "domainSelectionIds"
           ],
           "type": "object",
+          "x-fullmeta-ui": {
+            "onlyDeclaredProperties": true
+          },
           "x-fullmeta-ui-behavior": {
             "context": "projectEditing",
             "format": "fullmeta-ui-behavior/1",

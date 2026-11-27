@@ -4,7 +4,7 @@ Finite-element simulation workspace for FullMeta. The application schema defines
 
 ## Package layout
 
-- `catalog.json` identifies this application and declares package version `2.5.3`.
+- `catalog.json` identifies this application and declares package version `2.5.4`.
 - `fem.schema.json`, `schema-documents.js`, `package.js`, `js/`, and `ui/` define the application package and browser integration.
 - `native-operations.json` defines FEM's native operation contracts for the Kernel and FEM executable.
 - `examples/` contains sample FEM projects.
